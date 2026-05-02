@@ -1,0 +1,32 @@
+# Build artifacts
+build/
+dist/
+__pycache__/
+*.spec
+
+# Cache
+.cache/
+*.log
+
+# Local state (should not be in release packages)
+data/install_id.txt
+data/license.json
+data/.openclaw/
+data/storyboards/
+data/storyboards_temp/
+
+# Release packages
+release/
+
+# IDE
+.vscode/
+.idea/
+*.pyc
+*.pyo
+
+# Screenshots / misc
+*.png
+
+# OS
+.DS_Store
+Thumbs.db

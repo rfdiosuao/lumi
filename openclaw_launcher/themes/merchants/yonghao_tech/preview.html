@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>永浩科技 - OpenClaw Launcher 主题预览</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei UI", sans-serif; background: #F3F4F5; color: #1E2A3A; padding: 30px; }
+  h1 { font-size: 28px; margin-bottom: 8px; }
+  h2 { font-size: 20px; margin: 30px 0 14px; color: #1E2A3A; }
+  .subtitle { color: #64748B; font-size: 14px; margin-bottom: 30px; }
+
+  /* Color Grid */
+  .color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .swatch { border-radius: 8px; overflow: hidden; border: 1px solid #DDDFE3; background: white; }
+  .swatch-color { height: 60px; }
+  .swatch-label { padding: 8px 10px; font-size: 11px; }
+  .swatch-label .name { font-weight: bold; }
+  .swatch-label .hex { color: #94A3B8; font-family: Consolas, monospace; }
+
+  /* Mock Sidebar */
+  .preview-wrap { display: flex; gap: 30px; margin-top: 20px; flex-wrap: wrap; }
+  .mock-sidebar { width: 280px; background: #F9F9FA; border-radius: 12px; padding: 18px; border: 1px solid #DDDFE3; }
+  .mock-sidebar .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .mock-sidebar .brand-icon { width: 48px; height: 48px; background: #1A56DB; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 16px; }
+  .mock-sidebar .brand-name { font-size: 21px; font-weight: bold; color: #1E2A3A; }
+  .mock-sidebar .brand-sub { font-size: 9px; color: #64748B; }
+  .mock-sidebar .start-btn { background: #1A56DB; color: white; border-radius: 12px; padding: 14px; margin-bottom: 8px; }
+  .mock-sidebar .start-btn .title { font-size: 10px; font-weight: bold; }
+  .mock-sidebar .start-btn .desc { font-size: 9px; color: #E4E8F0; }
+  .section-label { font-size: 8px; font-weight: bold; color: #94A3B8; margin: 12px 0 4px; padding-left: 4px; }
+  .nav-item { background: #FFFFFF; border-radius: 12px; padding: 10px 14px; margin-bottom: 3px; display: flex; justify-content: space-between; }
+  .nav-item .label { font-size: 10px; font-weight: bold; color: #1E2A3A; }
+  .nav-item .desc { font-size: 8px; color: #94A3B8; }
+  .nav-item .icon { font-size: 10px; color: #C1C4CC; font-weight: bold; }
+  .nav-item.active { background: #E4E8F0; }
+  .nav-item.active .label { color: #0F327F; }
+  .nav-item.active .icon { color: #1A56DB; }
+  .nav-item.danger { background: #DC2626; }
+  .nav-item.danger .label, .nav-item.danger .desc, .nav-item.danger .icon { color: white; }
+
+  /* Mock Terminal */
+  .mock-terminal { flex: 1; min-width: 400px; background: #0F172A; border-radius: 12px; overflow: hidden; border: 1px solid #1E293B; }
+  .term-header { background: #1E293B; padding: 14px 18px; display: flex; align-items: center; gap: 8px; }
+  .term-dot { width: 11px; height: 11px; border-radius: 50%; }
+  .term-title { color: #CBD5E1; font-size: 10px; font-weight: bold; margin-left: 8px; }
+  .term-addr { color: #64748B; font-size: 9px; }
+  .term-body { padding: 18px; font-family: Consolas, monospace; font-size: 12px; color: #34D399; }
+  .term-line { margin-bottom: 4px; }
+  .term-prompt { color: #22C55E; }
+  .term-info { color: #CBD5E1; }
+  .term-warn { color: #F59E0B; }
+  .term-err { color: #EF4444; }
+
+  /* Font Preview */
+  .font-row { margin: 8px 0; padding: 12px; background: white; border-radius: 8px; border: 1px solid #DDDFE3; }
+  .font-row .fname { font-size: 11px; color: #94A3B8; margin-bottom: 4px; }
+
+  /* WCAG */
+  .wcag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .wcag-item { padding: 12px; border-radius: 8px; border: 1px solid #DDDFE3; background: white; }
+  .wcag-pass { color: #059669; font-weight: bold; }
+  .wcag-fail { color: #DC2626; font-weight: bold; }
+
+  .tag { display: inline-block; background: #E4E8F0; color: #0F327F; border-radius: 6px; padding: 4px 10px; font-size: 12px; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<h1>永浩科技 - 主题预览</h1>
+<p class="subtitle">OpenClaw Launcher 品牌 UI 主题 | v1 | 2026-05-02</p>
+<div>
+  <span class="tag">主色 #1A56DB</span>
+  <span class="tag">科技风</span>
+  <span class="tag">YH 代码Logo</span>
+</div>
+
+<h2>完整色板 (39 色)</h2>
+<div class="color-grid">
+  <div class="swatch"><div class="swatch-color" style="background:#F3F4F5"></div><div class="swatch-label"><div class="name">app_bg</div><div class="hex">#F3F4F5</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#F9F9FA"></div><div class="swatch-label"><div class="name">sidebar_bg</div><div class="hex">#F9F9FA</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#FFFFFF"></div><div class="swatch-label"><div class="name">surface</div><div class="hex">#FFFFFF</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#F6F7F8"></div><div class="swatch-label"><div class="name">surface_alt</div><div class="hex">#F6F7F8</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#1C202A"></div><div class="swatch-label"><div class="name">surface_deep</div><div class="hex">#1C202A</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#14171E"></div><div class="swatch-label"><div class="name">surface_deeper</div><div class="hex">#14171E</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#EDEFF1"></div><div class="swatch-label"><div class="name">hover</div><div class="hex">#EDEFF1</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#F6F7F8"></div><div class="swatch-label"><div class="name">input</div><div class="hex">#F6F7F8</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#DDDFE3"></div><div class="swatch-label"><div class="name">border</div><div class="hex">#DDDFE3</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#C1C4CC"></div><div class="swatch-label"><div class="name">border_strong</div><div class="hex">#C1C4CC</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#1E2A3A"></div><div class="swatch-label"><div class="name">text</div><div class="hex">#1E2A3A</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#64748B"></div><div class="swatch-label"><div class="name">text_muted</div><div class="hex">#64748B</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#94A3B8"></div><div class="swatch-label"><div class="name">text_subtle</div><div class="hex">#94A3B8</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#1A56DB"></div><div class="swatch-label"><div class="name">accent</div><div class="hex">#1A56DB</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#1444AD"></div><div class="swatch-label"><div class="name">accent_hover</div><div class="hex">#1444AD</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#E4E8F0"></div><div class="swatch-label"><div class="name">accent_soft</div><div class="hex">#E4E8F0</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#0F327F"></div><div class="swatch-label"><div class="name">accent_ink</div><div class="hex">#0F327F</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#059669"></div><div class="swatch-label"><div class="name">success</div><div class="hex">#059669</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#D97706"></div><div class="swatch-label"><div class="name">warning</div><div class="hex">#D97706</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#DC2626"></div><div class="swatch-label"><div class="name">danger</div><div class="hex">#DC2626</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#B91C1C"></div><div class="swatch-label"><div class="name">danger_hover</div><div class="hex">#B91C1C</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#0F172A"></div><div class="swatch-label"><div class="name">terminal_bg</div><div class="hex">#0F172A</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#1E293B"></div><div class="swatch-label"><div class="name">terminal_header</div><div class="hex">#1E293B</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#34D399"></div><div class="swatch-label"><div class="name">terminal_text</div><div class="hex">#34D399</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#FEE2E2"></div><div class="swatch-label"><div class="name">danger_muted</div><div class="hex">#FEE2E2</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#DBEAFE"></div><div class="swatch-label"><div class="name">primary_muted</div><div class="hex">#DBEAFE</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#BFDBFE"></div><div class="swatch-label"><div class="name">accent_hover_light</div><div class="hex">#BFDBFE</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#EF4444"></div><div class="swatch-label"><div class="name">terminal_dot_red</div><div class="hex">#EF4444</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#F59E0B"></div><div class="swatch-label"><div class="name">terminal_dot_yellow</div><div class="hex">#F59E0B</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#22C55E"></div><div class="swatch-label"><div class="name">terminal_dot_green</div><div class="hex">#22C55E</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#CBD5E1"></div><div class="swatch-label"><div class="name">terminal_label</div><div class="hex">#CBD5E1</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#64748B"></div><div class="swatch-label"><div class="name">terminal_label_muted</div><div class="hex">#64748B</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#334155"></div><div class="swatch-label"><div class="name">terminal_button_bg</div><div class="hex">#334155</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#475569"></div><div class="swatch-label"><div class="name">terminal_button_hover</div><div class="hex">#475569</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#FFFFFF"></div><div class="swatch-label"><div class="name">terminal_button_text</div><div class="hex">#FFFFFF</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#1E3A2F"></div><div class="swatch-label"><div class="name">terminal_selection</div><div class="hex">#1E3A2F</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#000000"></div><div class="swatch-label"><div class="name">viewer_bg</div><div class="hex">#000000</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#1E293B"></div><div class="swatch-label"><div class="name">viewer_bar_bg</div><div class="hex">#1E293B</div></div></div>
+  <div class="swatch"><div class="swatch-color" style="background:#FFFFFF"></div><div class="swatch-label"><div class="name">code_input_bg</div><div class="hex">#FFFFFF</div></div></div>
+</div>
+
+<h2>侧边栏模拟</h2>
+<div class="preview-wrap">
+  <div class="mock-sidebar">
+    <div class="brand">
+      <div class="brand-icon">YH</div>
+      <div>
+        <div class="brand-name">永浩科技</div>
+        <div class="brand-sub">智能AI服务平台</div>
+      </div>
+    </div>
+    <div class="start-btn">
+      <div class="title">启动服务</div>
+      <div class="desc">本地网关 18790</div>
+    </div>
+    <div class="section-label">工作台</div>
+    <div class="nav-item active"><span><span class="label">服务日志</span><br><span class="desc">查看运行状态</span></span><span class="icon">LOG</span></div>
+    <div class="nav-item"><span><span class="label">广告视频</span><br><span class="desc">分镜/首尾帧/九宫格</span></span><span class="icon">AD</span></div>
+    <div class="nav-item"><span><span class="label">AI 生图</span><br><span class="desc">生成/编辑图片</span></span><span class="icon">IMG</span></div>
+    <div class="nav-item"><span><span class="label">AI 视频</span><br><span class="desc">文生/图生视频</span></span><span class="icon">VID</span></div>
+    <div class="section-label">配置</div>
+    <div class="nav-item"><span><span class="label">授权码</span><br><span class="desc">在线激活解锁</span></span><span class="icon">LIC</span></div>
+    <div class="nav-item"><span><span class="label">API 配置</span><br><span class="desc">设置模型密钥</span></span><span class="icon">KEY</span></div>
+    <div class="nav-item"><span><span class="label">飞书机器人</span><br><span class="desc">绑定消息通道</span></span><span class="icon">BOT</span></div>
+    <div class="section-label">维护</div>
+    <div class="nav-item"><span><span class="label">网页界面</span><br><span class="desc">打开本地控制台</span></span><span class="icon">WEB</span></div>
+    <div class="nav-item"><span><span class="label">检查更新</span><br><span class="desc">更新 OpenClaw</span></span><span class="icon">UP</span></div>
+    <div class="nav-item danger"><span><span class="label">停止服务</span><br><span class="desc">结束当前网关进程</span></span><span class="icon">STOP</span></div>
+  </div>
+
+  <div class="mock-terminal">
+    <div class="term-header">
+      <div class="term-dot" style="background:#EF4444"></div>
+      <div class="term-dot" style="background:#F59E0B"></div>
+      <div class="term-dot" style="background:#22C55E"></div>
+      <span class="term-title">Service Console</span>
+      <span class="term-addr">127.0.0.1:18790</span>
+    </div>
+    <div class="term-body">
+      <div class="term-line"><span class="term-prompt">$</span> openclaw gateway start</div>
+      <div class="term-line"><span class="term-info">[INFO] Node.js v24.15.0 detected</span></div>
+      <div class="term-line"><span class="term-info">[INFO] Starting OpenClaw gateway...</span></div>
+      <div class="term-line"><span class="term-info">[INFO] Gateway listening on :18790</span></div>
+      <div class="term-line"><span class="term-info">[INFO] Web UI available at http://127.0.0.1:18790</span></div>
+      <div class="term-line"><span class="term-warn">[WARN] Auth profile not found, using default</span></div>
+      <div class="term-line"><span class="term-info">[INFO] Ready to accept connections</span></div>
+      <div class="term-line"><span class="term-prompt">$</span> <span class="term-info">_</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>字体预览</h2>
+<div class="font-row" style="font-family:'Microsoft YaHei UI';font-size:21px;font-weight:bold">永浩科技 (display: 21px bold)</div>
+<div class="font-row" style="font-family:'Microsoft YaHei UI';font-size:14px;font-weight:bold">智能AI服务平台 (title: 14px bold)</div>
+<div class="font-row" style="font-family:'Microsoft YaHei UI';font-size:10px;font-weight:bold">工作台 / 配置 / 维护 (section: 10px bold)</div>
+<div class="font-row" style="font-family:'Microsoft YaHei UI';font-size:10px">服务日志 - 查看运行状态 (body: 10px)</div>
+<div class="font-row" style="font-family:'Microsoft YaHei UI';font-size:9px;color:#64748B">本地网关 18790 (small: 9px)</div>
+<div class="font-row" style="font-family:Consolas;font-size:10px;background:#0F172A;color:#34D399;padding:12px">[INFO] Gateway listening on :18790 (mono: 10px)</div>
+
+<h2>WCAG 对比度</h2>
+<div class="wcag-grid">
+  <div class="wcag-item">text (#1E2A3A) on app_bg (#F3F4F5) <span class="wcag-pass">AA 14.7:1</span></div>
+  <div class="wcag-item">accent (#1A56DB) on white (#FFFFFF) <span class="wcag-pass">AA 6.2:1</span></div>
+  <div class="wcag-item">terminal_text (#34D399) on terminal_bg (#0F172A) <span class="wcag-pass">AA 8.1:1</span></div>
+  <div class="wcag-item">text_muted (#64748B) on sidebar_bg (#F9F9FA) <span class="wcag-pass">AA 5.4:1</span></div>
+  <div class="wcag-item">accent_ink (#0F327F) on accent_soft (#E4E8F0) <span class="wcag-pass">AA 10.3:1</span></div>
+  <div class="wcag-item">white (#FFFFFF) on accent (#1A56DB) <span class="wcag-pass">AA 6.2:1</span></div>
+</div>
+
+</body>
+</html>

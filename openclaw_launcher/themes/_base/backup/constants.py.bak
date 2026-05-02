@@ -1,0 +1,90 @@
+"""Shared constants for the OpenClaw launcher."""
+
+APP_NAME = "OpenClaw"
+APP_PORT = 18790
+HELP_URL = "https://heang.top/docs.html"
+FEISHU_APP_URL = "https://open.feishu.cn/app"
+LICENSE_SERVER_URL = "https://license.heang.top"
+
+PROVIDERS = {
+    "Heang AI": {"url": "https://api.heang.top/v1", "models": ["kimi-k2.5", "gpt-4o", "gpt-4", "gpt-3.5-turbo"]},
+    "OpenAI": {"url": "https://api.openai.com/v1", "models": ["gpt-4o", "gpt-4", "gpt-3.5-turbo"]},
+    "Claude": {"url": "https://api.anthropic.com/v1", "models": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229"]},
+    "DeepSeek": {"url": "https://api.deepseek.com/v1", "models": ["deepseek-chat", "deepseek-coder"]},
+    "智谱AI": {"url": "https://open.bigmodel.cn/api/paas/v4", "models": ["glm-4", "glm-4-flash"]},
+    "Moonshot": {"url": "https://api.moonshot.cn/v1", "models": ["moonshot-v1-8k", "moonshot-v1-32k"]},
+    "自定义": {"url": "", "models": []},
+}
+
+IMAGE_MODEL = "gpt-image-2"
+VIDEO_MODEL_T2V = "happyhorse-1.0-t2v"
+VIDEO_MODEL_I2V = "happyhorse-1.0-i2v"
+DASHSCOPE_VIDEO_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
+DASHSCOPE_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+
+# Calm utility palette: warm surfaces, ink text, teal action, amber status.
+COLORS = {
+    "app_bg": "#ECE9E1",
+    "sidebar_bg": "#F8F6EF",
+    "surface": "#FFFFFF",
+    "surface_alt": "#F3F0E8",
+    "surface_deep": "#20232A",
+    "surface_deeper": "#171A20",
+    "hover": "#E8E4D8",
+    "input": "#F5F2EA",
+    "border": "#DED8CB",
+    "border_strong": "#C9C0B1",
+    "text": "#202124",
+    "text_muted": "#6D675D",
+    "text_subtle": "#938A7B",
+    "accent": "#0F766E",
+    "accent_hover": "#0B5F59",
+    "accent_soft": "#D7F0EA",
+    "accent_ink": "#064E49",
+    "success": "#16845B",
+    "warning": "#B7791F",
+    "danger": "#C2413A",
+    "danger_hover": "#A9342E",
+    "terminal_bg": "#161A20",
+    "terminal_header": "#222832",
+    "terminal_text": "#9FF0C8",
+    # — relocated from nav_button.py —
+    "danger_muted": "#FFE2DE",
+    "primary_muted": "#DDF7EF",
+    "accent_hover_light": "#C9E8E1",
+    # — relocated from app.py (terminal area) —
+    "terminal_dot_red": "#D85D55",
+    "terminal_dot_yellow": "#D9A441",
+    "terminal_dot_green": "#49A36A",
+    "terminal_label": "#D8DEE9",
+    "terminal_label_muted": "#8A94A6",
+    "terminal_button_bg": "#2E3745",
+    "terminal_button_hover": "#374355",
+    "terminal_button_text": "#FFFFFF",
+    "terminal_selection": "#244431",
+    # — relocated from image_page.py —
+    "viewer_bg": "#000000",
+    "viewer_bar_bg": "#171A20",
+    # — relocated from license_page.py —
+    "code_input_bg": "#FFFFFF",
+}
+
+FONTS = {
+    "display": ("Microsoft YaHei UI", 21, "bold"),
+    "title": ("Microsoft YaHei UI", 14, "bold"),
+    "section": ("Microsoft YaHei UI", 10, "bold"),
+    "body": ("Microsoft YaHei UI", 10),
+    "small": ("Microsoft YaHei UI", 9),
+    "mono": ("Consolas", 10),
+    # — relocated from app.py —
+    "sidebar_caption": ("Microsoft YaHei UI", 8, "bold"),
+    # — relocated from license_page.py —
+    "license_code": ("Consolas", 13),
+}
+
+BRAND = {
+    "name": "OpenClaw",
+    "subtitle": "Portable AI Control",
+    "app_user_model_id": "OpenClaw.Launcher",
+    "terminal_header": "Service Console",
+}

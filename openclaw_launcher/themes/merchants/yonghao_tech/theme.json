@@ -1,0 +1,14 @@
+{
+  "name": "永浩科技",
+  "subtitle": "智能AI服务平台",
+  "primary_color": "#1A56DB",
+  "style": "tech",
+  "created": "2026-05-02",
+  "versions": {
+    "v1": {
+      "date": "2026-05-02",
+      "changelog": "初始版本：科技蓝主色，slate灰背景，YH代码Logo"
+    }
+  },
+  "active_version": "v1"
+}
