@@ -17,6 +17,12 @@ powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\clean-works
 powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\ci-check.ps1
 ```
 
+- 生成正式离线包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\build-portable.ps1
+```
+
 - 不要把以下文件提交进仓库：
   - `release/`
   - `node_modules/`
