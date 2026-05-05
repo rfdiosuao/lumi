@@ -109,8 +109,7 @@ class DashScopeVideoClient:
                     raise VideoApiError("未获取到视频地址")
                 if on_status:
                     on_status("正在下载视频...", "accent")
-                with urllib.request.urlopen(video_url, timeout=120) as response:
-                    return response.read()
+                return self._download_video(video_url)
             if status == "FAILED":
                 raise VideoApiError(output.get("message", "生成失败"))
             if on_status:
@@ -121,9 +120,33 @@ class DashScopeVideoClient:
         results = output.get("video_url") or output.get("results", [])
         if isinstance(results, str):
             return results
+        if isinstance(results, dict):
+            return results.get("video_url") or results.get("url")
         if isinstance(results, list) and results:
             first = results[0]
             if isinstance(first, dict):
-                return first.get("url")
+                return first.get("video_url") or first.get("url")
         return output.get("video_url")
+
+    def _download_video(self, video_url: str) -> bytes:
+        request = urllib.request.Request(video_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=180) as response:
+            content_type = response.headers.get("Content-Type", "")
+            data = response.read()
+        if not data:
+            raise VideoApiError("视频下载结果为空")
+        if not self._looks_like_video(data, content_type):
+            preview = data[:160].decode("utf-8", errors="replace").replace("\n", " ")
+            raise VideoApiError(
+                f"视频下载结果不是可播放的 MP4：content-type={content_type or 'unknown'}, "
+                f"size={len(data)}, preview={preview[:100]}"
+            )
+        return data
+
+    def _looks_like_video(self, data: bytes, content_type: str) -> bool:
+        lower_type = (content_type or "").lower()
+        if lower_type.startswith("video/") and len(data) > 1024:
+            return True
+        head = data[:128]
+        return b"ftyp" in head or head.startswith(b"\x1aE\xdf\xa3")
 

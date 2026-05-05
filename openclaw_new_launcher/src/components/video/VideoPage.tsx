@@ -7,6 +7,43 @@ const RESOLUTIONS = ['720P', '1080P'];
 const DURATIONS = [5, 10];
 const RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
 
+type GeneratedVideo = {
+  url: string;
+  mime: string;
+  size: number;
+};
+
+function createVideoUrl(base64: string, mime = 'video/mp4'): GeneratedVideo {
+  const cleanBase64 = base64.includes(',') ? base64.split(',').pop() || '' : base64;
+  const binary = atob(cleanBase64);
+  const chunkSize = 32768;
+  const chunks: BlobPart[] = [];
+
+  for (let offset = 0; offset < binary.length; offset += chunkSize) {
+    const slice = binary.slice(offset, offset + chunkSize);
+    const bytes = new Uint8Array(slice.length);
+    for (let i = 0; i < slice.length; i += 1) {
+      bytes[i] = slice.charCodeAt(i);
+    }
+    chunks.push(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  }
+
+  const blob = new Blob(chunks, { type: mime });
+  return { url: URL.createObjectURL(blob), mime, size: blob.size };
+}
+
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = size;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
 export const VideoPage: React.FC = () => {
   const [dashKey, setDashKey] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -18,7 +55,8 @@ export const VideoPage: React.FC = () => {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState('');
-  const [resultVideo, setResultVideo] = useState<string | null>(null);
+  const [resultVideo, setResultVideo] = useState<GeneratedVideo | null>(null);
+  const [videoError, setVideoError] = useState('');
 
   const appendLog = useLogStore((s) => s.append);
 
@@ -34,21 +72,27 @@ export const VideoPage: React.FC = () => {
 
   React.useEffect(() => { loadConfig(); }, []);
 
+  React.useEffect(() => () => {
+    if (resultVideo?.url) {
+      URL.revokeObjectURL(resultVideo.url);
+    }
+  }, [resultVideo?.url]);
+
   const handlePickImage = () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const dataUrl = ev.target?.result as string;
-          setImageBase64(dataUrl);
-          setImagePreview(dataUrl);
-        };
-        reader.readAsDataURL(file);
-      }
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        setImageBase64(dataUrl);
+        setImagePreview(dataUrl);
+      };
+      reader.readAsDataURL(file);
     };
     input.click();
   };
@@ -65,10 +109,10 @@ export const VideoPage: React.FC = () => {
 
     setGenerating(true);
     setResultVideo(null);
+    setVideoError('');
     setProgress('正在提交任务...');
 
     try {
-      // Save config
       await configApi.write('video_config.json', { dashKey });
 
       const resp = await videoApi.generate({
@@ -81,14 +125,17 @@ export const VideoPage: React.FC = () => {
         imagePath: mode === 'i2v' ? imageBase64 || undefined : undefined,
       });
 
-      if (resp.video) {
-        setResultVideo(`data:video/mp4;base64,${resp.video}`);
-        showToast('视频生成成功', 'success');
-        appendLog('[生视频] 生成成功\n');
+      if (!resp.video) {
+        throw { error: '生成成功但没有返回视频数据' };
       }
+
+      const video = createVideoUrl(resp.video, resp.mime || 'video/mp4');
+      setResultVideo(video);
+      showToast('视频生成成功', 'success');
+      appendLog(`[视频] 生成成功，大小 ${formatBytes(resp.size || video.size)}\n`);
     } catch (e: any) {
       showToast(e?.error || '生成失败', 'error');
-      appendLog(`[生视频] 失败: ${e?.error}\n`);
+      appendLog(`[视频] 生成失败: ${e?.error || e}\n`);
     } finally {
       setGenerating(false);
       setProgress('');
@@ -110,7 +157,6 @@ export const VideoPage: React.FC = () => {
               <Input type="password" value={dashKey} onChange={(e) => setDashKey(e.target.value)} placeholder="sk-..." />
             </div>
 
-            {/* Mode Toggle */}
             <div className="flex gap-3">
               <button
                 onClick={() => setMode('t2v')}
@@ -176,7 +222,28 @@ export const VideoPage: React.FC = () => {
 
         {resultVideo && (
           <div className="mt-8">
-            <video src={resultVideo} controls className="max-w-2xl rounded-lg border border-border" />
+            <video
+              src={resultVideo.url}
+              controls
+              preload="metadata"
+              className="max-w-2xl rounded-lg border border-border bg-black"
+              onError={() => setVideoError('视频已生成，但当前播放器无法解码。请先下载视频查看，或重新生成 MP4 结果。')}
+            />
+            <div className="mt-3 flex items-center gap-3 text-sm text-text-muted">
+              <span>{formatBytes(resultVideo.size)}</span>
+              <a
+                href={resultVideo.url}
+                download={`lumi-video-${Date.now()}.mp4`}
+                className="text-accent hover:underline"
+              >
+                下载视频
+              </a>
+            </div>
+            {videoError && (
+              <div className="mt-3 rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+                {videoError}
+              </div>
+            )}
           </div>
         )}
 

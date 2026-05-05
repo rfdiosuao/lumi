@@ -111,7 +111,7 @@ export const videoApi = {
     duration: number;
     ratio: string;
     imagePath?: string;
-  }): Promise<{ video: string }> =>
+  }): Promise<{ video: string; mime?: string; size?: number }> =>
     api('/api/video/generate', 'POST', params),
 };
 

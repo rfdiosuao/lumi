@@ -469,7 +469,11 @@ class Handler(BaseHTTPRequestHandler):
             video_bytes = client.generate(
                 dash_key, prompt, mode, resolution, duration, ratio, image_path
             )
-            self._ok({"video": base64.b64encode(video_bytes).decode()})
+            self._ok({
+                "video": base64.b64encode(video_bytes).decode(),
+                "mime": "video/mp4",
+                "size": len(video_bytes),
+            })
         except VideoApiError as e:
             self._error(500, str(e))
         finally:
