@@ -18,8 +18,6 @@ D:\Axiangmu\U盘启动器\
 │   ├── pages/               # 右侧页面（广告视频工作台、AI 生图、AI 视频等）
 │   ├── dialogs/             # 配置弹窗
 │   └── services/            # 进程、更新、AI API 调用
-├── launcher_legacy_20260501.py # 重构前备份
-├── launcher_backup_20260430.py  # 备份
 ├── OpenClaw.spec            # PyInstaller 打包配置
 ├── logo_square.ico          # 应用图标（打包进 exe）
 ├── logo.ico                 # 备用图标
