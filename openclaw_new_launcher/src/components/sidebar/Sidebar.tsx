@@ -37,8 +37,14 @@ const NavButton: React.FC<{
 );
 
 export const Sidebar: React.FC<SidebarProps> = ({
-  activePage, serviceRunning, serviceStatus, isAuthorized,
-  onNavigate, onStart, onStop,
+  activePage,
+  serviceRunning,
+  serviceStatus,
+  isAuthorized,
+  isApiConfigured,
+  onNavigate,
+  onStart,
+  onStop,
 }) => {
   const { theme, navItems } = useTheme();
   const items = navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS;
@@ -52,9 +58,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const statusColor = !isAuthorized
     ? 'bg-status-danger'
-    : serviceRunning
+    : serviceRunning || isApiConfigured
     ? 'bg-status-success'
     : 'bg-status-warning';
+
+  const statusText = !isAuthorized
+    ? '未授权'
+    : serviceRunning
+    ? '服务运行中'
+    : serviceStatus === 'starting'
+    ? '启动中'
+    : serviceStatus === 'stopping'
+    ? '停止中'
+    : isApiConfigured
+    ? 'API 已配置'
+    : '未配置 API';
 
   return (
     <div className="w-[280px] flex-shrink-0 bg-app-sidebar border-r border-border flex flex-col h-full">
@@ -106,14 +124,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
         <div className="flex items-center gap-2">
           <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${statusColor}`} />
-          <span className="text-xs text-text-muted">{
-            !isAuthorized ? '未授权' : serviceRunning ? '服务运行中' : serviceStatus === 'idle' ? '未配置' : serviceStatus
-          }</span>
-          {isAuthorized && (
-            <span className="text-xs text-text-muted">
-              {serviceStatus === 'idle' ? 'API ' : ''}
-            </span>
-          )}
+          <span className="text-xs text-text-muted">{statusText}</span>
         </div>
       </div>
     </div>

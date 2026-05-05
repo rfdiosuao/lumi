@@ -34,6 +34,7 @@ class OpenClawProcessService:
             raise FileNotFoundError(f"找不到启动脚本：\n{start_js}")
 
         killed = self._stop_registered_gateway()
+        killed += self._kill_clawpanel_processes()
         killed += self._kill_openclaw_gateway_processes()
         killed += self._kill_port_processes(APP_PORT)
         if killed:
@@ -58,7 +59,7 @@ class OpenClawProcessService:
         self.running = True
         self.append_log(f"[OpenClaw] PID: {self.process.pid}\n")
         threading.Thread(target=self._read_output, args=(self.process, on_exit), daemon=True).start()
-        self._wait_until_ready(APP_PORT, timeout=15.0)
+        self._wait_until_ready(APP_PORT, timeout=30.0)
 
     def stop(self) -> str:
         if self.process and self.process.poll() is None:
@@ -124,6 +125,29 @@ class OpenClawProcessService:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return 1 if completed.returncode == 0 else 0
+
+    def _kill_clawpanel_processes(self) -> int:
+        command = (
+            "$ErrorActionPreference='SilentlyContinue'; "
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.Name -ieq 'clawpanel.exe' } | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+                capture_output=True,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            return 0
+        pids = {line.strip() for line in (result.stdout or "").splitlines() if line.strip().isdigit()}
+        killed = 0
+        for pid in pids:
+            if self._kill_pid(pid):
+                killed += 1
+        return killed
 
     def _kill_openclaw_gateway_processes(self) -> int:
         command = (
