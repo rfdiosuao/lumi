@@ -13,6 +13,7 @@ import { ThemeProvider } from './providers/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 
 import { StoryboardPage } from './components/storyboard/StoryboardPage';
+import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
 
 function DynamicTitle() {
   const { brandName, brandSubtitle } = useTheme();
@@ -222,6 +223,8 @@ const ApiConfigDialog: React.FC<{ onClose: () => void; onSaved?: () => void }> =
     </div>
   );
 };
+
+void ApiConfigDialog;
 
 const FeishuConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [appId, setAppId] = useState('');
@@ -529,7 +532,7 @@ export default function App() {
         </div>
 
         <ToastContainer />
-        {showApiConfig && <ApiConfigDialog onClose={() => setShowApiConfig(false)} onSaved={refreshApiConfigured} />}
+        {showApiConfig && <ModernApiConfigDialog onClose={() => setShowApiConfig(false)} onSaved={refreshApiConfigured} />}
         {showFeishuConfig && <FeishuConfigDialog onClose={() => setShowFeishuConfig(false)} />}
       </div>
     </ThemeProvider>
