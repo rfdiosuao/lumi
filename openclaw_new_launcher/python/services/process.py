@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -59,7 +60,21 @@ class OpenClawProcessService:
         self.running = True
         self.append_log(f"[OpenClaw] PID: {self.process.pid}\n")
         threading.Thread(target=self._read_output, args=(self.process, on_exit), daemon=True).start()
-        self._wait_until_ready(APP_PORT, timeout=30.0)
+        try:
+            self._wait_until_ready(APP_PORT, timeout=120.0)
+            self.append_log(f"[OpenClaw] Ready: http://127.0.0.1:{APP_PORT}\n")
+        except Exception:
+            self.append_log("[OpenClaw] Startup did not become ready; cleaning up process tree.\n")
+            if self.process and self.process.poll() is None:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
+                    capture_output=True,
+                    text=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            self.running = False
+            self.process = None
+            raise
 
     def stop(self) -> str:
         if self.process and self.process.poll() is None:
@@ -186,19 +201,27 @@ class OpenClawProcessService:
 
     def _wait_until_ready(self, port: int, timeout: float) -> None:
         deadline = time.time() + timeout
-        saw_port = False
+        next_log_at = time.time() + 10.0
         while time.time() < deadline:
             if self.process and self.process.poll() is not None:
                 self.running = False
                 raise RuntimeError("OpenClaw 启动后立即退出，请查看服务日志")
             if self._is_port_listening(port):
-                if saw_port:
-                    return
-                saw_port = True
+                return
+            now = time.time()
+            if now >= next_log_at:
+                remaining = max(0, int(deadline - now))
+                self.append_log(f"[OpenClaw] Waiting for 127.0.0.1:{port}... {remaining}s left\n")
+                next_log_at = now + 10.0
             time.sleep(0.5)
         raise RuntimeError(f"OpenClaw 启动超时：端口 {port} 未就绪")
 
     def _is_port_listening(self, port: int) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            pass
         try:
             result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
