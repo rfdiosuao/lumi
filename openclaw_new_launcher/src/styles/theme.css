@@ -1,0 +1,32 @@
+:root {
+  --color-app-bg: #F3F4F5;
+  --color-sidebar-bg: #F9F9FA;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #F6F7F8;
+  --color-surface-deep: #1C202A;
+  --color-surface-deeper: #14171E;
+  --color-hover: #EDEFF1;
+  --color-input: #F6F7F8;
+  --color-border: #DDDFE3;
+  --color-border-strong: #C1C4CC;
+  --color-text: #1E2A3A;
+  --color-text-muted: #64748B;
+  --color-text-subtle: #94A3B8;
+  --color-accent: #1A56DB;
+  --color-accent-hover: #1444AD;
+  --color-accent-soft: #E4E8F0;
+  --color-accent-ink: #0F327F;
+  --color-success: #059669;
+  --color-warning: #D97706;
+  --color-danger: #DC2626;
+  --color-danger-hover: #B91C1C;
+  --color-terminal-bg: #0F172A;
+  --color-terminal-header: #1E293B;
+  --color-terminal-text: #34D399;
+
+  --font-display: 'Microsoft YaHei UI', system-ui, sans-serif;
+  --font-mono: Consolas, monospace;
+
+  --brand-name: '永浩科技';
+  --brand-subtitle: '智能AI服务平台';
+}

@@ -7,16 +7,38 @@ __pycache__/
 # Cache
 .cache/
 *.log
+node_modules/
+**/node_modules/
+**/.vite/
+src-tauri/target/
+src-tauri/target*/
+**/src-tauri/target/
+**/src-tauri/target*/
+.trae/
 
-# Local state (should not be in release packages)
+# Data directory contents (keep directory but not state files)
 data/install_id.txt
 data/license.json
 data/.openclaw/
 data/storyboards/
 data/storyboards_temp/
+**/data/install_id.txt
+**/data/license.json
+**/data/.openclaw/
+**/data/storyboards/
+**/data/storyboards_temp/
+
+# Secrets / local server state
+license_server/admin_token.txt
+license_server/private_key.b64
+license_server/license.db
+**/admin_token.txt
+**/private_key.b64
+**/license.db
 
 # Release packages
 release/
+*.zip
 
 # IDE
 .vscode/
@@ -26,6 +48,9 @@ release/
 
 # Screenshots / misc
 *.png
+!openclaw_new_launcher/logo_256.png
+!openclaw_new_launcher/src/assets/*.png
+!openclaw_new_launcher/src-tauri/icons/**/*.png
 
 # OS
 .DS_Store

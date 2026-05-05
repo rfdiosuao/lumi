@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Small online activation server for OpenClaw Launcher."""
+"""Small online activation server for OpenClaw Launcher.
+
+Patched version with merchant/theme support.
+Replace d:\Axiangmu\AUSTART\license_server\server.py with this file.
+"""
 
 from __future__ import annotations
 
@@ -120,6 +124,10 @@ ADMIN_HTML = r"""<!doctype html>
       border-radius: 8px;
     }
     .toast { min-height: 22px; color: var(--muted); margin-top: 10px; font-size: 13px; }
+    .merchant-section { margin-top: 18px; }
+    .merchant-card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+    .merchant-card .name { font-weight: 700; }
+    .merchant-card .sub-text { color: var(--muted); font-size: 12px; }
     @media (max-width: 900px) {
       .shell { padding: 18px; }
       .grid, .stats { grid-template-columns: 1fr; }
@@ -182,6 +190,12 @@ ADMIN_HTML = r"""<!doctype html>
             <label>功能</label>
             <input id="features" value="openclaw,image,video,storyboard" />
           </div>
+          <div class="form-line">
+            <label>绑定商家（可选）</label>
+            <select id="merchantId">
+              <option value="">不绑定</option>
+            </select>
+          </div>
           <button class="btn" id="createCode">生成授权码</button>
           <div style="display:flex;gap:8px;margin-top:10px">
             <button class="btn secondary" id="refresh">刷新列表</button>
@@ -213,9 +227,42 @@ ADMIN_HTML = r"""<!doctype html>
           </div>
           <div class="card-body table-wrap">
             <table>
-              <thead><tr><th>尾号</th><th>客户</th><th>版本</th><th>到期</th><th>激活</th><th>功能</th><th>状态</th><th>操作</th></tr></thead>
-              <tbody id="rows"><tr><td colspan="8">请输入管理员 Token 后刷新。</td></tr></tbody>
+              <thead><tr><th>尾号</th><th>客户</th><th>版本</th><th>商家</th><th>到期</th><th>激活</th><th>功能</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody id="rows"><tr><td colspan="9">请输入管理员 Token 后刷新。</td></tr></tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="card merchant-section">
+          <h2>商家管理</h2>
+          <div class="card-body">
+            <div class="row">
+              <div class="form-line">
+                <label>商家 ID</label>
+                <input id="mId" placeholder="yonghao_tech" />
+              </div>
+              <div class="form-line">
+                <label>商家名称</label>
+                <input id="mName" placeholder="永浩科技" />
+              </div>
+            </div>
+            <div class="form-line">
+              <label>副标题</label>
+              <input id="mSubtitle" placeholder="智能AI服务平台" />
+            </div>
+            <div class="form-line">
+              <label>主题 JSON</label>
+              <input id="mThemeJson" placeholder='{"colors":{"accent":"#1A56DB",...},"brand":{...}}' />
+            </div>
+            <div class="form-line">
+              <label>Logo URL</label>
+              <input id="mLogoUrl" placeholder="https://..." />
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="createMerchant">创建商家</button>
+              <button class="btn secondary" id="refreshMerchants">刷新商家</button>
+            </div>
+            <div id="merchantList" style="margin-top:12px"></div>
           </div>
         </section>
       </div>
@@ -228,6 +275,7 @@ ADMIN_HTML = r"""<!doctype html>
     tokenInput.value = localStorage.getItem("openclawAdminToken") || "";
     let allCodes = [];
     let lastGenerated = [];
+    let allMerchants = [];
 
     function token() { return tokenInput.value.trim(); }
     function setToast(text, bad=false) {
@@ -247,6 +295,9 @@ ADMIN_HTML = r"""<!doctype html>
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       return data;
     }
+    function escapeHtml(text) {
+      return String(text ?? "").replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
     function renderStats(items) {
       const total = items.length;
       const used = items.filter(x => x.activations > 0).length;
@@ -259,8 +310,38 @@ ADMIN_HTML = r"""<!doctype html>
         [disabled, "停用"]
       ].map(([num, label]) => `<div class="stat"><strong>${num}</strong><span>${label}</span></div>`).join("");
     }
-    function escapeHtml(text) {
-      return String(text ?? "").replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    async function loadMerchants() {
+      try {
+        const data = await api("api/merchants");
+        allMerchants = data.merchants || [];
+        const sel = $("merchantId");
+        const prev = sel.value;
+        sel.innerHTML = '<option value="">不绑定</option>';
+        allMerchants.forEach(m => {
+          const opt = document.createElement("option");
+          opt.value = m.merchantId;
+          opt.textContent = m.name + " (" + m.merchantId + ")";
+          sel.appendChild(opt);
+        });
+        if (prev) sel.value = prev;
+        renderMerchants();
+      } catch (error) {
+        console.error("loadMerchants:", error);
+      }
+    }
+    function renderMerchants() {
+      const container = $("merchantList");
+      if (!allMerchants.length) {
+        container.innerHTML = '<div style="color:var(--muted);font-size:13px">还没有商家。</div>';
+        return;
+      }
+      container.innerHTML = allMerchants.map(m => `
+        <div class="merchant-card">
+          <div class="name">${escapeHtml(m.name)}</div>
+          <div class="sub-text">ID: ${escapeHtml(m.merchantId)} | ${escapeHtml(m.subtitle)}</div>
+          <button class="btn danger" style="padding:4px 10px;font-size:12px;margin-top:6px" onclick="deleteMerchant('${escapeHtml(m.merchantId)}')">删除</button>
+        </div>
+      `).join("");
     }
     async function loadCodes() {
       try {
@@ -274,13 +355,14 @@ ADMIN_HTML = r"""<!doctype html>
             <td><code>${escapeHtml(item.codeLabel)}</code></td>
             <td>${escapeHtml(item.licensee)}</td>
             <td>${escapeHtml(item.edition)}</td>
+            <td>${escapeHtml(item.merchantId || "—")}</td>
             <td>${escapeHtml(item.expires)}</td>
             <td>${item.activations}/${item.maxActivations}</td>
             <td>${escapeHtml((item.features || []).join(", "))}</td>
             <td><span class="pill ${item.disabled ? "bad" : "ok"}">${item.disabled ? "停用" : "启用"}</span></td>
             <td><button class="btn ${item.disabled ? "secondary" : "danger"}" onclick="toggleCode('${item.codeHash}', ${item.disabled ? "false" : "true"})">${item.disabled ? "启用" : "停用"}</button></td>
           </tr>
-        `).join("") : `<tr><td colspan="8">还没有授权码。</td></tr>`;
+        `).join("") : `<tr><td colspan="9">还没有授权码。</td></tr>`;
         $("serverState").textContent = "已连接";
       } catch (error) {
         $("serverState").textContent = "未授权";
@@ -296,7 +378,8 @@ ADMIN_HTML = r"""<!doctype html>
           count: Number($("count").value || 1),
           expires: $("expires").value,
           maxActivations: Number($("maxActivations").value || 1),
-          features: $("features").value
+          features: $("features").value,
+          merchantId: $("merchantId").value || null,
         };
         const data = await api("api/codes", { method: "POST", body: JSON.stringify(payload) });
         lastGenerated = data.codes;
@@ -354,6 +437,40 @@ ADMIN_HTML = r"""<!doctype html>
         setToast(error.message, true);
       }
     }
+    async function createMerchantAction() {
+      try {
+        const themeJson = $("mThemeJson").value.trim();
+        const payload = {
+          merchantId: $("mId").value.trim(),
+          name: $("mName").value.trim(),
+          subtitle: $("mSubtitle").value.trim(),
+          themeJson: themeJson ? JSON.parse(themeJson) : {},
+          logoUrl: $("mLogoUrl").value.trim(),
+        };
+        if (!payload.merchantId || !payload.name) { setToast("商家 ID 和名称不能为空", true); return; }
+        await api("api/merchants", { method: "POST", body: JSON.stringify(payload) });
+        setToast(`商家 ${payload.name} 创建成功`);
+        $("mId").value = "";
+        $("mName").value = "";
+        $("mSubtitle").value = "";
+        $("mThemeJson").value = "";
+        $("mLogoUrl").value = "";
+        await loadMerchants();
+      } catch (error) {
+        setToast(error.message, true);
+      }
+    }
+    window.deleteMerchant = async function(merchantId) {
+      if (!confirm(`确定删除商家 ${merchantId}？关联的授权码的 merchantId 将被清空。`)) return;
+      try {
+        await api(`api/merchants/${merchantId}`, { method: "DELETE" });
+        setToast(`商家 ${merchantId} 已删除`);
+        await loadMerchants();
+        await loadCodes();
+      } catch (error) {
+        setToast(error.message, true);
+      }
+    };
     function downloadTxt(codes, label, filename) {
       if (!codes.length) { setToast("没有可导出的授权码。", true); return; }
       const now = new Date().toISOString().slice(0, 10);
@@ -374,12 +491,11 @@ ADMIN_HTML = r"""<!doctype html>
       localStorage.setItem("openclawAdminToken", token());
       setToast("Token 已保存到本浏览器。");
       loadCodes();
+      loadMerchants();
     };
     $("createCode").onclick = createCode;
-    $("refresh").onclick = loadCodes;
-    // 导出当前批次（刚生成的，完整码）
+    $("refresh").onclick = () => { loadCodes(); loadMerchants(); };
     $("btnExport").onclick = () => downloadTxt(lastGenerated, "授权码", "授权码");
-    // 导出全部（数据库所有，尾号格式）
     $("btnExportAll").onclick = () => {
       if (!allCodes.length) { setToast("数据库中没有授权码。", true); return; }
       const now = new Date().toISOString().slice(0, 10);
@@ -400,7 +516,9 @@ ADMIN_HTML = r"""<!doctype html>
     };
     $("btnDelete").onclick = deleteLastBatch;
     $("btnClearAll").onclick = clearAllCodes;
-    if (token()) loadCodes();
+    $("createMerchant").onclick = createMerchantAction;
+    $("refreshMerchants").onclick = loadMerchants;
+    if (token()) { loadCodes(); loadMerchants(); }
   </script>
 </body>
 </html>
@@ -468,6 +586,18 @@ def connect() -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
+        create table if not exists merchants (
+            merchant_id text primary key,
+            name text not null,
+            subtitle text not null default '',
+            theme_json text not null default '{}',
+            logo_url text not null default '',
+            created_at text not null
+        )
+        """
+    )
+    conn.execute(
+        """
         create table if not exists codes (
             code_hash text primary key,
             code_label text not null,
@@ -478,10 +608,16 @@ def init_db(conn: sqlite3.Connection) -> None:
             expires text not null,
             max_activations integer not null default 1,
             disabled integer not null default 0,
-            created_at text not null
+            merchant_id text default null,
+            created_at text not null,
+            foreign key (merchant_id) references merchants(merchant_id)
         )
         """
     )
+    try:
+        conn.execute("alter table codes add column merchant_id text default null")
+    except Exception:
+        pass
     conn.execute(
         """
         create table if not exists activations (
@@ -509,6 +645,52 @@ def parse_features(raw: str) -> list[str]:
     return features or DEFAULT_FEATURES
 
 
+def get_merchant_rows() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "select merchant_id, name, subtitle, theme_json, logo_url, created_at from merchants order by created_at desc"
+        ).fetchall()
+    return [
+        {
+            "merchantId": row["merchant_id"],
+            "name": row["name"],
+            "subtitle": row["subtitle"],
+            "themeJson": json.loads(row["theme_json"]) if row["theme_json"] else {},
+            "logoUrl": row["logo_url"],
+            "createdAt": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
+def create_merchant(body: dict[str, Any]) -> dict[str, Any]:
+    merchant_id = str(body.get("merchantId", "")).strip()
+    name = str(body.get("name", "")).strip()
+    subtitle = str(body.get("subtitle", "")).strip()
+    theme_json = body.get("themeJson", {})
+    logo_url = str(body.get("logoUrl", "")).strip()
+    if not merchant_id or not name:
+        raise ValueError("merchantId 和 name 不能为空")
+    with connect() as conn:
+        existing = conn.execute("select merchant_id from merchants where merchant_id = ?", (merchant_id,)).fetchone()
+        if existing:
+            raise ValueError(f"商家 {merchant_id} 已存在")
+        conn.execute(
+            "insert into merchants (merchant_id, name, subtitle, theme_json, logo_url, created_at) values (?, ?, ?, ?, ?, ?)",
+            (merchant_id, name, subtitle, json.dumps(theme_json, ensure_ascii=False), logo_url, utc_now()),
+        )
+        conn.commit()
+    return {"merchantId": merchant_id, "name": name}
+
+
+def delete_merchant(merchant_id: str) -> dict[str, Any]:
+    with connect() as conn:
+        conn.execute("delete from merchants where merchant_id = ?", (merchant_id,))
+        conn.execute("update codes set merchant_id = null where merchant_id = ?", (merchant_id,))
+        conn.commit()
+    return {"ok": True}
+
+
 def create_code_records(
     *,
     count: int,
@@ -517,6 +699,7 @@ def create_code_records(
     features: list[str],
     expires: str,
     max_activations: int,
+    merchant_id: str | None = None,
 ) -> list[str]:
     count = max(1, min(int(count), 100))
     max_activations = max(1, min(int(max_activations), 20))
@@ -526,8 +709,8 @@ def create_code_records(
             code = make_code(edition)
             conn.execute(
                 """
-                insert into codes (code_hash, code_label, full_code, licensee, edition, features_json, expires, max_activations, disabled, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                insert into codes (code_hash, code_label, full_code, licensee, edition, features_json, expires, max_activations, disabled, merchant_id, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 """,
                 (
                     code_hash(code),
@@ -538,6 +721,7 @@ def create_code_records(
                     json.dumps(features, ensure_ascii=False),
                     expires,
                     max_activations,
+                    merchant_id,
                     utc_now(),
                 ),
             )
@@ -564,7 +748,7 @@ def get_code_rows() -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             select c.code_hash, c.code_label, c.full_code, c.licensee, c.edition, c.features_json, c.expires, c.max_activations,
-                   c.disabled, c.created_at, count(a.id) as activations
+                   c.disabled, c.merchant_id, c.created_at, count(a.id) as activations
             from codes c
             left join activations a on a.code_hash = c.code_hash
             group by c.code_hash
@@ -583,6 +767,7 @@ def get_code_rows() -> list[dict[str, Any]]:
             "maxActivations": row["max_activations"],
             "activations": row["activations"],
             "disabled": bool(row["disabled"]),
+            "merchantId": row["merchant_id"],
             "createdAt": row["created_at"],
         }
         for row in rows
@@ -607,7 +792,7 @@ def list_codes(_args: argparse.Namespace) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "OpenClawLicense/1.0"
+    server_version = "OpenClawLicense/2.0"
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
@@ -628,16 +813,45 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(200, {"codes": get_code_rows()})
             return
+        if path == "/admin/api/merchants":
+            if not self.require_admin():
+                return
+            self.send_json(200, {"merchants": get_merchant_rows()})
+            return
         self.send_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/admin/api/merchants":
+            if not self.require_admin():
+                return
+            try:
+                body = self.read_json()
+                result = create_merchant(body)
+                self.send_json(200, result)
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path.startswith("/admin/api/merchants/"):
+            if not self.require_admin():
+                return
+            merchant_id = path.split("/")[-1]
+            if self.command == "DELETE":
+                try:
+                    result = delete_merchant(merchant_id)
+                    self.send_json(200, result)
+                except Exception as error:
+                    self.send_json(400, {"error": str(error)})
+                return
+            self.send_json(405, {"error": "method not allowed"})
+            return
         if path == "/admin/api/codes":
             if not self.require_admin():
                 return
             try:
                 body = self.read_json()
                 features = parse_features(str(body.get("features", ",".join(DEFAULT_FEATURES))))
+                merchant_id = body.get("merchantId") or None
                 codes = create_code_records(
                     count=int(body.get("count", 1)),
                     licensee=str(body.get("licensee", "客户")).strip() or "客户",
@@ -645,6 +859,7 @@ class Handler(BaseHTTPRequestHandler):
                     features=features,
                     expires=str(body.get("expires", "2027-05-01")).strip() or "2027-05-01",
                     max_activations=int(body.get("maxActivations", 1)),
+                    merchant_id=merchant_id,
                 )
                 self.send_json(200, {"codes": codes})
             except Exception as error:
@@ -709,12 +924,26 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             body = self.read_json()
-            license_data = activate_code(body)
-            self.send_json(200, {"license": license_data})
+            result = activate_code(body)
+            self.send_json(200, result)
         except ActivationError as error:
             self.send_json(error.status, {"error": str(error)})
         except Exception as error:
             self.send_json(500, {"error": f"server error: {error}"})
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        if path.startswith("/admin/api/merchants/"):
+            if not self.require_admin():
+                return
+            merchant_id = path.split("/")[-1]
+            try:
+                result = delete_merchant(merchant_id)
+                self.send_json(200, result)
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        self.send_json(404, {"error": "not found"})
 
     def read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -814,7 +1043,24 @@ def activate_code(body: dict[str, Any]) -> dict[str, Any]:
             (hashed, install_id, device_id, json.dumps(license_data, ensure_ascii=False), utc_now()),
         )
         conn.commit()
-        return license_data
+
+        result: dict[str, Any] = {"license": license_data}
+
+        merchant_id = code_row["merchant_id"]
+        if merchant_id:
+            merchant_row = conn.execute("select * from merchants where merchant_id = ?", (merchant_id,)).fetchone()
+            if merchant_row and merchant_row["theme_json"]:
+                try:
+                    theme = json.loads(merchant_row["theme_json"])
+                    if isinstance(theme, dict):
+                        theme["merchantId"] = merchant_id
+                        if merchant_row["logo_url"]:
+                            theme["logoUrl"] = merchant_row["logo_url"]
+                        result["theme"] = theme
+                except json.JSONDecodeError:
+                    pass
+
+        return result
 
 
 def serve(_args: argparse.Namespace) -> None:
