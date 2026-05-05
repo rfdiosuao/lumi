@@ -24,8 +24,22 @@ function DynamicTitle() {
   return null;
 }
 
+const AUTH_PROFILES_PATH = 'data/.openclaw/agents/main/agent/auth-profiles.json';
+
+function hasConfiguredApiProfile(data: unknown): boolean {
+  const models = (data as any)?.models;
+  const providers = models?.providers;
+  if (!providers || typeof providers !== 'object') return false;
+
+  return Object.values(providers).some((provider: any) => {
+    const apiKey = String(provider?.apiKey || '').trim();
+    const baseUrl = String(provider?.baseUrl || provider?.url || '').trim();
+    return apiKey.length > 0 && baseUrl.length > 0;
+  });
+}
+
 // Dialog placeholders
-const ApiConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+const ApiConfigDialog: React.FC<{ onClose: () => void; onSaved?: () => void }> = ({ onClose, onSaved }) => {
   const [provider, setProvider] = useState('Heang AI');
   const [apiKey, setApiKey] = useState('');
   const [apiUrl, setApiUrl] = useState('');
@@ -49,6 +63,47 @@ const ApiConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       setModel(p.models[0] || '');
     }
   }, [provider]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const resp = await configApi.read(AUTH_PROFILES_PATH, { models: { providers: {} } });
+        if (cancelled) return;
+
+        const data = resp.data as any;
+        const providers = data?.models?.providers || {};
+        const primary = data?.models?.primary;
+        const savedProvider = primary && providers[primary]
+          ? providers[primary]
+          : (Object.values(providers)[0] as any);
+
+        if (!savedProvider) return;
+
+        const savedName = String(savedProvider.name || '');
+        if (savedName && PROVIDERS[savedName]) {
+          setProvider(savedName);
+        }
+        setApiUrl(String(savedProvider.baseUrl || savedProvider.url || ''));
+        setApiKey(String(savedProvider.apiKey || ''));
+
+        const savedModels = Array.isArray(savedProvider.models) ? savedProvider.models : [];
+        const savedModel = savedModels[0];
+        if (typeof savedModel === 'string') {
+          setModel(savedModel);
+        } else if (savedModel?.id) {
+          setModel(String(savedModel.id));
+        }
+      } catch {
+        // Keep provider defaults when no API profile exists yet.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSave = async () => {
     if (!apiKey) { showToast('请输入 API Key', 'error'); return; }
@@ -83,7 +138,7 @@ const ApiConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
       // Write to auth-profiles
       const profileKey = provider === '自定义' ? 'custom' : provider.toLowerCase().replace(/\s+/g, '_');
-      const profiles = await configApi.read('data/.openclaw/agents/main/agent/auth-profiles.json', { models: { providers: {} } });
+      const profiles = await configApi.read(AUTH_PROFILES_PATH, { models: { providers: {} } });
       const data = profiles.data as any;
       if (!data.models) data.models = { providers: {} };
       if (!data.models.providers) data.models.providers = {};
@@ -95,7 +150,7 @@ const ApiConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         models: [model],
       };
       data.models.primary = profileKey;
-      await configApi.write('data/.openclaw/agents/main/agent/auth-profiles.json', data);
+      await configApi.write(AUTH_PROFILES_PATH, data);
 
       // Write to OpenClaw 2026.5+ model catalog
       const modelCatalog = await configApi.read('data/.openclaw/agents/main/agent/models.json', { providers: {} });
@@ -119,6 +174,7 @@ const ApiConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       await configApi.write('data/.openclaw/openclaw.json', oc);
 
       showToast('配置已保存', 'success');
+      onSaved?.();
       onClose();
     } catch (e: any) {
       showToast('保存失败: ' + (e?.error || e), 'error');
@@ -315,8 +371,17 @@ export default function App() {
   const appendLog = useLogStore((s) => s.append);
   const [showApiConfig, setShowApiConfig] = useState(false);
   const [showFeishuConfig, setShowFeishuConfig] = useState(false);
-  const [apiConfigured] = useState(false);
+  const [apiConfigured, setApiConfigured] = useState(false);
   const logInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const refreshApiConfigured = React.useCallback(async () => {
+    try {
+      const resp = await configApi.read(AUTH_PROFILES_PATH, { models: { providers: {} } });
+      setApiConfigured(hasConfiguredApiProfile(resp.data));
+    } catch {
+      setApiConfigured(false);
+    }
+  }, []);
 
   // Poll logs periodically
   const startLogPolling = () => {
@@ -342,7 +407,8 @@ export default function App() {
 
   useEffect(() => {
     checkLicense();
-  }, [checkLicense]);
+    refreshApiConfigured();
+  }, [checkLicense, refreshApiConfigured]);
 
   const handleStart = async () => {
     if (!isAuthorized) {
@@ -463,7 +529,7 @@ export default function App() {
         </div>
 
         <ToastContainer />
-        {showApiConfig && <ApiConfigDialog onClose={() => setShowApiConfig(false)} />}
+        {showApiConfig && <ApiConfigDialog onClose={() => setShowApiConfig(false)} onSaved={refreshApiConfigured} />}
         {showFeishuConfig && <FeishuConfigDialog onClose={() => setShowFeishuConfig(false)} />}
       </div>
     </ThemeProvider>

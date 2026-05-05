@@ -5,6 +5,12 @@
 ## 一、打包前
 
 - 确认代码已提交到 Gitee，工作区没有未确认改动。
+- 清理源码缓存和构建产物：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\clean-workspace.ps1
+```
+
 - 本机执行基础检查：
 
 ```powershell
