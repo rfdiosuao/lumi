@@ -1,0 +1,33 @@
+version: '1.0.0.0'
+name: lumi-master-pipeline
+displayName: 'Lumi Master Pipeline'
+
+triggers:
+  trigger: auto
+  push:
+    branches:
+      precise:
+        - master
+
+stages:
+  - name: repo_hygiene
+    displayName: Repository Hygiene
+    strategy: naturally
+    trigger: auto
+    steps:
+      - step: npmbuild@1
+        name: sensitive_file_guard
+        displayName: Sensitive File Guard
+        inputs:
+          nodeVersion: 14.15
+          goals: |
+            echo "Checking repository hygiene..."
+            if git ls-files | grep -E '(^|/)(node_modules|release|dist|target|__pycache__)/'; then
+              echo "Generated dependency/build files must not be committed."
+              exit 1
+            fi
+            if git ls-files | grep -E '(^|/)(license\.db|private_key\.b64|admin_token\.txt|license\.json|install_id\.txt)$|\.zip$'; then
+              echo "Sensitive runtime files or release archives must not be committed."
+              exit 1
+            fi
+            echo "Repository hygiene check passed."

@@ -1,0 +1,68 @@
+# 交付检查清单
+
+本文档用于每次给客户交付离线包前自检。目标是避免缺运行时、混入本机授权、混入密钥、端口冲突处理回退等问题。
+
+## 一、打包前
+
+- 确认代码已提交到 Gitee，工作区没有未确认改动。
+- 本机执行基础检查：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\ci-check.ps1
+```
+
+- 不要把以下文件提交进仓库：
+  - `release/`
+  - `node_modules/`
+  - `dist/`
+  - `target/`
+  - `license_server/private_key.b64`
+  - `license_server/license.db`
+  - `license_server/admin_token.txt`
+  - `data/license.json`
+  - `data/install_id.txt`
+  - `*.zip`
+
+## 二、打包后
+
+- 对离线包执行交付校验：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\verify-release.ps1 -Path D:\Axiangmu\AUSTART\release\OpenClaw-Portable-fixed-2026.05.05.zip
+```
+
+- 生成 SHA256，作为交付记录：
+
+```powershell
+Get-FileHash -Algorithm SHA256 D:\Axiangmu\AUSTART\release\OpenClaw-Portable-fixed-2026.05.05.zip
+```
+
+- 离线包至少应包含：
+  - `OpenClaw.exe`
+  - `node/node.exe`
+  - `node_modules/openclaw/openclaw.mjs`
+  - `start.js`
+  - `_up_/python-runtime/python.exe`
+  - `_up_/python/bridge.py`
+  - `data/.openclaw/openclaw.json`
+
+## 三、手动验收
+
+- 在一个全新目录解压离线包，不依赖源码目录启动。
+- 启动后进入授权页，未授权时应阻止启动 OpenClaw 服务。
+- 输入有效授权码后，授权状态应保持，重启后仍然有效。
+- 点击“启动服务”，日志中应出现 OpenClaw 网关启动信息。
+- 打开网页界面，应该能进入 OpenClaw 控制台，不再要求额外 token。
+- 配置 API 后重启应用，API 地址和密钥仍应保持。
+- AI 生图、AI 视频页面能读取配置并开始任务。
+
+## 四、交付记录
+
+每次交付至少记录：
+
+- 交付日期
+- 包文件名
+- SHA256
+- Git commit
+- 客户授权码批次
+- 已知问题和临时处理方式
