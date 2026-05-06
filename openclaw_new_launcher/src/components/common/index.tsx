@@ -97,10 +97,15 @@ const toastStore = create<{
   removeToast: (id: number) => void;
 }>((set) => ({
   toasts: [],
-  addToast: (message: string, type: 'success' | 'error' | 'info') =>
+  addToast: (message: string, type: 'success' | 'error' | 'info') => {
+    const id = ++toastId;
     set((state: { toasts: ToastItem[] }) => ({
-      toasts: [...state.toasts, { id: ++toastId, message, type }],
-    })),
+      toasts: [...state.toasts, { id, message, type }],
+    }));
+    window.setTimeout(() => {
+      toastStore.getState().removeToast(id);
+    }, 3000);
+  },
   removeToast: (id: number) =>
     set((state: { toasts: ToastItem[] }) => ({
       toasts: state.toasts.filter((t: ToastItem) => t.id !== id),

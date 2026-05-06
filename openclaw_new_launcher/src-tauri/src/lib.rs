@@ -1,4 +1,5 @@
 use std::io::BufRead;
+use std::io::Write;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::process::Command;
 #[cfg(windows)]
@@ -192,6 +193,43 @@ async fn proxy_request(app: tauri::AppHandle, path: String, method: String, body
     Ok(text)
 }
 
+#[tauri::command]
+async fn export_log(app: tauri::AppHandle, content: String) -> Result<String, String> {
+    let mut base_dir = if let Ok(exe_path) = std::env::current_exe() {
+        exe_path
+            .parent()
+            .map(|path| path.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    };
+
+    if cfg!(debug_assertions) {
+        if let Ok(app_data) = app.path().app_data_dir() {
+            base_dir = app_data;
+        }
+    }
+
+    let log_dir = base_dir.join("data").join("logs");
+    std::fs::create_dir_all(&log_dir).map_err(|e| format!("创建日志目录失败: {}", e))?;
+
+    let timestamp = chrono_like_timestamp();
+    let path = log_dir.join(format!("openclaw-log-{}.txt", timestamp));
+    let mut file = std::fs::File::create(&path).map_err(|e| format!("创建日志文件失败: {}", e))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("写入日志失败: {}", e))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn chrono_like_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    format!("{}", seconds)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -217,6 +255,7 @@ pub fn run() {
             get_bridge_port,
             start_bridge,
             proxy_request,
+            export_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri");

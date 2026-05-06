@@ -139,6 +139,7 @@ export const StoryboardPage: React.FC = () => {
   const [videoStatus, setVideoStatus] = useState('');
   const [videoPreview, setVideoPreview] = useState<{ url: string; size: number } | null>(null);
   const [videoError, setVideoError] = useState('');
+  const [dashKey, setDashKey] = useState('');
   const [saved, setSaved] = useState(false);
 
   const appendLog = useLogStore((state) => state.append);
@@ -366,10 +367,9 @@ export const StoryboardPage: React.FC = () => {
       return;
     }
 
-    const videoConfig = (await configApi.read('video_config.json', {})).data as any;
-    const dashKey = videoConfig?.dashKey || '';
-    if (!dashKey) {
-      showToast('请先在 AI 视频页面配置 DashScope API Key', 'error');
+    const cleanDashKey = dashKey.trim();
+    if (!cleanDashKey) {
+      showToast('请填写 DashScope API Key', 'error');
       return;
     }
 
@@ -379,7 +379,7 @@ export const StoryboardPage: React.FC = () => {
 
     try {
       const resp = await videoApi.generate({
-        dashKey,
+        dashKey: cleanDashKey,
         prompt: composePrompt(),
         mode: 'i2v',
         resolution: '720P',
@@ -393,7 +393,7 @@ export const StoryboardPage: React.FC = () => {
       }
 
       updateScene({ video: `data:${resp.mime || 'video/mp4'};base64,${resp.video}` });
-      setVideoStatus(`视频已生成${resp.size ? `，大小 ${formatBytes(resp.size)}` : ''}`);
+      setVideoStatus(`视频已生成${resp.size ? `，大小 ${formatBytes(resp.size)}` : ''}${resp.path ? `，保存路径：${resp.path}` : ''}`);
       showToast('视频生成成功', 'success');
       appendLog('[分镜视频] 视频生成成功\n');
     } catch (error: any) {
@@ -596,6 +596,16 @@ export const StoryboardPage: React.FC = () => {
             </div>
 
             <div className="border-t border-white/10 pt-3">
+              <div className="mb-3">
+                <FieldLabel text="DashScope API Key" required />
+                <Input
+                  type="password"
+                  value={dashKey}
+                  onChange={(event) => setDashKey(event.target.value)}
+                  placeholder="仅本次使用，不会保存"
+                  autoComplete="off"
+                />
+              </div>
               <div className="mb-2 flex gap-2">
                 <Button onClick={saveProject} variant="quiet" className="flex-1 px-2 py-1.5 text-xs">保存镜头</Button>
                 <Button onClick={handleGenerateVideo} variant="primary" disabled={generatingVideo} className="flex-1 px-2 py-1.5 text-xs">

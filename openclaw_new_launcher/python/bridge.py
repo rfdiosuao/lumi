@@ -333,6 +333,14 @@ def _read_sanitized_json(path: str, default: object = None) -> object:
     return _sanitize_payload(read_json(path, default))
 
 
+def _reset_transient_video_config() -> None:
+    if os.path.exists(paths.video_config):
+        write_json(paths.video_config, {})
+
+
+_reset_transient_video_config()
+
+
 class Handler(BaseHTTPRequestHandler):
     """HTTP request handler for the API bridge."""
 
@@ -583,10 +591,19 @@ class Handler(BaseHTTPRequestHandler):
             video_bytes = client.generate(
                 dash_key, prompt, mode, resolution, duration, ratio, image_path
             )
+            video_dir = os.path.join(paths.data_dir, "videos")
+            os.makedirs(video_dir, exist_ok=True)
+            filename = f"lumi-video-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
+            save_path = os.path.join(video_dir, filename)
+            with open(save_path, "wb") as file:
+                file.write(video_bytes)
             self._ok({
                 "video": base64.b64encode(video_bytes).decode(),
                 "mime": "video/mp4",
                 "size": len(video_bytes),
+                "path": save_path,
+                "directory": video_dir,
+                "filename": filename,
             })
         except VideoApiError as e:
             self._error(500, str(e))
