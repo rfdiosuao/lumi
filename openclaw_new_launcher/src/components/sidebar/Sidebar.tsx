@@ -36,6 +36,21 @@ const NavButton: React.FC<{
   </button>
 );
 
+function statusLabel(serviceRunning: boolean, serviceStatus: string, isAuthorized: boolean, isApiConfigured: boolean): string {
+  if (!isAuthorized) return '未授权';
+  if (serviceRunning) return '服务运行中';
+  if (serviceStatus === 'starting') return '启动中';
+  if (serviceStatus === 'stopping') return '停止中';
+  if (isApiConfigured) return 'API 已配置';
+  return '未配置 API';
+}
+
+function statusColor(serviceRunning: boolean, isAuthorized: boolean, isApiConfigured: boolean): string {
+  if (!isAuthorized) return 'bg-status-danger';
+  if (serviceRunning || isApiConfigured) return 'bg-status-success';
+  return 'bg-status-warning';
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({
   activePage,
   serviceRunning,
@@ -55,24 +70,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const groupSet = new Set(items.map((i) => i.group));
     return Array.from(groupSet);
   }, [items]);
-
-  const statusColor = !isAuthorized
-    ? 'bg-status-danger'
-    : serviceRunning || isApiConfigured
-    ? 'bg-status-success'
-    : 'bg-status-warning';
-
-  const statusText = !isAuthorized
-    ? '未授权'
-    : serviceRunning
-    ? '服务运行中'
-    : serviceStatus === 'starting'
-    ? '启动中'
-    : serviceStatus === 'stopping'
-    ? '停止中'
-    : isApiConfigured
-    ? 'API 已配置'
-    : '未配置 API';
 
   return (
     <div className="w-[280px] flex-shrink-0 bg-app-sidebar border-r border-border flex flex-col h-full">
@@ -123,8 +120,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           停止服务
         </button>
         <div className="flex items-center gap-2">
-          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${statusColor}`} />
-          <span className="text-xs text-text-muted">{statusText}</span>
+          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${statusColor(serviceRunning, isAuthorized, isApiConfigured)}`} />
+          <span className="text-xs text-text-muted">{statusLabel(serviceRunning, serviceStatus, isAuthorized, isApiConfigured)}</span>
         </div>
       </div>
     </div>
