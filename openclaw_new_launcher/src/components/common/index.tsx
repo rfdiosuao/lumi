@@ -8,13 +8,13 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 export const Button: React.FC<ButtonProps> = ({ variant = 'default', children, className = '', ...props }) => {
-  const base = 'px-4 py-2 rounded-md font-medium transition-colors cursor-pointer text-sm disabled:opacity-50 disabled:cursor-not-allowed';
+  const base = 'px-4 py-2 rounded-lg font-medium transition-all cursor-pointer text-sm disabled:opacity-50 disabled:cursor-not-allowed';
   const variants: Record<string, string> = {
-    primary: 'bg-accent hover:bg-accent-hover text-white',
-    danger: 'bg-status-danger hover:bg-status-danger-hover text-white',
-    success: 'bg-status-success hover:bg-status-success/80 text-white',
-    quiet: 'bg-transparent hover:bg-surface-alt text-text-muted border border-border',
-    default: 'bg-surface-alt hover:bg-surface-alt text-text border border-border',
+    primary: 'bg-accent hover:bg-accent-hover text-white shadow-[0_0_22px_rgba(157,78,221,0.28)]',
+    danger: 'bg-status-danger/15 hover:bg-status-danger/25 text-status-danger border border-status-danger/30',
+    success: 'bg-status-success/15 hover:bg-status-success/25 text-status-success border border-status-success/30 shadow-[0_0_18px_rgba(22,199,132,0.18)]',
+    quiet: 'bg-white/5 hover:bg-white/10 text-text-muted border border-border',
+    default: 'bg-surface-alt/80 hover:bg-hover text-text border border-border',
   };
   return (
     <button className={`${base} ${variants[variant]} ${className}`} {...props}>
@@ -28,7 +28,7 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
 
 export const Input: React.FC<InputProps> = ({ className = '', ...props }) => (
   <input
-    className={`w-full px-3 py-2 rounded-md border border-border bg-surface-alt text-text text-sm focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent ${className}`}
+    className={`w-full px-3 py-2 rounded-lg border border-border bg-input text-text text-sm placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-accent/35 focus:border-border-strong ${className}`}
     {...props}
   />
 );
@@ -38,7 +38,7 @@ export interface TextAreaProps extends React.TextareaHTMLAttributes<HTMLTextArea
 
 export const TextArea: React.FC<TextAreaProps> = ({ className = '', ...props }) => (
   <textarea
-    className={`w-full px-3 py-2 rounded-md border border-border bg-surface-alt text-text text-sm focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent resize-y ${className}`}
+    className={`w-full px-3 py-2 rounded-lg border border-border bg-input text-text text-sm placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-accent/35 focus:border-border-strong resize-y ${className}`}
     {...props}
   />
 );
@@ -48,7 +48,7 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
 
 export const Select: React.FC<SelectProps> = ({ className = '', children, ...props }) => (
   <select
-    className={`px-3 py-2 rounded-md border border-border bg-surface-alt text-text text-sm focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent appearance-none ${className}`}
+    className={`px-3 py-2 rounded-lg border border-border bg-input text-text text-sm focus:outline-none focus:ring-2 focus:ring-accent/35 focus:border-border-strong appearance-none ${className}`}
     {...props}
   >
     {children}
@@ -65,9 +65,9 @@ export const Modal: React.FC<{
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40" />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
-        className="relative bg-surface rounded-lg shadow-xl w-full max-w-lg mx-4 p-6 max-h-[80vh] overflow-auto"
+        className="relative bg-surface/95 rounded-lg shadow-[0_24px_80px_rgba(0,0,0,0.55),0_0_32px_rgba(157,78,221,0.16)] border border-border w-full max-w-lg mx-4 p-6 max-h-[80vh] overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {title && (
@@ -118,9 +118,9 @@ export const ToastContainer: React.FC = () => {
     info: 'bg-accent',
   };
   return (
-    <div className="fixed top-4 right-4 z-[100] space-y-2">
+    <div className="fixed top-5 right-5 z-[100] space-y-2">
       {toasts.map((t) => (
-        <div key={t.id} className={`${colors[t.type]} text-white px-4 py-3 rounded-md shadow-lg text-sm flex items-center gap-3`}>
+        <div key={t.id} className={`${colors[t.type]} text-white px-4 py-3 rounded-lg shadow-[0_16px_40px_rgba(0,0,0,0.38)] border border-white/10 text-sm flex items-center gap-3`}>
           <span>{t.message}</span>
           <button onClick={() => removeToast(t.id)} className="opacity-70 hover:opacity-100">&times;</button>
         </div>

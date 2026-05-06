@@ -15,27 +15,6 @@ interface SidebarProps {
   onStop: () => void;
 }
 
-const NavButton: React.FC<{
-  item: NavItem;
-  isActive: boolean;
-  onClick: () => void;
-}> = ({ item, isActive, onClick }) => (
-  <button
-    onClick={onClick}
-    className={`w-full text-left px-3 py-2 rounded-md transition-colors cursor-pointer flex items-center gap-3 ${
-      isActive
-        ? 'bg-accent-soft text-accent-ink'
-        : 'text-text hover:bg-surface-alt'
-    } ${item.accent ? 'font-medium' : ''}`}
-  >
-    <span className={`w-1 h-4 rounded-full flex-shrink-0 ${isActive ? 'bg-accent' : 'bg-transparent'}`} />
-    <div className="min-w-0 flex-1">
-      <div className="text-sm truncate">{item.label}</div>
-      {item.desc && <div className={`text-xs truncate ${isActive ? 'text-accent-ink/70' : 'text-text-muted'}`}>{item.desc}</div>}
-    </div>
-  </button>
-);
-
 function statusLabel(serviceRunning: boolean, serviceStatus: string, isAuthorized: boolean, isApiConfigured: boolean): string {
   if (!isAuthorized) return '未授权';
   if (serviceRunning) return '服务运行中';
@@ -45,11 +24,45 @@ function statusLabel(serviceRunning: boolean, serviceStatus: string, isAuthorize
   return '未配置 API';
 }
 
-function statusColor(serviceRunning: boolean, isAuthorized: boolean, isApiConfigured: boolean): string {
-  if (!isAuthorized) return 'bg-status-danger';
-  if (serviceRunning || isApiConfigured) return 'bg-status-success';
-  return 'bg-status-warning';
+function statusTone(serviceRunning: boolean, isAuthorized: boolean, isApiConfigured: boolean): string {
+  if (!isAuthorized) return 'bg-status-danger shadow-[0_0_12px_rgba(255,77,109,0.65)]';
+  if (serviceRunning || isApiConfigured) return 'bg-status-success shadow-[0_0_12px_rgba(22,199,132,0.65)]';
+  return 'bg-status-warning shadow-[0_0_12px_rgba(245,158,11,0.55)]';
 }
+
+const NavButton: React.FC<{
+  item: NavItem;
+  isActive: boolean;
+  onClick: () => void;
+}> = ({ item, isActive, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`group relative w-full overflow-hidden rounded-lg px-3 py-3 text-left transition-all ${
+      isActive
+        ? 'border border-border-strong bg-accent-soft text-text shadow-[0_0_24px_rgba(157,78,221,0.18)]'
+        : 'border border-transparent text-text-muted hover:border-border hover:bg-white/5 hover:text-text'
+    } ${item.accent ? 'font-medium' : ''}`}
+  >
+    {isActive && (
+      <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r bg-accent shadow-[0_0_14px_rgba(157,78,221,0.9)]" />
+    )}
+    <div className="flex items-center gap-3">
+      <span
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-[10px] font-bold tracking-wide ${
+          isActive
+            ? 'border-border-strong bg-white/10 text-accent-ink'
+            : 'border-white/10 bg-white/[0.03] text-text-subtle group-hover:text-text-muted'
+        }`}
+      >
+        {item.icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-semibold">{item.label}</div>
+        {item.desc && <div className="mt-0.5 truncate text-xs text-text-subtle">{item.desc}</div>}
+      </div>
+    </div>
+  </button>
+);
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activePage,
@@ -67,63 +80,74 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const brandSubtitle = theme.brand.subtitle;
 
   const groups = React.useMemo(() => {
-    const groupSet = new Set(items.map((i) => i.group));
+    const groupSet = new Set(items.map((item) => item.group));
     return Array.from(groupSet);
   }, [items]);
 
   return (
-    <div className="w-[280px] flex-shrink-0 bg-app-sidebar border-r border-border flex flex-col h-full">
-      <div className="px-5 py-5 flex items-center gap-3 flex-shrink-0">
-        <img src={logoImg} alt="Logo" className="w-12 h-12 rounded-xl flex-shrink-0" />
+    <aside className="relative z-10 flex h-full w-[286px] shrink-0 flex-col border-r border-white/10 bg-app-sidebar/95">
+      <div className="absolute inset-x-0 top-0 h-40 bg-[radial-gradient(circle_at_30%_0%,rgba(157,78,221,0.24),transparent_62%)] pointer-events-none" />
+
+      <div className="relative flex shrink-0 items-center gap-3 px-5 py-6">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-white/5 shadow-[0_0_28px_rgba(157,78,221,0.18)]">
+          <img src={logoImg} alt="Logo" className="h-9 w-9 rounded-lg object-contain" />
+        </div>
         <div className="min-w-0">
-          <div className="text-base font-semibold text-text">{brandName}</div>
-          <div className="text-xs text-text-muted">{brandSubtitle}</div>
+          <div className="truncate text-base font-bold tracking-wide text-text">{brandName}</div>
+          <div className="mt-0.5 truncate text-xs text-text-muted">{brandSubtitle}</div>
         </div>
       </div>
 
-      <div className="px-4 pb-3 flex-shrink-0">
+      <div className="relative shrink-0 px-4 pb-4">
         <button
           onClick={onStart}
           disabled={serviceRunning || serviceStatus === 'starting'}
-          className="w-full bg-accent hover:bg-accent-hover text-white px-4 py-3 rounded-lg text-sm font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-[0_0_28px_rgba(157,78,221,0.30)] transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-55"
         >
-          {serviceStatus === 'starting' ? '启动中...' : '启动服务'}
+          {serviceStatus === 'starting' ? '启动中...' : serviceRunning ? '服务已运行' : '启动核心服务'}
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 pb-3">
+      <nav className="relative flex-1 overflow-y-auto px-3 pb-3">
         {groups.map((group) => {
-          const groupItems = items.filter((i) => i.group === group);
+          const groupItems = items.filter((item) => item.group === group);
           return (
-            <div key={group}>
-              <div className="text-xs text-text-subtle font-medium px-3 py-1 mt-2">{group}</div>
-              {groupItems.map((item) => (
-                <div key={item.key} className="py-0.5">
+            <section key={group} className="mb-4">
+              <div className="px-3 pb-2 pt-1 text-[11px] font-bold uppercase tracking-[0.16em] text-text-subtle">{group}</div>
+              <div className="space-y-1.5">
+                {groupItems.map((item) => (
                   <NavButton
+                    key={item.key}
                     item={item}
                     isActive={activePage === item.key}
                     onClick={() => onNavigate(item.key)}
                   />
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </section>
           );
         })}
-      </div>
+      </nav>
 
-      <div className="px-4 pb-4 pt-2 border-t border-border flex-shrink-0">
+      <div className="relative shrink-0 border-t border-white/10 p-4">
         <button
           onClick={onStop}
           disabled={!serviceRunning && serviceStatus !== 'starting'}
-          className="w-full bg-status-danger/10 hover:bg-status-danger/20 text-status-danger px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer mb-3 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="mb-3 w-full rounded-xl border border-status-danger/30 bg-status-danger/10 px-4 py-2.5 text-sm font-bold text-status-danger transition-all hover:bg-status-danger/20 disabled:cursor-not-allowed disabled:opacity-45"
         >
           停止服务
         </button>
-        <div className="flex items-center gap-2">
-          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${statusColor(serviceRunning, isAuthorized, isApiConfigured)}`} />
-          <span className="text-xs text-text-muted">{statusLabel(serviceRunning, serviceStatus, isAuthorized, isApiConfigured)}</span>
+        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="text-xs font-medium text-text-muted">系统状态</span>
+            <span className="text-[10px] uppercase tracking-[0.18em] text-text-subtle">OpenClaw</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${statusTone(serviceRunning, isAuthorized, isApiConfigured)}`} />
+            <span className="truncate text-xs font-medium text-text">{statusLabel(serviceRunning, serviceStatus, isAuthorized, isApiConfigured)}</span>
+          </div>
         </div>
       </div>
-    </div>
+    </aside>
   );
 };

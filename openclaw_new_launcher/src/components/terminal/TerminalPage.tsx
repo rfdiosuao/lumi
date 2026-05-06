@@ -7,6 +7,7 @@ export const TerminalPage: React.FC = () => {
   const { theme } = useTheme();
   const containerRef = React.useRef<HTMLPreElement>(null);
   const userAtBottom = React.useRef(true);
+  const logLines = lines.split('\n').filter(Boolean);
 
   React.useEffect(() => {
     if (containerRef.current) {
@@ -36,32 +37,40 @@ export const TerminalPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-terminal-bg">
-      {/* Terminal Header */}
-      <div className="flex items-center h-[58px] bg-terminal-header px-6 flex-shrink-0">
-        <div className="flex items-center gap-2 mr-4">
-          <div className="w-3 h-3 rounded-full bg-status-danger" />
-          <div className="w-3 h-3 rounded-full bg-status-warning" />
-          <div className="w-3 h-3 rounded-full bg-status-success" />
+    <div className="flex h-full flex-col bg-transparent">
+      <div className="flex h-[64px] shrink-0 items-center border-b border-white/10 bg-terminal-header/80 px-6 backdrop-blur-xl">
+        <div className="mr-5 flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-status-danger shadow-[0_0_10px_rgba(255,77,109,0.65)]" />
+          <div className="h-3 w-3 rounded-full bg-status-warning shadow-[0_0_10px_rgba(245,158,11,0.55)]" />
+          <div className="h-3 w-3 rounded-full bg-status-success shadow-[0_0_10px_rgba(22,199,132,0.55)]" />
         </div>
-        <span className="text-terminal-label font-medium">{theme.brand.terminal_header}</span>
-        <span className="text-terminal-labelMuted text-sm ml-3">127.0.0.1:18790</span>
+        <span className="text-lg font-bold tracking-wide text-terminal-label">{theme.brand.terminal_header}</span>
+        <span className="ml-3 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-terminal-labelMuted">
+          127.0.0.1:18790
+        </span>
       </div>
 
-      {/* Log Area */}
-      <pre
-        ref={containerRef}
-        className="flex-1 font-mono text-sm p-6 overflow-auto text-terminal-text leading-relaxed"
-        onKeyDown={handleKeyDown}
-        onScroll={handleScroll}
-      >
-        {lines.split('\n').filter(Boolean).map((line, i) => (
-          <div key={i}>{highlightLine(line)}</div>
-        ))}
-        {lines.length === 0 && (
-          <span className="text-terminal-labelMuted">等待服务启动...</span>
-        )}
-      </pre>
+      <div className="flex-1 p-6">
+        <div className="h-full overflow-hidden rounded-2xl border border-border bg-black/30 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02),0_18px_50px_rgba(0,0,0,0.22)]">
+          <div className="flex h-10 items-center justify-between border-b border-white/10 bg-white/[0.035] px-4">
+            <span className="text-xs font-bold uppercase tracking-[0.18em] text-text-subtle">Live Output</span>
+            <span className="text-xs text-text-muted">{logLines.length} lines</span>
+          </div>
+          <pre
+            ref={containerRef}
+            className="h-[calc(100%-40px)] overflow-auto p-5 font-mono text-sm leading-relaxed text-terminal-text"
+            onKeyDown={handleKeyDown}
+            onScroll={handleScroll}
+          >
+            {logLines.map((line, i) => (
+              <div key={i}>{highlightLine(line)}</div>
+            ))}
+            {lines.length === 0 && (
+              <span className="text-terminal-labelMuted">等待服务启动...</span>
+            )}
+          </pre>
+        </div>
+      </div>
     </div>
   );
 };

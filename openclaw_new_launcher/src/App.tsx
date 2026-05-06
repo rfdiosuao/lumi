@@ -186,8 +186,10 @@ export default function App() {
   return (
     <ThemeProvider>
       <DynamicTitle />
-      <div className="h-screen w-screen bg-app-bg flex overflow-hidden">
-        <div className="flex w-full h-full m-5 rounded-xl overflow-hidden border border-border shadow-lg">
+      <div className="relative flex h-screen w-screen overflow-hidden bg-app-bg p-5">
+        <div className="pointer-events-none absolute right-[-12%] top-[-18%] h-[46%] w-[42%] rounded-full bg-accent/15 blur-[120px]" />
+        <div className="pointer-events-none absolute bottom-[-14%] left-[14%] h-[36%] w-[34%] rounded-full bg-cyan-500/10 blur-[110px]" />
+        <div className="relative flex h-full w-full overflow-hidden rounded-2xl border border-white/10 bg-surface/70 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur-xl">
           <Sidebar
             activePage={currentPage}
             serviceRunning={serviceRunning}
@@ -198,9 +200,10 @@ export default function App() {
             onStart={handleStart}
             onStop={handleStop}
           />
-          <div className="flex-1 overflow-hidden">
+          <main className="relative flex-1 overflow-hidden bg-surface/40">
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-white/[0.04] to-transparent" />
             {renderPage()}
-          </div>
+          </main>
         </div>
 
         <ToastContainer />
