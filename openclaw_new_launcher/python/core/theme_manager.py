@@ -64,6 +64,7 @@ DEFAULT_THEME: dict[str, Any] = {
         {"key": "license", "label": "授权码", "group": "配置"},
         {"key": "api", "label": "API 配置", "group": "配置"},
         {"key": "feishu", "label": "飞书机器人", "group": "配置"},
+        {"key": "weixin", "label": "微信机器人", "group": "配置"},
         {"key": "web", "label": "网页界面", "group": "维护"},
         {"key": "update", "label": "检查更新", "group": "维护"},
         {"key": "help", "label": "帮助文档", "group": "维护"},
@@ -91,7 +92,17 @@ def _normalize_nav_items(items: Any) -> list[dict[str, Any]]:
         if "accent" in item:
             merged["accent"] = bool(item["accent"])
         normalized.append(merged)
-    return normalized or list(default_items)
+    result = normalized or list(default_items)
+    if not any(item.get("key") == "weixin" for item in result):
+        weixin_item = default_by_key.get("weixin")
+        if weixin_item:
+            insert_index = len(result)
+            for index, item in enumerate(result):
+                if item.get("key") == "feishu":
+                    insert_index = index + 1
+                    break
+            result.insert(insert_index, dict(weixin_item))
+    return result
 
 
 def _validate_theme(theme: dict[str, Any]) -> dict[str, Any]:

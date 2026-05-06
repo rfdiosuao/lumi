@@ -22,6 +22,16 @@
           "name": "install-openclaw-lark-cmd",
           "cmd": "npx.cmd",
           "args": ["-y", "@larksuite/openclaw-lark", "install"]
+        },
+        {
+          "name": "install-openclaw-weixin",
+          "cmd": "npx",
+          "args": ["-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install"]
+        },
+        {
+          "name": "install-openclaw-weixin-cmd",
+          "cmd": "npx.cmd",
+          "args": ["-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install"]
         }
       ]
     }

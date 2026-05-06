@@ -16,7 +16,7 @@ import { useTheme } from './hooks/useTheme';
 
 import { StoryboardPage } from './components/storyboard/StoryboardPage';
 import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
-import { FeishuConfigDialog } from './components/dialogs/FeishuConfigDialog';
+import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
 
 function DynamicTitle() {
   const { brandName, brandSubtitle } = useTheme();
@@ -48,6 +48,7 @@ export default function App() {
   const appendLog = useLogStore((s) => s.append);
   const [showApiConfig, setShowApiConfig] = useState(false);
   const [showFeishuConfig, setShowFeishuConfig] = useState(false);
+  const [showWeixinConfig, setShowWeixinConfig] = useState(false);
   const [apiConfigured, setApiConfigured] = useState(false);
   const logInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -170,6 +171,10 @@ export default function App() {
       setShowFeishuConfig(true);
       return;
     }
+    if (key === 'weixin') {
+      setShowWeixinConfig(true);
+      return;
+    }
 
     setCurrentPage(key);
   };
@@ -210,6 +215,7 @@ export default function App() {
         <ToastContainer />
         {showApiConfig && <ModernApiConfigDialog onClose={() => setShowApiConfig(false)} onSaved={refreshApiConfigured} />}
         {showFeishuConfig && <FeishuConfigDialog onClose={() => setShowFeishuConfig(false)} />}
+        {showWeixinConfig && <WeixinConfigDialog onClose={() => setShowWeixinConfig(false)} />}
       </div>
     </ThemeProvider>
   );

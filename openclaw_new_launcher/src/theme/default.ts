@@ -23,6 +23,7 @@ export const DEFAULT_NAV_ITEMS: NavItem[] = [
   { key: 'license', label: '授权码', desc: '在线激活解锁', icon: 'LIC', group: '配置' },
   { key: 'api', label: 'API 配置', desc: '设置模型密钥', icon: 'KEY', group: '配置' },
   { key: 'feishu', label: '飞书机器人', desc: '绑定消息通道', icon: 'BOT', group: '配置' },
+  { key: 'weixin', label: '微信机器人', desc: '扫码绑定微信', icon: 'WX', group: '配置' },
   { key: 'web', label: '网页界面', desc: '打开本地控制台', icon: 'WEB', group: '维护' },
   { key: 'update', label: '检查更新', desc: '更新 OpenClaw', icon: 'UP', group: '维护' },
   { key: 'help', label: '帮助文档', desc: '查看使用说明', icon: 'DOC', group: '维护' },
@@ -139,7 +140,16 @@ export function normalizeNavItems(items?: NavItem[]): NavItem[] {
     })
     .filter(Boolean) as NavItem[];
 
-  return normalized.length > 0 ? normalized : DEFAULT_NAV_ITEMS;
+  const result = normalized.length > 0 ? normalized : [...DEFAULT_NAV_ITEMS];
+  if (!result.some((item) => item.key === 'weixin')) {
+    const weixin = NAV_ITEM_BY_KEY.get('weixin');
+    if (weixin) {
+      const feishuIndex = result.findIndex((item) => item.key === 'feishu');
+      const insertIndex = feishuIndex >= 0 ? feishuIndex + 1 : result.length;
+      result.splice(insertIndex, 0, weixin);
+    }
+  }
+  return result;
 }
 
 export function buildRuntimeTheme(baseTheme: ThemeConfig | null | undefined, mode: BuiltinThemeMode): ThemeConfig {
