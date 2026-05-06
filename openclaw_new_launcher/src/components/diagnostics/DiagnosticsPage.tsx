@@ -1,5 +1,5 @@
 import React from 'react';
-import { open } from '@tauri-apps/plugin-shell';
+import { invoke } from '@tauri-apps/api/core';
 import { Button, showToast } from '../common';
 import { diagnosticsApi, type DiagnosticCheck, type DiagnosticExportResult, type DiagnosticReport, type DiagnosticRepairResult, type DiagnosticStatus } from '../../services/api';
 
@@ -122,7 +122,7 @@ export const DiagnosticsPage: React.FC = () => {
   const handleOpenExportDir = async () => {
     if (!exportInfo?.directory) return;
     try {
-      await open(exportInfo.directory);
+      await invoke('open_path', { path: exportInfo.directory });
     } catch (error: any) {
       showToast(`打开目录失败: ${error?.error || error}`, 'error');
     }

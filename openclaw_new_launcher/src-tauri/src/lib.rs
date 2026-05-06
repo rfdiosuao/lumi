@@ -221,6 +221,48 @@ async fn export_log(app: tauri::AppHandle, content: String) -> Result<String, St
     Ok(path.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+async fn open_path(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("路径为空".to_string());
+    }
+
+    let target = std::path::PathBuf::from(trimmed);
+    if !target.exists() {
+        return Err(format!("路径不存在: {}", target.display()));
+    }
+
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("explorer.exe");
+        command.arg(&target);
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+            .spawn()
+            .map_err(|e| format!("打开目录失败: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("打开目录失败: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("打开目录失败: {}", e))?;
+        return Ok(());
+    }
+}
+
 fn chrono_like_timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let seconds = SystemTime::now()
@@ -256,6 +298,7 @@ pub fn run() {
             start_bridge,
             proxy_request,
             export_log,
+            open_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri");

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { open } from '@tauri-apps/plugin-shell';
+import { invoke } from '@tauri-apps/api/core';
 import { Button, FieldLabel, Input, Loading, Select, TextArea, showToast } from '../common';
 import { videoApi } from '../../services/api';
 import { useLogStore } from '../../stores/logStore';
@@ -150,7 +150,7 @@ export const VideoPage: React.FC = () => {
       return;
     }
     try {
-      await open(resultVideo.directory);
+      await invoke('open_path', { path: resultVideo.directory });
       showToast(`已打开目录：${resultVideo.directory}`, 'info');
     } catch (error: any) {
       showToast(`打开目录失败：${error?.error || error}`, 'error');
