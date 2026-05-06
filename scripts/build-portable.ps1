@@ -114,12 +114,24 @@ function Test-SeedPortableDir {
         "package-lock.json"
     )
 
-    foreach ($item in $required) {
-        if (-not (Test-Path -LiteralPath (Join-Path $Path $item))) {
-            return $false
+    $candidateRoots = @(
+        $Path,
+        (Join-Path $Path "OpenClawFiles")
+    )
+
+    foreach ($rootPath in $candidateRoots) {
+        $valid = $true
+        foreach ($item in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $rootPath $item))) {
+                $valid = $false
+                break
+            }
+        }
+        if ($valid) {
+            return $true
         }
     }
-    return $true
+    return $false
 }
 
 function Find-SeedPortableDir {
@@ -216,6 +228,38 @@ function Remove-PythonCacheFiles {
     Get-ChildItem -LiteralPath $PackageDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
         Remove-Item -Force
+}
+
+function Expand-PortablePayloadForBuild {
+    param([string]$PackageDir)
+
+    $payloadDir = Join-Path $PackageDir "OpenClawFiles"
+    if (-not (Test-Path -LiteralPath $payloadDir)) {
+        return
+    }
+    if (Test-Path -LiteralPath (Join-Path $PackageDir "node\node.exe")) {
+        return
+    }
+
+    Get-ChildItem -LiteralPath $payloadDir -Force |
+        ForEach-Object {
+            Move-Item -LiteralPath $_.FullName -Destination $PackageDir -Force
+        }
+    Remove-SafePath $payloadDir
+}
+
+function Move-PortablePayload {
+    param([string]$PackageDir)
+
+    $payloadDir = Join-Path $PackageDir "OpenClawFiles"
+    Remove-SafePath $payloadDir
+    New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
+
+    Get-ChildItem -LiteralPath $PackageDir -Force |
+        Where-Object { $_.Name -ne "OpenClaw.exe" -and $_.Name -ne "OpenClawFiles" } |
+        ForEach-Object {
+            Move-Item -LiteralPath $_.FullName -Destination $payloadDir -Force
+        }
 }
 
 function Write-PortableReadme {
@@ -383,6 +427,7 @@ Invoke-Step "Create portable directory" {
     Remove-SafePath $hashPath
 
     Copy-Directory -Source $seedDir -Destination $packageDir
+    Expand-PortablePayloadForBuild -PackageDir $packageDir
     Copy-Item -LiteralPath $tauriExe -Destination (Join-Path $packageDir "OpenClaw.exe") -Force
 
     Remove-SafePath (Join-Path $packageDir "data")
@@ -420,6 +465,7 @@ Invoke-Step "Create portable directory" {
         Remove-Item -Force
 
     Remove-PythonCacheFiles -PackageDir $packageDir
+    Move-PortablePayload -PackageDir $packageDir
 }
 
 Invoke-Step "Verify portable directory" {

@@ -13,6 +13,25 @@ static BRIDGE_START_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const PORTABLE_PAYLOAD_DIR: &str = "OpenClawFiles";
+
+fn portable_base_dir() -> Result<std::path::PathBuf, String> {
+    if cfg!(debug_assertions) {
+        return std::env::current_dir()
+            .map_err(|e| format!("get current directory failed: {}", e));
+    }
+
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("get executable path failed: {}", e))?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "executable directory not found".to_string())?;
+    let payload_dir = exe_dir.join(PORTABLE_PAYLOAD_DIR);
+    if payload_dir.exists() {
+        return Ok(payload_dir);
+    }
+    Ok(exe_dir.to_path_buf())
+}
 
 fn bridge_python_exe(py_path: &std::path::Path) -> std::path::PathBuf {
     if let Some(bridge_dir) = py_path.parent() {
@@ -106,18 +125,7 @@ fn get_bridge_port() -> u16 {
 
 #[tauri::command]
 fn get_portable_base_path() -> Result<String, String> {
-    if cfg!(debug_assertions) {
-        return std::env::current_dir()
-            .map(|path| path.to_string_lossy().to_string())
-            .map_err(|e| format!("get current directory failed: {}", e));
-    }
-
-    let exe_path = std::env::current_exe()
-        .map_err(|e| format!("get executable path failed: {}", e))?;
-    let exe_dir = exe_path
-        .parent()
-        .ok_or_else(|| "executable directory not found".to_string())?;
-    Ok(exe_dir.to_string_lossy().to_string())
+    portable_base_dir().map(|path| path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -145,10 +153,10 @@ async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
         }
     }
 
-    // Release binaries run next to the bundled `_up_` directory before installation.
+    // Release binaries run next to the bundled payload directory before installation.
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            for rel_path in ["python/bridge.py", "_up_/python/bridge.py"] {
+            for rel_path in ["python/bridge.py", "_up_/python/bridge.py", "OpenClawFiles/_up_/python/bridge.py"] {
                 let py_path = exe_dir.join(rel_path);
                 if py_path.exists() {
                     return spawn_bridge(&py_path);
@@ -211,14 +219,8 @@ async fn proxy_request(app: tauri::AppHandle, path: String, method: String, body
 
 #[tauri::command]
 async fn export_log(app: tauri::AppHandle, content: String) -> Result<String, String> {
-    let mut base_dir = if let Ok(exe_path) = std::env::current_exe() {
-        exe_path
-            .parent()
-            .map(|path| path.to_path_buf())
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-    };
+    let mut base_dir = portable_base_dir()
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 
     if cfg!(debug_assertions) {
         if let Ok(app_data) = app.path().app_data_dir() {
