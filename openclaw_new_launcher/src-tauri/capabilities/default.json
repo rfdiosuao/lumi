@@ -15,24 +15,34 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "install-openclaw-lark",
-          "cmd": "npx",
-          "args": ["-y", "@larksuite/openclaw-lark", "install"]
+          "name": "openclaw-install-lark",
+          "cmd": "node",
+          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@larksuite/openclaw-lark@latest", "--force"]
         },
         {
-          "name": "install-openclaw-lark-cmd",
-          "cmd": "npx.cmd",
-          "args": ["-y", "@larksuite/openclaw-lark", "install"]
+          "name": "openclaw-install-lark-node-exe",
+          "cmd": "node.exe",
+          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@larksuite/openclaw-lark@latest", "--force"]
         },
         {
-          "name": "install-openclaw-weixin",
-          "cmd": "npx",
-          "args": ["-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install"]
+          "name": "openclaw-install-weixin",
+          "cmd": "node",
+          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@tencent-weixin/openclaw-weixin@latest", "--force"]
         },
         {
-          "name": "install-openclaw-weixin-cmd",
-          "cmd": "npx.cmd",
-          "args": ["-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install"]
+          "name": "openclaw-install-weixin-node-exe",
+          "cmd": "node.exe",
+          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@tencent-weixin/openclaw-weixin@latest", "--force"]
+        },
+        {
+          "name": "openclaw-login-weixin",
+          "cmd": "node",
+          "args": ["node_modules/openclaw/openclaw.mjs", "channels", "login", "--channel", "openclaw-weixin"]
+        },
+        {
+          "name": "openclaw-login-weixin-node-exe",
+          "cmd": "node.exe",
+          "args": ["node_modules/openclaw/openclaw.mjs", "channels", "login", "--channel", "openclaw-weixin"]
         }
       ]
     },
@@ -40,24 +50,34 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "install-openclaw-lark",
-          "cmd": "npx",
-          "args": ["-y", "@larksuite/openclaw-lark", "install"]
+          "name": "openclaw-install-lark",
+          "cmd": "node",
+          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@larksuite/openclaw-lark@latest", "--force"]
         },
         {
-          "name": "install-openclaw-lark-cmd",
-          "cmd": "npx.cmd",
-          "args": ["-y", "@larksuite/openclaw-lark", "install"]
+          "name": "openclaw-install-lark-node-exe",
+          "cmd": "node.exe",
+          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@larksuite/openclaw-lark@latest", "--force"]
         },
         {
-          "name": "install-openclaw-weixin",
-          "cmd": "npx",
-          "args": ["-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install"]
+          "name": "openclaw-install-weixin",
+          "cmd": "node",
+          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@tencent-weixin/openclaw-weixin@latest", "--force"]
         },
         {
-          "name": "install-openclaw-weixin-cmd",
-          "cmd": "npx.cmd",
-          "args": ["-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install"]
+          "name": "openclaw-install-weixin-node-exe",
+          "cmd": "node.exe",
+          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@tencent-weixin/openclaw-weixin@latest", "--force"]
+        },
+        {
+          "name": "openclaw-login-weixin",
+          "cmd": "node",
+          "args": ["node_modules/openclaw/openclaw.mjs", "channels", "login", "--channel", "openclaw-weixin"]
+        },
+        {
+          "name": "openclaw-login-weixin-node-exe",
+          "cmd": "node.exe",
+          "args": ["node_modules/openclaw/openclaw.mjs", "channels", "login", "--channel", "openclaw-weixin"]
         }
       ]
     }
