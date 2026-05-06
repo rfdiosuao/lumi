@@ -140,3 +140,47 @@ export const themeApi = {
 export const systemApi = {
   info: (): Promise<{ node_path: string; base_path: string; openclaw_version: string }> => api('/api/system/info'),
 };
+
+// === Diagnostics API ===
+export type DiagnosticStatus = 'ok' | 'warn' | 'fail';
+
+export interface DiagnosticCheck {
+  id: string;
+  label: string;
+  status: DiagnosticStatus;
+  message: string;
+  detail?: string;
+  repairable?: boolean;
+}
+
+export interface DiagnosticSummary {
+  status: DiagnosticStatus;
+  ok: number;
+  warnings: number;
+  failed: number;
+  total: number;
+}
+
+export interface DiagnosticReport {
+  basePath: string;
+  serviceRunning: boolean;
+  servicePid: number | null;
+  checks: DiagnosticCheck[];
+  summary: DiagnosticSummary;
+  repairAvailable: boolean;
+}
+
+export interface DiagnosticRepairResult {
+  actions: Array<{
+    label: string;
+    status: DiagnosticStatus;
+    message: string;
+    count?: number;
+  }>;
+  diagnostics: DiagnosticReport;
+}
+
+export const diagnosticsApi = {
+  run: (): Promise<DiagnosticReport> => api('/api/diagnostics/run'),
+  repair: (): Promise<DiagnosticRepairResult> => api('/api/diagnostics/repair', 'POST'),
+};

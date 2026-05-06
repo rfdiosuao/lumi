@@ -225,6 +225,30 @@ def _sync_openclaw_models_from_api_profiles() -> None:
     write_json(paths.openclaw_config, oc)
 
 
+def _has_configured_api_profile() -> bool:
+    profiles = read_json(paths.auth_profiles, {"models": {"providers": {}}})
+    models = profiles.get("models") if isinstance(profiles, dict) else {}
+    providers = models.get("providers") if isinstance(models, dict) else {}
+    if not isinstance(providers, dict):
+        return False
+    for provider in providers.values():
+        if not isinstance(provider, dict):
+            continue
+        api_key = str(provider.get("apiKey") or "").strip()
+        base_url = str(provider.get("baseUrl") or provider.get("url") or "").strip()
+        if api_key and base_url:
+            return True
+    return False
+
+
+def _diagnostic_summary(checks: list[dict]) -> dict:
+    failed = sum(1 for item in checks if item.get("status") == "fail")
+    warnings = sum(1 for item in checks if item.get("status") == "warn")
+    ok = sum(1 for item in checks if item.get("status") == "ok")
+    status = "fail" if failed else ("warn" if warnings else "ok")
+    return {"status": status, "ok": ok, "warnings": warnings, "failed": failed, "total": len(checks)}
+
+
 class Handler(BaseHTTPRequestHandler):
     """HTTP request handler for the API bridge."""
 
@@ -303,6 +327,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._auth_profiles(method, body)
             elif path == "/api/system/info":
                 self._system_info()
+            elif path == "/api/diagnostics/run":
+                self._diagnostics_run()
+            elif path == "/api/diagnostics/repair":
+                self._diagnostics_repair()
             elif path == "/api/theme/current":
                 self._theme_current()
             elif path == "/api/theme/by_merchant":
@@ -582,6 +610,70 @@ class Handler(BaseHTTPRequestHandler):
             "base_path": paths.base_path,
             "openclaw_version": updater.current_version(),
         })
+
+    # === Diagnostics ===
+
+    def _diagnostics_run(self) -> None:
+        svc = _get_process_svc()
+        payload = svc.diagnose_environment()
+        checks = list(payload.get("checks", []))
+
+        license_data = _get_license_mgr().current_license()
+        checks.append({
+            "id": "license",
+            "label": "授权状态",
+            "status": "ok" if license_data else "fail",
+            "message": f"已授权：{license_data.get('licensee', 'OpenClaw Customer')}" if isinstance(license_data, dict) else "未授权，启动服务前需要先激活",
+            "detail": paths.license_file,
+            "repairable": False,
+        })
+
+        api_configured = _has_configured_api_profile()
+        checks.append({
+            "id": "api_config",
+            "label": "API 配置",
+            "status": "ok" if api_configured else "warn",
+            "message": "已配置模型 API" if api_configured else "未配置 API，AI 生图/视频会不可用",
+            "detail": paths.auth_profiles,
+            "repairable": False,
+        })
+
+        payload["checks"] = checks
+        payload["summary"] = _diagnostic_summary(checks)
+        payload["repairAvailable"] = any(item.get("repairable") for item in checks)
+        self._ok(payload)
+
+    def _diagnostics_repair(self) -> None:
+        svc = _get_process_svc()
+        result = svc.repair_environment()
+        diagnostics = result.get("diagnostics", {})
+        checks = list(diagnostics.get("checks", []))
+
+        license_data = _get_license_mgr().current_license()
+        checks.append({
+            "id": "license",
+            "label": "授权状态",
+            "status": "ok" if license_data else "fail",
+            "message": f"已授权：{license_data.get('licensee', 'OpenClaw Customer')}" if isinstance(license_data, dict) else "未授权，启动服务前需要先激活",
+            "detail": paths.license_file,
+            "repairable": False,
+        })
+
+        api_configured = _has_configured_api_profile()
+        checks.append({
+            "id": "api_config",
+            "label": "API 配置",
+            "status": "ok" if api_configured else "warn",
+            "message": "已配置模型 API" if api_configured else "未配置 API，AI 生图/视频会不可用",
+            "detail": paths.auth_profiles,
+            "repairable": False,
+        })
+
+        diagnostics["checks"] = checks
+        diagnostics["summary"] = _diagnostic_summary(checks)
+        diagnostics["repairAvailable"] = any(item.get("repairable") for item in checks)
+        result["diagnostics"] = diagnostics
+        self._ok(result)
 
     # === Theme ===
 
