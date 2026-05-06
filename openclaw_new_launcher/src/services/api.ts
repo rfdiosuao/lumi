@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+
 let bridgeStartup: Promise<void> | null = null;
 
 async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) {
@@ -21,7 +23,6 @@ async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string
 }
 
 async function proxyRequest(path: string, method: string = 'GET', body?: Record<string, unknown>) {
-  const { invoke } = await import('@tauri-apps/api/core');
   await ensureBridgeStarted(invoke);
 
   let responseText: string;

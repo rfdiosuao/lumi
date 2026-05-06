@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { type License } from '../types';
 import { type ThemeConfig, type NavItem } from '../types/theme';
 import { DEFAULT_NAV_ITEMS } from '../theme/default';
+import { licenseApi } from '../services/api';
 
 interface AppState {
   currentPage: string;
@@ -64,7 +65,6 @@ export const useAppStore = create<AppState>((set) => ({
   checkLicense: async () => {
     set({ isLicenseChecking: true });
     try {
-      const { licenseApi } = await import('../services/api');
       const resp = await licenseApi.current();
       if (resp.license && typeof resp.license === 'object') {
         set({ isAuthorized: true, licenseInfo: resp.license as License, isLicenseChecking: false });
