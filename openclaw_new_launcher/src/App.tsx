@@ -89,7 +89,7 @@ export default function App() {
   }, [checkLicense, refreshApiConfigured]);
 
   useEffect(() => {
-    if (!isLicenseChecking && !isAuthorized && currentPage !== 'license') {
+    if (!isLicenseChecking && !isAuthorized && !['license', 'diagnostics'].includes(currentPage)) {
       setCurrentPage('license');
     }
   }, [currentPage, isAuthorized, isLicenseChecking, setCurrentPage]);

@@ -142,6 +142,16 @@ class OpenClawProcessService:
                 "repairable": False,
             })
 
+        bridge_listeners = self._port_range_listeners(18791, 18950, exclude_pids={str(os.getpid())})
+        checks.append({
+            "id": "bridge_ports",
+            "label": "Bridge 管理端口",
+            "status": "warn" if bridge_listeners else "ok",
+            "message": f"发现 {len(bridge_listeners)} 个旧 Bridge 占用" if bridge_listeners else "未发现旧 Bridge 占用",
+            "detail": "; ".join(self._format_process(item) for item in bridge_listeners) or "127.0.0.1:18791-18950",
+            "repairable": bool(bridge_listeners),
+        })
+
         stale_gateways = self._openclaw_gateway_processes()
         clawpanels = self._clawpanel_processes()
         stale_count = len(stale_gateways) + len(clawpanels)
@@ -203,6 +213,7 @@ class OpenClawProcessService:
         record("清理 ClawPanel 残留进程", self._kill_clawpanel_processes())
         record("清理 OpenClaw Gateway 残留进程", self._kill_openclaw_gateway_processes())
         record("释放 18790 端口", self._kill_port_processes(APP_PORT))
+        record("释放旧 Bridge 端口", self._kill_port_range_processes(18791, 18950, exclude_pids={str(os.getpid())}))
 
         created = 0
         for path in (
@@ -270,6 +281,18 @@ class OpenClawProcessService:
                 killed += 1
         return killed
 
+    def _kill_port_range_processes(self, start: int, end: int, exclude_pids: set[str] | None = None) -> int:
+        exclude_pids = exclude_pids or set()
+        listeners = self._port_range_listeners(start, end, exclude_pids=exclude_pids)
+        pids = {str(item.get("pid")) for item in listeners if str(item.get("pid", "")).isdigit()}
+        killed = 0
+        for pid in pids:
+            if pid in exclude_pids:
+                continue
+            if self._kill_pid(pid):
+                killed += 1
+        return killed
+
     def _stop_registered_gateway(self) -> int:
         completed = subprocess.run(
             ["schtasks", "/End", "/TN", "OpenClaw Gateway"],
@@ -291,6 +314,24 @@ class OpenClawProcessService:
                 continue
             parts = line.split()
             if parts and parts[-1].isdigit():
+                pids.add(parts[-1])
+        return self._describe_pids(pids)
+
+    def _port_range_listeners(self, start: int, end: int, exclude_pids: set[str] | None = None) -> list[dict[str, str]]:
+        exclude_pids = exclude_pids or set()
+        try:
+            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            return []
+        pids: set[str] = set()
+        for line in (result.stdout or "").splitlines():
+            if "LISTENING" not in line.upper():
+                continue
+            parts = line.split()
+            if len(parts) < 5 or not parts[-1].isdigit():
+                continue
+            local = parts[1]
+            if any(local.endswith(f":{port}") for port in range(start, end + 1)) and parts[-1] not in exclude_pids:
                 pids.add(parts[-1])
         return self._describe_pids(pids)
 

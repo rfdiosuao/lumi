@@ -815,7 +815,7 @@ class Handler(BaseHTTPRequestHandler):
         pass  # Suppress default HTTP logging
 
 
-def find_port(start: int = 18791, end: int = 18800) -> int:
+def find_port(start: int = 18791, end: int = 18950) -> int:
     """Find an available port in the given range."""
     for port in range(start, end + 1):
         try:
@@ -831,9 +831,10 @@ if __name__ == "__main__":
     import secrets as _secrets
     port = find_port()
     token = _secrets.token_hex(32)
-    print(f"BRIDGE_PORT={port}", flush=True)
-    print(f"BRIDGE_TOKEN={token}", flush=True)
     Handler.bridge_token = token
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    append_log(f"[Bridge] Started on port {port}\n")
+    actual_port = int(server.server_address[1])
+    print(f"BRIDGE_PORT={actual_port}", flush=True)
+    print(f"BRIDGE_TOKEN={token}", flush=True)
+    append_log(f"[Bridge] Started on port {actual_port}\n")
     server.serve_forever()

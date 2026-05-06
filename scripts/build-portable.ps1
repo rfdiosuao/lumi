@@ -208,6 +208,16 @@ function Write-CleanRuntimeConfig {
     "{}" | Set-Content -LiteralPath (Join-Path $PackageDir "video_config.json") -Encoding UTF8
 }
 
+function Remove-PythonCacheFiles {
+    param([string]$PackageDir)
+
+    Get-ChildItem -LiteralPath $PackageDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force
+    Get-ChildItem -LiteralPath $PackageDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
+        Remove-Item -Force
+}
+
 function Write-PortableReadme {
     param(
         [string]$PackageDir,
@@ -408,6 +418,8 @@ Invoke-Step "Create portable directory" {
     Get-ChildItem -LiteralPath $packageDir -File -Filter "README-*.txt" |
         Where-Object { $_.Name -ne "README-PORTABLE.txt" } |
         Remove-Item -Force
+
+    Remove-PythonCacheFiles -PackageDir $packageDir
 }
 
 Invoke-Step "Verify portable directory" {
