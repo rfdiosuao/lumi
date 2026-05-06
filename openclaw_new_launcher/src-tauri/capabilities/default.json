@@ -25,6 +25,16 @@
           "args": ["scripts/bot-plugin-helper.mjs", "install", "feishu"]
         },
         {
+          "name": "bot-plugin-login-feishu",
+          "cmd": "node",
+          "args": ["scripts/bot-plugin-helper.mjs", "login-feishu"]
+        },
+        {
+          "name": "bot-plugin-login-feishu-node-exe",
+          "cmd": "node.exe",
+          "args": ["scripts/bot-plugin-helper.mjs", "login-feishu"]
+        },
+        {
           "name": "bot-plugin-install-weixin",
           "cmd": "node",
           "args": ["scripts/bot-plugin-helper.mjs", "install", "weixin"]
@@ -58,6 +68,16 @@
           "name": "bot-plugin-install-feishu-node-exe",
           "cmd": "node.exe",
           "args": ["scripts/bot-plugin-helper.mjs", "install", "feishu"]
+        },
+        {
+          "name": "bot-plugin-login-feishu",
+          "cmd": "node",
+          "args": ["scripts/bot-plugin-helper.mjs", "login-feishu"]
+        },
+        {
+          "name": "bot-plugin-login-feishu-node-exe",
+          "cmd": "node.exe",
+          "args": ["scripts/bot-plugin-helper.mjs", "login-feishu"]
         },
         {
           "name": "bot-plugin-install-weixin",

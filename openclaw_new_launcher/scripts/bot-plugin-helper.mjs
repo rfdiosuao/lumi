@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const rootDir = process.cwd();
 const nodeExe = process.execPath;
@@ -129,11 +130,30 @@ function openclawEnv() {
     PATH: `${nodeDir}${path.delimiter}${binDir}${path.delimiter}${currentPath}`,
     Path: `${nodeDir}${path.delimiter}${binDir}${path.delimiter}${currentPath}`,
     OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG: configPath,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_HOME: stateDir,
     OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT || '18790',
     NO_COLOR: '1',
   };
+}
+
+function patchWeixinFetchHeaders(channel) {
+  if (channel.pluginId !== 'openclaw-weixin') return;
+
+  const apiFile = path.join(channel.packageDir, 'dist', 'src', 'api', 'api.js');
+  if (!fs.existsSync(apiFile)) return;
+
+  const source = fs.readFileSync(apiFile, 'utf8');
+  const patched = source.replace(
+    /\s*"Content-Length": String\(Buffer\.byteLength\(opts\.body, "utf-8"\)\),\r?\n/,
+    '\n',
+  );
+
+  if (patched !== source) {
+    fs.writeFileSync(apiFile, patched, 'utf8');
+    log('[launcher] 已修复微信插件 fetch 请求头兼容问题。');
+  }
 }
 
 function runOpenClaw(args) {
@@ -166,12 +186,17 @@ function runOpenClaw(args) {
   });
 }
 
+function importFile(filePath) {
+  return import(pathToFileURL(filePath).href);
+}
+
 async function install(channelKey) {
   const channel = channels[channelKey];
   if (!channel) fail(`未知插件：${channelKey}`);
 
   const pkg = assertPackage(channel);
   log(`[launcher] 使用离线插件包：${pkg.name}@${pkg.version}`);
+  patchWeixinFetchHeaders(channel);
   ensureExtensionEntry(channel);
   updateOpenClawConfig(channel);
 
@@ -187,14 +212,176 @@ async function install(channelKey) {
 
 async function loginWeixin() {
   await install('weixin');
+
+  const channel = channels.weixin;
+  const loginQr = await importFile(path.join(channel.packageDir, 'dist', 'src', 'auth', 'login-qr.js'));
+  const accounts = await importFile(path.join(channel.packageDir, 'dist', 'src', 'auth', 'accounts.js'));
+  const inbound = await importFile(path.join(channel.packageDir, 'dist', 'src', 'messaging', 'inbound.js'));
+  const accountIdModule = await importFile(path.join(rootDir, 'node_modules', 'openclaw', 'dist', 'plugin-sdk', 'account-id.js'));
+
   log('[launcher] 准备打开微信扫码绑定，请在下面输出中查看二维码或登录链接。');
-  try {
-    await runOpenClaw(['channels', 'login', '--channel', 'openclaw-weixin']);
-  } catch (error) {
-    log('[launcher] 微信扫码命令没有成功结束。如果输出里有 fetch failed，通常是当前网络无法访问微信授权服务，请换网络或稍后再试。');
-    throw error;
+  const startResult = await loginQr.startWeixinLoginWithQr({
+    botType: loginQr.DEFAULT_ILINK_BOT_TYPE || '3',
+    force: true,
+    verbose: true,
+  });
+
+  if (!startResult.qrcodeUrl) {
+    throw new Error(startResult.message || '微信二维码获取失败');
   }
-  log('[launcher] 微信扫码绑定命令已结束。');
+
+  log('\n用手机微信扫描以下二维码，以继续连接：\n');
+  await loginQr.displayQRCode(startResult.qrcodeUrl);
+  log('\n正在等待扫码确认。完成后会自动写入本地配置；如果暂时不绑定，可以点击“停止命令”。\n');
+
+  const waitResult = await loginQr.waitForWeixinLogin({
+    sessionKey: startResult.sessionKey,
+    timeoutMs: 480_000,
+    verbose: true,
+    botType: loginQr.DEFAULT_ILINK_BOT_TYPE || '3',
+  });
+
+  if (waitResult.connected && waitResult.botToken && waitResult.accountId) {
+    const normalizedId = accountIdModule.normalizeAccountId(waitResult.accountId);
+    accounts.saveWeixinAccount(normalizedId, {
+      token: waitResult.botToken,
+      baseUrl: waitResult.baseUrl,
+      userId: waitResult.userId,
+    });
+    accounts.registerWeixinAccountId(normalizedId);
+    if (waitResult.userId) {
+      accounts.clearStaleAccountsForUserId(normalizedId, waitResult.userId, inbound.clearContextTokensForAccount);
+    }
+    await accounts.triggerWeixinChannelReload();
+    log('\n[launcher] 微信扫码绑定成功，账号数据已写入 OpenClaw 配置。');
+    return;
+  }
+
+  throw new Error(waitResult.message || '微信扫码绑定未完成');
+}
+
+async function printQrCode(url) {
+  try {
+    const qrcode = await import('qrcode-terminal');
+    qrcode.default.generate(url, { small: true });
+  } catch {
+    log('[launcher] 二维码渲染组件不可用，请复制下面链接打开：');
+  }
+  log(url);
+}
+
+async function postFeishuForm(baseUrl, params) {
+  const body = new URLSearchParams(params).toString();
+  const response = await fetch(`${baseUrl}/oauth/v1/app/registration`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Feishu auth ${response.status}: ${text}`);
+  }
+  if (!response.ok) {
+    if (data?.error) return data;
+    throw new Error(`Feishu auth ${response.status}: ${text}`);
+  }
+  return data;
+}
+
+async function loginFeishu() {
+  await install('feishu');
+
+  let baseUrl = 'https://accounts.feishu.cn';
+  log('[launcher] 正在向飞书申请扫码配置二维码...');
+  const init = await postFeishuForm(baseUrl, { action: 'init' });
+  if (Array.isArray(init.supported_auth_methods) && !init.supported_auth_methods.includes('client_secret')) {
+    fail('当前飞书环境不支持 client_secret 授权，请改用手动 App ID/App Secret 配置。');
+  }
+
+  const begin = await postFeishuForm(baseUrl, {
+    action: 'begin',
+    archetype: 'PersonalAgent',
+    auth_method: 'client_secret',
+    request_user_info: 'open_id',
+  });
+
+  const qrUrl = new URL(begin.verification_uri_complete);
+  qrUrl.searchParams.set('from', 'onboard');
+  const qrUrlText = qrUrl.toString();
+  log('[launcher] 请使用飞书扫码配置机器人，或复制二维码下方链接打开。');
+  await printQrCode(qrUrlText);
+
+  const startedAt = Date.now();
+  let intervalSeconds = Number(begin.interval || 5);
+  const expireSeconds = Number(begin.expire_in || 600);
+  let domain = 'feishu';
+  let switchedDomain = false;
+
+  while (Date.now() - startedAt < expireSeconds * 1000) {
+    await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
+    const poll = await postFeishuForm(baseUrl, {
+      action: 'poll',
+      device_code: begin.device_code,
+    });
+
+    if (poll.user_info?.tenant_brand === 'lark' && !switchedDomain) {
+      baseUrl = 'https://accounts.larksuite.com';
+      domain = 'lark';
+      switchedDomain = true;
+      log('[launcher] 检测到 Lark 租户，已切换到 Lark 授权域名继续轮询。');
+      continue;
+    }
+
+    if (poll.client_id && poll.client_secret) {
+      const data = readJson(configPath, {});
+      data.channels ||= {};
+      const channelConfig = {
+        enabled: true,
+        appId: poll.client_id,
+        appSecret: poll.client_secret,
+        domain,
+        connectionMode: 'websocket',
+        requireMention: true,
+        dmPolicy: poll.user_info?.open_id ? 'allowlist' : 'open',
+        allowFrom: poll.user_info?.open_id ? [poll.user_info.open_id] : [],
+        groupPolicy: 'open',
+        groupAllowFrom: [],
+      };
+      data.channels.feishu = channelConfig;
+      data.channels['openclaw-lark'] = channelConfig;
+      data.plugins ||= {};
+      data.plugins.allow = Array.isArray(data.plugins.allow) ? data.plugins.allow : [];
+      if (!data.plugins.allow.includes('openclaw-lark')) data.plugins.allow.push('openclaw-lark');
+      data.plugins.entries ||= {};
+      data.plugins.entries['openclaw-lark'] = {
+        ...(data.plugins.entries['openclaw-lark'] || {}),
+        enabled: true,
+      };
+      writeJson(configPath, data);
+      log('[launcher] 飞书扫码配置成功，App ID/App Secret 已写入 OpenClaw 配置。');
+      return;
+    }
+
+    if (poll.error === 'authorization_pending') {
+      process.stdout.write('.');
+      continue;
+    }
+
+    if (poll.error === 'slow_down') {
+      intervalSeconds += 5;
+      log(`[launcher] 飞书要求降低轮询频率，调整为 ${intervalSeconds}s。`);
+      continue;
+    }
+
+    if (poll.error) {
+      throw new Error(`${poll.error}: ${poll.error_description || ''}`.trim());
+    }
+  }
+
+  throw new Error('飞书扫码配置超时，请重新点击安装或改用手动 App ID/App Secret。');
 }
 
 const [command, channelKey] = process.argv.slice(2);
@@ -202,10 +389,12 @@ const [command, channelKey] = process.argv.slice(2);
 try {
   if (command === 'install') {
     await install(channelKey);
+  } else if (command === 'login-feishu') {
+    await loginFeishu();
   } else if (command === 'login-weixin') {
     await loginWeixin();
   } else {
-    fail('用法：node scripts/bot-plugin-helper.mjs install feishu|weixin 或 login-weixin');
+    fail('用法：node scripts/bot-plugin-helper.mjs install feishu|weixin 或 login-feishu 或 login-weixin');
   }
 } catch (error) {
   fail(error?.message || String(error));

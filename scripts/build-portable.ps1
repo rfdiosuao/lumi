@@ -157,14 +157,18 @@ function Find-SeedPortableDir {
 
 function Find-TauriExe {
     $candidatePaths = @(
-        (Join-Path $TauriDir "target\release\OpenClaw.exe"),
-        (Join-Path $TauriDir "target\release\app.exe")
+        (Join-Path $TauriDir "target\release\app.exe"),
+        (Join-Path $TauriDir "target\release\OpenClaw.exe")
     )
 
-    foreach ($candidate in $candidatePaths) {
-        if (Test-Path -LiteralPath $candidate) {
-            return (Resolve-Path -LiteralPath $candidate).Path
-        }
+    $candidateExe = $candidatePaths |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        ForEach-Object { Get-Item -LiteralPath $_ } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($candidateExe) {
+        return $candidateExe.FullName
     }
 
     $exe = Get-ChildItem -LiteralPath (Join-Path $TauriDir "target\release") -Filter "*.exe" -File -ErrorAction SilentlyContinue |
@@ -337,6 +341,15 @@ if (-not $SkipBuild) {
         Push-Location $LauncherDir
         try {
             npm ci
+        } finally {
+            Pop-Location
+        }
+    }
+
+    Invoke-Step "Clean Tauri target for icon resources" {
+        Push-Location $TauriDir
+        try {
+            cargo clean
         } finally {
             Pop-Location
         }

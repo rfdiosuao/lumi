@@ -53,12 +53,12 @@ const CHANNELS: Record<BotChannelKey, BotChannel> = {
     ],
     installSteps: [
       {
-        label: '安装飞书插件',
-        displayCommand: 'node scripts/bot-plugin-helper.mjs install feishu',
-        commandName: 'bot-plugin-install-feishu',
-        fallbackCommandName: 'bot-plugin-install-feishu-node-exe',
-        args: ['scripts/bot-plugin-helper.mjs', 'install', 'feishu'],
-        successMessage: '飞书插件已写入本地配置。填写 App ID 和 App Secret 后，重启核心服务生效。',
+        label: '飞书扫码配置',
+        displayCommand: 'node scripts/bot-plugin-helper.mjs login-feishu',
+        commandName: 'bot-plugin-login-feishu',
+        fallbackCommandName: 'bot-plugin-login-feishu-node-exe',
+        args: ['scripts/bot-plugin-helper.mjs', 'login-feishu'],
+        successMessage: '飞书扫码配置已完成。重启核心服务后生效。',
       },
     ],
     idLabel: 'App ID',
@@ -352,7 +352,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
 
         childRef.current = child;
         pushCommandLog(`[launcher] ${step.label}已启动，PID ${child.pid}\n`);
-        if (channel.key === 'weixin') {
+        if (channel.key === 'weixin' || channel.key === 'feishu') {
           pushCommandLog('[launcher] 如果右侧出现二维码或网页登录链接，请直接扫码/打开链接完成绑定。\n');
         }
       };
