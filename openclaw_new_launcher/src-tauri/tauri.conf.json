@@ -30,7 +30,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["../python/**/*", "../data/themes/**/*"],
+    "resources": ["../python/**/*", "../data/themes/**/*", "../scripts/**/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

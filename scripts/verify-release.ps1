@@ -10,9 +10,12 @@ $requiredFiles = @(
     "node/node.exe",
     "node_modules/openclaw/openclaw.mjs",
     "start.js",
+    "scripts/bot-plugin-helper.mjs",
     "_up_/python/bridge.py",
     "_up_/python-runtime/python.exe",
-    "data/.openclaw/openclaw.json"
+    "data/.openclaw/openclaw.json",
+    "node_modules/@larksuite/openclaw-lark/package.json",
+    "node_modules/@tencent-weixin/openclaw-weixin/package.json"
 )
 
 $forbiddenPatterns = @(

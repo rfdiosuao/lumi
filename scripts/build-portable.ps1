@@ -253,6 +253,66 @@ function Get-OpenClawVersion {
     return "unknown"
 }
 
+function Set-JsonProperty {
+    param(
+        [object]$Object,
+        [string]$Name,
+        [object]$Value
+    )
+
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        $Object.$Name = $Value
+    } else {
+        $Object | Add-Member -MemberType NoteProperty -Name $Name -Value $Value
+    }
+}
+
+function Install-BundledBotPlugins {
+    param([string]$PackageDir)
+
+    $nodeDir = Join-Path $PackageDir "node"
+    $npmCmd = Join-Path $nodeDir "npm.cmd"
+    $pkgJsonPath = Join-Path $PackageDir "package.json"
+    $openclawVersion = Get-OpenClawVersion -PackageDir $PackageDir
+
+    if (-not (Test-Path -LiteralPath $npmCmd)) {
+        throw "Bundled npm not found: $npmCmd"
+    }
+    if ($openclawVersion -eq "unknown") {
+        throw "Cannot read bundled OpenClaw version before installing bot plugins."
+    }
+
+    $pkg = Get-Content -LiteralPath $pkgJsonPath -Raw | ConvertFrom-Json
+    if (-not $pkg.dependencies) {
+        Set-JsonProperty -Object $pkg -Name "dependencies" -Value ([pscustomobject]@{})
+    }
+    Set-JsonProperty -Object $pkg.dependencies -Name "openclaw" -Value $openclawVersion
+    $pkg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $pkgJsonPath -Encoding UTF8
+
+    $oldPath = $env:Path
+    Push-Location $PackageDir
+    try {
+        $env:Path = "$nodeDir;$oldPath"
+        & $npmCmd install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "@larksuite/openclaw-lark@latest" "@tencent-weixin/openclaw-weixin@latest"
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install bot plugins failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Pop-Location
+        $env:Path = $oldPath
+    }
+
+    $required = @(
+        "node_modules\@larksuite\openclaw-lark\package.json",
+        "node_modules\@tencent-weixin\openclaw-weixin\package.json"
+    )
+    foreach ($item in $required) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $item))) {
+            throw "Bundled bot plugin missing after install: $item"
+        }
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($PackageName)) {
     $date = Get-Date -Format "yyyy.MM.dd"
     $PackageName = "OpenClaw-Portable-v$Version-$date"
@@ -319,6 +379,12 @@ Invoke-Step "Create portable directory" {
     Copy-Directory `
         -Source (Join-Path $LauncherDir "data\themes") `
         -Destination (Join-Path $packageDir "_up_\data\themes")
+
+    Copy-Directory `
+        -Source (Join-Path $LauncherDir "scripts") `
+        -Destination (Join-Path $packageDir "scripts")
+
+    Install-BundledBotPlugins -PackageDir $packageDir
 
     Write-CleanRuntimeConfig -PackageDir $packageDir
 

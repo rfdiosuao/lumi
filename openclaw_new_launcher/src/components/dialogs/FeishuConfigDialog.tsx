@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Command, type Child, type TerminatedPayload } from '@tauri-apps/plugin-shell';
 import { Button, FieldLabel, Input, Loading, showToast } from '../common';
-import { configApi, systemApi } from '../../services/api';
+import { configApi, runtimeApi, systemApi } from '../../services/api';
 import { useLogStore } from '../../stores/logStore';
 
 const OPENCLAW_CONFIG_PATH = 'data/.openclaw/openclaw.json';
@@ -20,9 +20,12 @@ interface InstallStep {
 
 interface BotChannel {
   key: BotChannelKey;
+  configKey: string;
+  legacyConfigKey?: string;
   title: string;
   description: string;
   pluginName: string;
+  packageName: string;
   packagePaths: string[];
   installSteps: InstallStep[];
   idLabel: string;
@@ -37,28 +40,25 @@ interface BotChannel {
 const CHANNELS: Record<BotChannelKey, BotChannel> = {
   feishu: {
     key: 'feishu',
+    configKey: 'openclaw-lark',
+    legacyConfigKey: 'feishu',
     title: '飞书机器人',
     description: '安装 OpenClaw 飞书插件，并写入飞书开放平台应用配置。',
     pluginName: 'openclaw-lark',
+    packageName: '@larksuite/openclaw-lark',
     packagePaths: [
+      'node_modules/@larksuite/openclaw-lark/package.json',
       'data/.openclaw/extensions/openclaw-lark/package.json',
       'data/.openclaw/extensions/lark/package.json',
     ],
     installSteps: [
       {
         label: '安装飞书插件',
-        displayCommand:
-          'node node_modules/openclaw/openclaw.mjs plugins install @larksuite/openclaw-lark@latest --force',
-        commandName: 'openclaw-install-lark',
-        fallbackCommandName: 'openclaw-install-lark-node-exe',
-        args: [
-          'node_modules/openclaw/openclaw.mjs',
-          'plugins',
-          'install',
-          '@larksuite/openclaw-lark@latest',
-          '--force',
-        ],
-        successMessage: '飞书插件已安装。填写 App ID 和 App Secret 保存后，重启核心服务生效。',
+        displayCommand: 'node scripts/bot-plugin-helper.mjs install feishu',
+        commandName: 'bot-plugin-install-feishu',
+        fallbackCommandName: 'bot-plugin-install-feishu-node-exe',
+        args: ['scripts/bot-plugin-helper.mjs', 'install', 'feishu'],
+        successMessage: '飞书插件已写入本地配置。填写 App ID 和 App Secret 后，重启核心服务生效。',
       },
     ],
     idLabel: 'App ID',
@@ -71,10 +71,13 @@ const CHANNELS: Record<BotChannelKey, BotChannel> = {
   },
   weixin: {
     key: 'weixin',
+    configKey: 'openclaw-weixin',
     title: '微信机器人',
     description: '安装 OpenClaw 微信绑定插件。微信绑定只能通过命令行输出中的二维码扫码完成。',
     pluginName: 'openclaw-weixin',
+    packageName: '@tencent-weixin/openclaw-weixin',
     packagePaths: [
+      'node_modules/@tencent-weixin/openclaw-weixin/package.json',
       'data/.openclaw/extensions/openclaw-weixin/package.json',
       'data/.openclaw/extensions/weixin/package.json',
       'data/.openclaw/extensions/wechat/package.json',
@@ -82,32 +85,18 @@ const CHANNELS: Record<BotChannelKey, BotChannel> = {
     installSteps: [
       {
         label: '安装微信插件',
-        displayCommand:
-          'node node_modules/openclaw/openclaw.mjs plugins install @tencent-weixin/openclaw-weixin@latest --force',
-        commandName: 'openclaw-install-weixin',
-        fallbackCommandName: 'openclaw-install-weixin-node-exe',
-        args: [
-          'node_modules/openclaw/openclaw.mjs',
-          'plugins',
-          'install',
-          '@tencent-weixin/openclaw-weixin@latest',
-          '--force',
-        ],
-        successMessage: '微信插件已安装，开始打开扫码绑定命令。',
+        displayCommand: 'node scripts/bot-plugin-helper.mjs install weixin',
+        commandName: 'bot-plugin-install-weixin',
+        fallbackCommandName: 'bot-plugin-install-weixin-node-exe',
+        args: ['scripts/bot-plugin-helper.mjs', 'install', 'weixin'],
+        successMessage: '微信插件已写入本地配置，准备打开扫码绑定命令。',
       },
       {
         label: '微信扫码绑定',
-        displayCommand:
-          'node node_modules/openclaw/openclaw.mjs channels login --channel openclaw-weixin',
-        commandName: 'openclaw-login-weixin',
-        fallbackCommandName: 'openclaw-login-weixin-node-exe',
-        args: [
-          'node_modules/openclaw/openclaw.mjs',
-          'channels',
-          'login',
-          '--channel',
-          'openclaw-weixin',
-        ],
+        displayCommand: 'node scripts/bot-plugin-helper.mjs login-weixin',
+        commandName: 'bot-plugin-login-weixin',
+        fallbackCommandName: 'bot-plugin-login-weixin-node-exe',
+        args: ['scripts/bot-plugin-helper.mjs', 'login-weixin'],
         successMessage: '微信扫码绑定命令已结束。绑定完成后，请重启核心服务生效。',
       },
     ],
@@ -119,10 +108,11 @@ const CHANNELS: Record<BotChannelKey, BotChannel> = {
   },
 };
 
-function isInstalledPackage(data: unknown): boolean {
+function isInstalledPackage(data: unknown, packageName?: string): boolean {
   if (!data || typeof data !== 'object') return false;
   const pkg = data as { name?: unknown };
-  return typeof pkg.name === 'string' && pkg.name.length > 0;
+  if (typeof pkg.name !== 'string' || pkg.name.length === 0) return false;
+  return packageName ? pkg.name === packageName : true;
 }
 
 function stripAnsi(text: string): string {
@@ -131,7 +121,7 @@ function stripAnsi(text: string): string {
 
 function normalizeCommandOutput(data: unknown): string {
   if (typeof data === 'string') return stripAnsi(data);
-  if (data instanceof Uint8Array) return new TextDecoder('utf-8').decode(data);
+  if (data instanceof Uint8Array) return stripAnsi(new TextDecoder('utf-8').decode(data));
   return stripAnsi(String(data ?? ''));
 }
 
@@ -140,13 +130,29 @@ function buildChannelConfig(channel: BotChannel, idValue: string, secretValue: s
     enabled: true,
     appId: idValue,
     appSecret: secretValue,
-    domain: channel.key,
+    domain: channel.configKey,
     connectionMode: 'websocket',
     requireMention: channel.key === 'feishu',
     dmPolicy: 'open',
     groupPolicy: 'open',
     streaming: true,
   };
+}
+
+function getSavedChannelConfig(config: any, channel: BotChannel) {
+  return config?.channels?.[channel.configKey] || (
+    channel.legacyConfigKey ? config?.channels?.[channel.legacyConfigKey] : null
+  );
+}
+
+function configHasPlugin(config: any, channel: BotChannel): boolean {
+  const entries = config?.plugins?.entries || {};
+  const paths = config?.plugins?.load?.paths || [];
+  if (entries?.[channel.pluginName]?.enabled) return true;
+  if (Array.isArray(paths)) {
+    return paths.some((item) => String(item).toLowerCase().includes(channel.pluginName.toLowerCase()));
+  }
+  return false;
 }
 
 function makeCommandOptions(cwd?: string) {
@@ -161,9 +167,21 @@ function makeCommandOptions(cwd?: string) {
       PATH: portablePath,
       Path: portablePath,
       OPENCLAW_STATE_DIR: `${cwd}\\data\\.openclaw`,
+      OPENCLAW_CONFIG_PATH: `${cwd}\\data\\.openclaw\\openclaw.json`,
+      OPENCLAW_HOME: `${cwd}\\data\\.openclaw`,
       OPENCLAW_GATEWAY_PORT: '18790',
+      NO_COLOR: '1',
     },
   };
+}
+
+async function resolvePortableBasePath() {
+  try {
+    return await runtimeApi.basePath();
+  } catch {
+    const systemInfo = await systemApi.info().catch(() => null);
+    return systemInfo?.base_path || undefined;
+  }
 }
 
 const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = ({ channel, onClose }) => {
@@ -210,41 +228,51 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
   const checkPlugin = useCallback(async () => {
     setChecking(true);
     setStatusMessage(`正在检测${channel.title}插件...`);
-    try {
-      const [configResp, ...packageResponses] = await Promise.all([
-        configApi.read(OPENCLAW_CONFIG_PATH, {}),
-        ...channel.packagePaths.map((path) => configApi.read(path, null).catch(() => ({ data: null }))),
-      ]);
 
-      const config = (configResp.data as any) || {};
-      const savedChannel = config?.channels?.[channel.key];
-      if (savedChannel?.appId || savedChannel?.robotId) {
-        setIdValue(String(savedChannel.appId || savedChannel.robotId));
-      }
+    const configResp = await configApi.read(OPENCLAW_CONFIG_PATH, {}).catch((error) => {
+      appendMainLog(`[${channel.title}] 配置读取失败，继续检测本地插件包：${error}\n`);
+      return { data: {} };
+    });
 
-      const detected = packageResponses.some((resp) => isInstalledPackage(resp.data));
-      setPluginStatus(detected ? 'installed' : 'missing');
-      setStatusMessage(detected ? `${channel.title}插件已安装` : `未检测到${channel.title}插件`);
-      appendMainLog(`[${channel.title}] 插件检测：${detected ? '已安装' : '未安装'}\n`);
-      return detected;
-    } catch (error) {
-      setPluginStatus('error');
-      setStatusMessage('插件检测失败，请查看服务日志');
-      appendMainLog(`[${channel.title}] 插件检测失败：${error}\n`);
-      return false;
-    } finally {
-      setChecking(false);
+    const packageResponses = await Promise.all(
+      channel.packagePaths.map((packagePath) => configApi.read(packagePath, null).catch(() => ({ data: null }))),
+    );
+
+    const config = (configResp.data as any) || {};
+    const savedChannel = getSavedChannelConfig(config, channel);
+    if (savedChannel?.appId || savedChannel?.robotId) {
+      setIdValue(String(savedChannel.appId || savedChannel.robotId));
     }
+
+    const bundledPackage = packageResponses.some((resp) => isInstalledPackage(resp.data, channel.packageName));
+    const configured = configHasPlugin(config, channel);
+    const detected = bundledPackage || configured;
+
+    setPluginStatus(detected ? 'installed' : 'missing');
+    setStatusMessage(
+      detected
+        ? configured
+          ? `${channel.title}插件已安装`
+          : `${channel.title}插件包已预置，点击安装写入配置`
+        : `未检测到${channel.title}插件包，请重新打包`,
+    );
+    appendMainLog(`[${channel.title}] 插件检测：${detected ? '已预置/已安装' : '未检测到'}\n`);
+    setChecking(false);
+    return detected;
   }, [appendMainLog, channel]);
 
   useEffect(() => {
-    checkPlugin();
+    checkPlugin().catch((error) => {
+      setPluginStatus('error');
+      setStatusMessage(`插件检测失败：${error?.message || error}`);
+      setChecking(false);
+    });
   }, [checkPlugin]);
 
   const spawnInstallStep = async (
     step: InstallStep,
     cwd: string | undefined,
-    onClose: (payload: TerminatedPayload) => void | Promise<void>,
+    onCloseStep: (payload: TerminatedPayload) => void | Promise<void>,
   ) => {
     const options = makeCommandOptions(cwd);
 
@@ -258,7 +286,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
         pushCommandLog(`\n[error] ${error}\n`);
         showToast(`${step.label}启动失败`, 'error');
       });
-      command.on('close', onClose);
+      command.on('close', onCloseStep);
     };
 
     try {
@@ -279,11 +307,10 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
     setCommandLog([]);
     setCommandRunning(true);
     stoppingRef.current = false;
-    setStatusMessage('安装命令已启动，请在右侧查看命令行输出');
+    setStatusMessage('命令已启动，请在右侧查看实时输出');
 
     try {
-      const systemInfo = await systemApi.info().catch(() => null);
-      const cwd = systemInfo?.base_path;
+      const cwd = await resolvePortableBasePath();
 
       const startStep = async (index: number): Promise<void> => {
         const step = channel.installSteps[index];
@@ -320,11 +347,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
 
           setCommandRunning(false);
           const detected = await checkPlugin();
-          if (detected) {
-            showToast(`${channel.title}安装流程完成`, 'success');
-          } else {
-            showToast('命令已结束，请确认扫码/绑定是否完成后重新检测', 'info');
-          }
+          showToast(detected ? `${channel.title}安装流程完成` : '命令已结束，请确认扫码/绑定是否完成', detected ? 'success' : 'info');
         });
 
         childRef.current = child;
@@ -369,16 +392,21 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
     }
 
     try {
-      const configResp = await configApi.read(OPENCLAW_CONFIG_PATH, {});
+      const configResp = await configApi.read(OPENCLAW_CONFIG_PATH, {}).catch(() => ({ data: {} }));
       const data = (configResp.data as any) || {};
       data.channels = data.channels || {};
-      data.channels[channel.key] = buildChannelConfig(channel, idValue.trim(), secretValue.trim());
+
+      const channelConfig = buildChannelConfig(channel, idValue.trim(), secretValue.trim());
+      data.channels[channel.configKey] = channelConfig;
+      if (channel.legacyConfigKey && channel.legacyConfigKey !== channel.configKey) {
+        data.channels[channel.legacyConfigKey] = channelConfig;
+      }
 
       const plugins = data.plugins || {};
       plugins.allow = Array.isArray(plugins.allow) ? plugins.allow : [];
       if (!plugins.allow.includes(channel.pluginName)) plugins.allow.push(channel.pluginName);
       plugins.entries = plugins.entries || {};
-      plugins.entries[channel.pluginName] = { enabled: true };
+      plugins.entries[channel.pluginName] = { ...(plugins.entries[channel.pluginName] || {}), enabled: true };
       data.plugins = plugins;
 
       await configApi.write(OPENCLAW_CONFIG_PATH, data);
@@ -386,7 +414,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
       showToast(`${channel.title}配置已保存，重启核心服务后生效`, 'success');
       onClose();
     } catch (error: any) {
-      showToast('保存失败：' + (error?.error || error), 'error');
+      showToast(`保存失败：${error?.error || error}`, 'error');
     }
   };
 
@@ -409,7 +437,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-5" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-black/72 backdrop-blur-sm" />
       <div
         className="relative grid max-h-[88vh] w-full max-w-5xl grid-cols-1 gap-5 overflow-hidden rounded-xl border border-border bg-surface/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.55),0_0_32px_rgba(37,99,235,0.14)] lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]"
         onClick={(event) => event.stopPropagation()}
@@ -487,14 +515,14 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
         </div>
 
         <div className="flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-terminal-bg shadow-inner lg:min-h-[520px]">
-          <div className="flex shrink-0 items-center justify-between border-b border-border bg-terminal-header px-4 py-3">
-            <div>
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border bg-terminal-header px-4 py-3">
+            <div className="min-w-0">
               <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-accent">Install Console</div>
-              <div className="mt-1 whitespace-pre-wrap font-mono text-xs text-text-subtle">{commandSummary}</div>
+              <div className="mt-1 whitespace-pre-wrap break-all font-mono text-xs text-text-subtle">{commandSummary}</div>
             </div>
             <button
               onClick={() => setCommandLog([])}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted transition hover:bg-hover hover:text-text"
+              className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted transition hover:bg-hover hover:text-text"
             >
               清空
             </button>

@@ -141,6 +141,11 @@ export const systemApi = {
   info: (): Promise<{ node_path: string; base_path: string; openclaw_version: string }> => api('/api/system/info'),
 };
 
+// === Runtime API ===
+export const runtimeApi = {
+  basePath: (): Promise<string> => invoke<string>('get_portable_base_path'),
+};
+
 // === Diagnostics API ===
 export type DiagnosticStatus = 'ok' | 'warn' | 'fail';
 

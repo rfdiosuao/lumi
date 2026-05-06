@@ -15,34 +15,34 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "openclaw-install-lark",
+          "name": "bot-plugin-install-feishu",
           "cmd": "node",
-          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@larksuite/openclaw-lark@latest", "--force"]
+          "args": ["scripts/bot-plugin-helper.mjs", "install", "feishu"]
         },
         {
-          "name": "openclaw-install-lark-node-exe",
+          "name": "bot-plugin-install-feishu-node-exe",
           "cmd": "node.exe",
-          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@larksuite/openclaw-lark@latest", "--force"]
+          "args": ["scripts/bot-plugin-helper.mjs", "install", "feishu"]
         },
         {
-          "name": "openclaw-install-weixin",
+          "name": "bot-plugin-install-weixin",
           "cmd": "node",
-          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@tencent-weixin/openclaw-weixin@latest", "--force"]
+          "args": ["scripts/bot-plugin-helper.mjs", "install", "weixin"]
         },
         {
-          "name": "openclaw-install-weixin-node-exe",
+          "name": "bot-plugin-install-weixin-node-exe",
           "cmd": "node.exe",
-          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@tencent-weixin/openclaw-weixin@latest", "--force"]
+          "args": ["scripts/bot-plugin-helper.mjs", "install", "weixin"]
         },
         {
-          "name": "openclaw-login-weixin",
+          "name": "bot-plugin-login-weixin",
           "cmd": "node",
-          "args": ["node_modules/openclaw/openclaw.mjs", "channels", "login", "--channel", "openclaw-weixin"]
+          "args": ["scripts/bot-plugin-helper.mjs", "login-weixin"]
         },
         {
-          "name": "openclaw-login-weixin-node-exe",
+          "name": "bot-plugin-login-weixin-node-exe",
           "cmd": "node.exe",
-          "args": ["node_modules/openclaw/openclaw.mjs", "channels", "login", "--channel", "openclaw-weixin"]
+          "args": ["scripts/bot-plugin-helper.mjs", "login-weixin"]
         }
       ]
     },
@@ -50,34 +50,34 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "openclaw-install-lark",
+          "name": "bot-plugin-install-feishu",
           "cmd": "node",
-          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@larksuite/openclaw-lark@latest", "--force"]
+          "args": ["scripts/bot-plugin-helper.mjs", "install", "feishu"]
         },
         {
-          "name": "openclaw-install-lark-node-exe",
+          "name": "bot-plugin-install-feishu-node-exe",
           "cmd": "node.exe",
-          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@larksuite/openclaw-lark@latest", "--force"]
+          "args": ["scripts/bot-plugin-helper.mjs", "install", "feishu"]
         },
         {
-          "name": "openclaw-install-weixin",
+          "name": "bot-plugin-install-weixin",
           "cmd": "node",
-          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@tencent-weixin/openclaw-weixin@latest", "--force"]
+          "args": ["scripts/bot-plugin-helper.mjs", "install", "weixin"]
         },
         {
-          "name": "openclaw-install-weixin-node-exe",
+          "name": "bot-plugin-install-weixin-node-exe",
           "cmd": "node.exe",
-          "args": ["node_modules/openclaw/openclaw.mjs", "plugins", "install", "@tencent-weixin/openclaw-weixin@latest", "--force"]
+          "args": ["scripts/bot-plugin-helper.mjs", "install", "weixin"]
         },
         {
-          "name": "openclaw-login-weixin",
+          "name": "bot-plugin-login-weixin",
           "cmd": "node",
-          "args": ["node_modules/openclaw/openclaw.mjs", "channels", "login", "--channel", "openclaw-weixin"]
+          "args": ["scripts/bot-plugin-helper.mjs", "login-weixin"]
         },
         {
-          "name": "openclaw-login-weixin-node-exe",
+          "name": "bot-plugin-login-weixin-node-exe",
           "cmd": "node.exe",
-          "args": ["node_modules/openclaw/openclaw.mjs", "channels", "login", "--channel", "openclaw-weixin"]
+          "args": ["scripts/bot-plugin-helper.mjs", "login-weixin"]
         }
       ]
     }

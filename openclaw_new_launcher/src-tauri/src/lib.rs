@@ -105,6 +105,22 @@ fn get_bridge_port() -> u16 {
 }
 
 #[tauri::command]
+fn get_portable_base_path() -> Result<String, String> {
+    if cfg!(debug_assertions) {
+        return std::env::current_dir()
+            .map(|path| path.to_string_lossy().to_string())
+            .map_err(|e| format!("get current directory failed: {}", e));
+    }
+
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("get executable path failed: {}", e))?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "executable directory not found".to_string())?;
+    Ok(exe_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
     let existing_port = BRIDGE_PORT.load(Ordering::Relaxed);
     if existing_port > 0 {
@@ -295,6 +311,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_bridge_port,
+            get_portable_base_path,
             start_bridge,
             proxy_request,
             export_log,
