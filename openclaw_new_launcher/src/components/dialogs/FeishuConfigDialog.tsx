@@ -1,71 +1,145 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
+import { Command } from '@tauri-apps/plugin-shell';
 import { Button, FieldLabel, Input, Loading, showToast } from '../common';
-import { configApi } from '../../services/api';
+import { configApi, systemApi } from '../../services/api';
 import { useLogStore } from '../../stores/logStore';
+
+const LARK_PACKAGE_PATH = 'data/.openclaw/extensions/openclaw-lark/package.json';
+const OPENCLAW_CONFIG_PATH = 'data/.openclaw/openclaw.json';
+const INSTALL_ARGS = ['-y', '@larksuite/openclaw-lark', 'install'];
+
+type PluginStatus = 'unknown' | 'installed' | 'missing' | 'error';
+
+function isInstalledPackage(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const pkg = data as { name?: unknown };
+  return typeof pkg.name === 'string' && pkg.name.length > 0;
+}
+
+async function runInstallCommand(cwd?: string) {
+  const options = cwd ? { cwd, encoding: 'utf-8' as const } : { encoding: 'utf-8' as const };
+
+  try {
+    return await Command.create('install-openclaw-lark', INSTALL_ARGS, options).execute();
+  } catch (error) {
+    const message = String(error || '');
+    if (!message.toLowerCase().includes('not found') && !message.toLowerCase().includes('denied')) {
+      throw error;
+    }
+    return await Command.create('install-openclaw-lark-cmd', INSTALL_ARGS, options).execute();
+  }
+}
 
 export const FeishuConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [appId, setAppId] = useState('');
   const [secret, setSecret] = useState('');
-  const [pluginInstalled, setPluginInstalled] = useState(false);
+  const [pluginStatus, setPluginStatus] = useState<PluginStatus>('unknown');
   const [checking, setChecking] = useState(true);
   const [installing, setInstalling] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('正在检测飞书插件...');
   const appendLog = useLogStore((s) => s.append);
 
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const [pluginResp, configResp] = await Promise.all([
-          configApi.read('data/.openclaw/extensions/openclaw-lark/package.json', null),
-          configApi.read('data/.openclaw/openclaw.json', {}),
-        ]);
-        const data = configResp.data as any;
-        setPluginInstalled(pluginResp.data !== null);
-        const feishu = data?.channels?.feishu;
-        if (feishu) {
-          setAppId(feishu.appId || '');
-        }
-      } catch (e) {
-        appendLog('[飞书] 配置加载失败: ' + e + '\n');
-      }
+  const checkPlugin = useCallback(async () => {
+    setChecking(true);
+    setStatusMessage('正在检测飞书插件...');
+    try {
+      const [pluginResp, configResp] = await Promise.all([
+        configApi.read(LARK_PACKAGE_PATH, null),
+        configApi.read(OPENCLAW_CONFIG_PATH, {}),
+      ]);
+
+      const config = configResp.data as any;
+      const feishu = config?.channels?.feishu;
+      if (feishu?.appId) setAppId(feishu.appId);
+
+      const installed = isInstalledPackage(pluginResp.data);
+      setPluginStatus(installed ? 'installed' : 'missing');
+      setStatusMessage(installed ? '飞书插件已安装' : '未检测到飞书插件');
+      appendLog(`[飞书] 插件检测：${installed ? '已安装' : '未安装'}\n`);
+      return installed;
+    } catch (error) {
+      setPluginStatus('error');
+      setStatusMessage('插件检测失败，请查看服务日志');
+      appendLog(`[飞书] 插件检测失败：${error}\n`);
+      return false;
+    } finally {
       setChecking(false);
-    })();
+    }
   }, [appendLog]);
+
+  React.useEffect(() => {
+    checkPlugin();
+  }, [checkPlugin]);
+
+  const cleanupOldConfig = async () => {
+    const configResp = await configApi.read(OPENCLAW_CONFIG_PATH, {});
+    const data = (configResp.data as any) || {};
+    const plugins = data.plugins || {};
+
+    if (plugins.entries?.['openclaw-lark']) {
+      delete plugins.entries['openclaw-lark'];
+    }
+    if (Array.isArray(plugins.allow)) {
+      plugins.allow = plugins.allow.filter((name: string) => name !== 'openclaw-lark');
+    }
+
+    data.plugins = plugins;
+    await configApi.write(OPENCLAW_CONFIG_PATH, data);
+  };
 
   const handleInstall = async () => {
     setInstalling(true);
-    appendLog('[飞书] 正在安装飞书插件...\n');
+    setStatusMessage('正在安装飞书插件...');
+    appendLog(`[飞书] 执行安装命令：npx ${INSTALL_ARGS.join(' ')}\n`);
+
     try {
-      const configResp = await configApi.read('data/.openclaw/openclaw.json', {});
-      const data = configResp.data as any;
-      const plugins = data.plugins || {};
-      if (plugins.entries && plugins.entries['openclaw-lark']) delete plugins.entries['openclaw-lark'];
-      if (plugins.allow) plugins.allow = plugins.allow.filter((p: string) => p !== 'openclaw-lark');
-      await configApi.write('data/.openclaw/openclaw.json', data);
-      appendLog('[飞书] 已清理旧配置残留\n');
-    } catch (e) {
-      appendLog('[飞书] 清理旧配置失败: ' + e + '\n');
+      await cleanupOldConfig();
+      appendLog('[飞书] 已清理旧插件配置残留\n');
+
+      const systemInfo = await systemApi.info().catch(() => null);
+      const output = await runInstallCommand(systemInfo?.base_path);
+      if (output.stdout) appendLog(`[飞书] ${String(output.stdout).trim()}\n`);
+      if (output.stderr) appendLog(`[飞书] ${String(output.stderr).trim()}\n`);
+
+      if (output.code !== 0) {
+        throw new Error(`安装命令退出码：${output.code}`);
+      }
+
+      const installed = await checkPlugin();
+      if (!installed) {
+        throw new Error('安装命令已完成，但未找到 openclaw-lark/package.json');
+      }
+
+      showToast('飞书插件安装完成', 'success');
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      setPluginStatus('error');
+      setStatusMessage(`安装失败：${message}`);
+      appendLog(`[飞书] 插件安装失败：${message}\n`);
+      showToast(`飞书插件安装失败：${message}`, 'error');
     } finally {
       setInstalling(false);
     }
-
-    showToast('请先在命令行运行: npx -y @larksuite/openclaw-lark install', 'info');
-    appendLog('[飞书] 请在终端执行: npx -y @larksuite/openclaw-lark install\n');
   };
 
   const handleSave = async () => {
-    if (!appId || !secret) {
+    if (pluginStatus !== 'installed') {
+      showToast('请先安装飞书插件', 'error');
+      return;
+    }
+    if (!appId.trim() || !secret.trim()) {
       showToast('请输入 App ID 和 App Secret', 'error');
       return;
     }
 
     try {
-      const configResp = await configApi.read('data/.openclaw/openclaw.json', {});
-      const data = configResp.data as any;
+      const configResp = await configApi.read(OPENCLAW_CONFIG_PATH, {});
+      const data = (configResp.data as any) || {};
       data.channels = data.channels || {};
       data.channels.feishu = {
         enabled: true,
-        appId,
-        appSecret: secret,
+        appId: appId.trim(),
+        appSecret: secret.trim(),
         domain: 'feishu',
         connectionMode: 'websocket',
         requireMention: true,
@@ -75,73 +149,86 @@ export const FeishuConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose 
       };
 
       const plugins = data.plugins || {};
-      if (!plugins.allow) plugins.allow = [];
+      plugins.allow = Array.isArray(plugins.allow) ? plugins.allow : [];
       if (!plugins.allow.includes('openclaw-lark')) plugins.allow.push('openclaw-lark');
       plugins.entries = plugins.entries || {};
       plugins.entries['openclaw-lark'] = { enabled: true };
       data.plugins = plugins;
-      await configApi.write('data/.openclaw/openclaw.json', data);
 
+      await configApi.write(OPENCLAW_CONFIG_PATH, data);
+      appendLog('[飞书] 飞书通道配置已保存\n');
       showToast('飞书配置已保存', 'success');
       onClose();
-    } catch (e: any) {
-      showToast('保存失败: ' + (e?.error || e), 'error');
+    } catch (error: any) {
+      showToast('保存失败：' + (error?.error || error), 'error');
     }
   };
 
   if (checking) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center">
-        <div className="absolute inset-0 bg-black/40" />
-        <div className="relative bg-surface rounded-lg shadow-xl p-6"><Loading /></div>
+        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+        <div className="relative rounded-lg border border-border bg-surface/95 p-6 shadow-xl">
+          <Loading text={statusMessage} />
+        </div>
       </div>
     );
   }
 
+  const installed = pluginStatus === 'installed';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40" />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
-        className="relative bg-surface rounded-lg shadow-xl w-full max-w-lg mx-4 p-6 max-h-[80vh] overflow-auto"
-        onClick={(e) => e.stopPropagation()}
+        className="relative mx-4 max-h-[80vh] w-full max-w-lg overflow-auto rounded-lg border border-border bg-surface/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.55),0_0_32px_rgba(157,78,221,0.16)]"
+        onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex justify-between items-center mb-4">
+        <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-text">飞书机器人</h2>
-          <button onClick={onClose} className="text-text-muted hover:text-text text-xl">&times;</button>
+          <button onClick={onClose} className="text-xl text-text-muted hover:text-text">&times;</button>
         </div>
-        <p className="text-sm text-text-muted mb-4">安装插件并写入飞书通道配置。</p>
+        <p className="mb-4 text-sm text-text-muted">自动检测并安装 OpenClaw 飞书插件，然后写入飞书通道配置。</p>
 
-        <div className="bg-surface-alt rounded-lg border border-border p-4 mb-4">
-          {pluginInstalled && appId ? (
-            <p className="text-sm text-status-success">飞书已配置<br />App ID: {appId}</p>
-          ) : pluginInstalled ? (
-            <p className="text-sm text-status-warning">插件已安装，尚未填写应用信息</p>
-          ) : (
-            <p className="text-sm text-status-warning">飞书插件未安装</p>
-          )}
+        <div className="mb-4 rounded-lg border border-border bg-surface-alt/80 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className={`text-sm font-semibold ${installed ? 'text-status-success' : 'text-status-warning'}`}>
+                {statusMessage}
+              </p>
+              <p className="mt-1 font-mono text-xs text-text-subtle">npx -y @larksuite/openclaw-lark install</p>
+            </div>
+            <Button onClick={checkPlugin} variant="quiet" disabled={checking || installing}>
+              重新检测
+            </Button>
+          </div>
         </div>
 
-        {!pluginInstalled ? (
+        {!installed ? (
           <>
             <Button onClick={handleInstall} variant="primary" disabled={installing}>
               {installing ? '安装中...' : '安装飞书插件'}
             </Button>
-            <p className="text-xs text-text-muted mt-2">安装会打开命令行显示进度，完成后重新进入此弹窗即可配置。</p>
+            <p className="mt-2 text-xs text-text-muted">
+              点击后会自动执行安装命令，安装完成后会再次检测插件目录。
+            </p>
           </>
         ) : (
           <>
-            <p className="text-xs text-text-subtle font-medium mb-2">应用信息</p>
-            <p className="text-xs text-text-muted mb-2">在飞书开放平台创建应用后复制 App ID 和 Secret。</p>
-            <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer" className="text-xs text-accent hover:underline block mb-4">打开飞书开放平台</a>
+            <p className="mb-2 text-xs font-medium text-text-subtle">应用信息</p>
+            <p className="mb-2 text-xs text-text-muted">在飞书开放平台创建应用后，复制 App ID 和 App Secret。</p>
+            <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer" className="mb-4 block text-xs text-accent hover:underline">
+              打开飞书开放平台
+            </a>
 
             <div className="space-y-3">
               <div>
                 <FieldLabel text="App ID" />
-                <Input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="cli_xxx" />
+                <Input value={appId} onChange={(event) => setAppId(event.target.value)} placeholder="cli_xxx" />
               </div>
               <div>
                 <FieldLabel text="App Secret" />
-                <Input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="******" />
+                <Input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="******" />
               </div>
               <div className="flex gap-3 pt-2">
                 <Button onClick={handleSave} variant="primary">保存配置</Button>
