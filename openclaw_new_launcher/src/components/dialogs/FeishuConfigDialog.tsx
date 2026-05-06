@@ -1,180 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Command, type Child, type TerminatedPayload } from '@tauri-apps/plugin-shell';
 import { Button, FieldLabel, Input, Loading, showToast } from '../common';
-import { configApi, runtimeApi, systemApi } from '../../services/api';
+import { configApi } from '../../services/api';
 import { useLogStore } from '../../stores/logStore';
-
-const OPENCLAW_CONFIG_PATH = 'data/.openclaw/openclaw.json';
-
-type PluginStatus = 'unknown' | 'installed' | 'missing' | 'error';
-type BotChannelKey = 'feishu' | 'weixin';
-
-interface InstallStep {
-  label: string;
-  displayCommand: string;
-  commandName: string;
-  fallbackCommandName: string;
-  args: string[];
-  successMessage: string;
-}
-
-interface BotChannel {
-  key: BotChannelKey;
-  configKey: string;
-  legacyConfigKey?: string;
-  title: string;
-  description: string;
-  pluginName: string;
-  packageName: string;
-  packagePaths: string[];
-  installSteps: InstallStep[];
-  idLabel: string;
-  idPlaceholder: string;
-  secretLabel: string;
-  secretPlaceholder: string;
-  docsUrl?: string;
-  docsLabel?: string;
-  manualConfig: boolean;
-}
-
-const CHANNELS: Record<BotChannelKey, BotChannel> = {
-  feishu: {
-    key: 'feishu',
-    configKey: 'openclaw-lark',
-    legacyConfigKey: 'feishu',
-    title: '飞书机器人',
-    description: '安装 OpenClaw 飞书插件，并写入飞书开放平台应用配置。',
-    pluginName: 'openclaw-lark',
-    packageName: '@larksuite/openclaw-lark',
-    packagePaths: [
-      'node_modules/@larksuite/openclaw-lark/package.json',
-      'data/.openclaw/extensions/openclaw-lark/package.json',
-      'data/.openclaw/extensions/lark/package.json',
-    ],
-    installSteps: [
-      {
-        label: '飞书扫码配置',
-        displayCommand: 'node scripts/bot-plugin-helper.mjs login-feishu',
-        commandName: 'bot-plugin-login-feishu',
-        fallbackCommandName: 'bot-plugin-login-feishu-node-exe',
-        args: ['scripts/bot-plugin-helper.mjs', 'login-feishu'],
-        successMessage: '飞书扫码配置已完成。重启核心服务后生效。',
-      },
-    ],
-    idLabel: 'App ID',
-    idPlaceholder: 'cli_xxx',
-    secretLabel: 'App Secret',
-    secretPlaceholder: '请输入 App Secret',
-    docsUrl: 'https://open.feishu.cn/app',
-    docsLabel: '打开飞书开放平台',
-    manualConfig: true,
-  },
-  weixin: {
-    key: 'weixin',
-    configKey: 'openclaw-weixin',
-    title: '微信机器人',
-    description: '安装 OpenClaw 微信绑定插件。微信绑定只能通过命令行输出中的二维码扫码完成。',
-    pluginName: 'openclaw-weixin',
-    packageName: '@tencent-weixin/openclaw-weixin',
-    packagePaths: [
-      'node_modules/@tencent-weixin/openclaw-weixin/package.json',
-      'data/.openclaw/extensions/openclaw-weixin/package.json',
-      'data/.openclaw/extensions/weixin/package.json',
-      'data/.openclaw/extensions/wechat/package.json',
-    ],
-    installSteps: [
-      {
-        label: '微信扫码绑定',
-        displayCommand: 'node scripts/bot-plugin-helper.mjs login-weixin',
-        commandName: 'bot-plugin-login-weixin',
-        fallbackCommandName: 'bot-plugin-login-weixin-node-exe',
-        args: ['scripts/bot-plugin-helper.mjs', 'login-weixin'],
-        successMessage: '微信扫码绑定命令已结束。绑定完成后，请重启核心服务生效。',
-      },
-    ],
-    idLabel: '',
-    idPlaceholder: '',
-    secretLabel: '',
-    secretPlaceholder: '',
-    manualConfig: false,
-  },
-};
-
-function isInstalledPackage(data: unknown, packageName?: string): boolean {
-  if (!data || typeof data !== 'object') return false;
-  const pkg = data as { name?: unknown };
-  if (typeof pkg.name !== 'string' || pkg.name.length === 0) return false;
-  return packageName ? pkg.name === packageName : true;
-}
-
-function stripAnsi(text: string): string {
-  return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
-}
-
-function normalizeCommandOutput(data: unknown): string {
-  if (typeof data === 'string') return stripAnsi(data);
-  if (data instanceof Uint8Array) return stripAnsi(new TextDecoder('utf-8').decode(data));
-  return stripAnsi(String(data ?? ''));
-}
-
-function buildChannelConfig(channel: BotChannel, idValue: string, secretValue: string) {
-  return {
-    enabled: true,
-    appId: idValue,
-    appSecret: secretValue,
-    domain: channel.configKey,
-    connectionMode: 'websocket',
-    requireMention: channel.key === 'feishu',
-    dmPolicy: 'open',
-    groupPolicy: 'open',
-    streaming: true,
-  };
-}
-
-function getSavedChannelConfig(config: any, channel: BotChannel) {
-  return config?.channels?.[channel.configKey] || (
-    channel.legacyConfigKey ? config?.channels?.[channel.legacyConfigKey] : null
-  );
-}
-
-function configHasPlugin(config: any, channel: BotChannel): boolean {
-  const entries = config?.plugins?.entries || {};
-  const paths = config?.plugins?.load?.paths || [];
-  if (entries?.[channel.pluginName]?.enabled) return true;
-  if (Array.isArray(paths)) {
-    return paths.some((item) => String(item).toLowerCase().includes(channel.pluginName.toLowerCase()));
-  }
-  return false;
-}
-
-function makeCommandOptions(cwd?: string) {
-  const base = { encoding: 'utf-8' as const };
-  if (!cwd) return base;
-
-  const portablePath = `${cwd}\\node;${cwd}\\node_modules\\.bin`;
-  return {
-    ...base,
-    cwd,
-    env: {
-      PATH: portablePath,
-      Path: portablePath,
-      OPENCLAW_STATE_DIR: `${cwd}\\data\\.openclaw`,
-      OPENCLAW_CONFIG_PATH: `${cwd}\\data\\.openclaw\\openclaw.json`,
-      OPENCLAW_HOME: `${cwd}\\data\\.openclaw`,
-      OPENCLAW_GATEWAY_PORT: '18790',
-      NO_COLOR: '1',
-    },
-  };
-}
-
-async function resolvePortableBasePath() {
-  try {
-    return await runtimeApi.basePath();
-  } catch {
-    const systemInfo = await systemApi.info().catch(() => null);
-    return systemInfo?.base_path || undefined;
-  }
-}
+import { BotInstallConsole } from './BotInstallConsole';
+import { CHANNELS } from './botPluginChannels';
+import { OPENCLAW_CONFIG_PATH, type BotChannel, type InstallStep, type PluginStatus } from './botPluginTypes';
+import {
+  buildChannelConfig,
+  configHasPlugin,
+  getSavedChannelConfig,
+  isInstalledPackage,
+  makeCommandOptions,
+  normalizeCommandOutput,
+  resolvePortableBasePath,
+} from './botPluginRuntime';
 
 const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = ({ channel, onClose }) => {
   const [idValue, setIdValue] = useState('');
@@ -185,12 +25,11 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
   const [statusMessage, setStatusMessage] = useState(`正在检测${channel.title}插件...`);
   const [commandLog, setCommandLog] = useState<string[]>([]);
   const childRef = useRef<Child | null>(null);
-  const outputRef = useRef<HTMLPreElement | null>(null);
+  const outputRef = useRef<HTMLPreElement>(null);
   const stoppingRef = useRef(false);
   const appendMainLog = useLogStore((s) => s.append);
 
   const installed = pluginStatus === 'installed';
-  const hasCommandLog = commandLog.length > 0;
   const commandSummary = useMemo(
     () => channel.installSteps.map((step) => step.displayCommand).join('\n'),
     [channel.installSteps],
@@ -506,28 +345,12 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
           )}
         </div>
 
-        <div className="flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-terminal-bg shadow-inner lg:min-h-[520px]">
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border bg-terminal-header px-4 py-3">
-            <div className="min-w-0">
-              <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-accent">Install Console</div>
-              <div className="mt-1 whitespace-pre-wrap break-all font-mono text-xs text-text-subtle">{commandSummary}</div>
-            </div>
-            <button
-              onClick={() => setCommandLog([])}
-              className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted transition hover:bg-hover hover:text-text"
-            >
-              清空
-            </button>
-          </div>
-          <pre
-            ref={outputRef}
-            className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-4 py-4 font-mono text-xs leading-[1.05] text-terminal-text"
-          >
-            {hasCommandLog
-              ? commandLog.join('')
-              : '点击安装后，这里会实时显示命令行输出。\n如果输出二维码、验证码或登录链接，客户可以直接在这里扫码/复制。'}
-          </pre>
-        </div>
+        <BotInstallConsole
+          commandSummary={commandSummary}
+          commandLog={commandLog}
+          outputRef={outputRef}
+          onClear={() => setCommandLog([])}
+        />
       </div>
     </div>
   );
