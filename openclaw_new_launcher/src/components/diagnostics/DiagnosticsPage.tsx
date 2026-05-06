@@ -1,6 +1,7 @@
 import React from 'react';
+import { open } from '@tauri-apps/plugin-shell';
 import { Button, showToast } from '../common';
-import { diagnosticsApi, type DiagnosticCheck, type DiagnosticReport, type DiagnosticRepairResult, type DiagnosticStatus } from '../../services/api';
+import { diagnosticsApi, type DiagnosticCheck, type DiagnosticExportResult, type DiagnosticReport, type DiagnosticRepairResult, type DiagnosticStatus } from '../../services/api';
 
 const toneMap: Record<DiagnosticStatus, {
   label: string;
@@ -69,8 +70,10 @@ const ActionRow: React.FC<{ action: DiagnosticRepairResult['actions'][number] }>
 export const DiagnosticsPage: React.FC = () => {
   const [report, setReport] = React.useState<DiagnosticReport | null>(null);
   const [actions, setActions] = React.useState<DiagnosticRepairResult['actions']>([]);
+  const [exportInfo, setExportInfo] = React.useState<DiagnosticExportResult | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [repairing, setRepairing] = React.useState(false);
+  const [exporting, setExporting] = React.useState(false);
 
   const runDiagnostics = React.useCallback(async () => {
     setLoading(true);
@@ -103,6 +106,28 @@ export const DiagnosticsPage: React.FC = () => {
     }
   };
 
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const result = await diagnosticsApi.export();
+      setExportInfo(result);
+      showToast(`诊断包已生成: ${result.filename}`, 'success');
+    } catch (error: any) {
+      showToast(`导出失败: ${error?.error || error}`, 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleOpenExportDir = async () => {
+    if (!exportInfo?.directory) return;
+    try {
+      await open(exportInfo.directory);
+    } catch (error: any) {
+      showToast(`打开目录失败: ${error?.error || error}`, 'error');
+    }
+  };
+
   const sortedChecks = React.useMemo(() => {
     return [...(report?.checks || [])].sort((a, b) => statusPriority(a.status) - statusPriority(b.status));
   }, [report]);
@@ -119,6 +144,9 @@ export const DiagnosticsPage: React.FC = () => {
         <div className="flex items-center gap-3">
           <Button variant="quiet" onClick={runDiagnostics} disabled={loading || repairing}>
             {loading ? '诊断中...' : '重新诊断'}
+          </Button>
+          <Button variant="quiet" onClick={handleExport} disabled={loading || repairing || exporting}>
+            {exporting ? '导出中...' : '导出诊断包'}
           </Button>
           <Button variant="primary" onClick={handleRepair} disabled={loading || repairing}>
             {repairing ? '修复中...' : '一键修复'}
@@ -163,6 +191,23 @@ export const DiagnosticsPage: React.FC = () => {
                 <span className="font-mono text-text">{report?.servicePid || '未运行'}</span>
               </div>
             </section>
+
+            {exportInfo && (
+              <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-bold text-text">诊断包</h2>
+                  <Button variant="quiet" className="px-3 py-1.5 text-xs" onClick={handleOpenExportDir}>
+                    打开目录
+                  </Button>
+                </div>
+                <div className="mt-3 break-all rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-text-subtle">
+                  {exportInfo.path}
+                </div>
+                <div className="mt-3 text-xs text-text-muted">
+                  大小：{Math.max(1, Math.round(exportInfo.size / 1024))} KB
+                </div>
+              </section>
+            )}
 
             {actions.length > 0 && (
               <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">

@@ -22,11 +22,13 @@ data/license.json
 data/.openclaw/
 data/storyboards/
 data/storyboards_temp/
+data/diagnostics/
 **/data/install_id.txt
 **/data/license.json
 **/data/.openclaw/
 **/data/storyboards/
 **/data/storyboards_temp/
+**/data/diagnostics/
 
 # Secrets / local server state
 license_server/admin_token.txt

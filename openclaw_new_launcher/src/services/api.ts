@@ -180,7 +180,15 @@ export interface DiagnosticRepairResult {
   diagnostics: DiagnosticReport;
 }
 
+export interface DiagnosticExportResult {
+  path: string;
+  directory: string;
+  filename: string;
+  size: number;
+}
+
 export const diagnosticsApi = {
   run: (): Promise<DiagnosticReport> => api('/api/diagnostics/run'),
   repair: (): Promise<DiagnosticRepairResult> => api('/api/diagnostics/repair', 'POST'),
+  export: (): Promise<DiagnosticExportResult> => api('/api/diagnostics/export', 'POST'),
 };

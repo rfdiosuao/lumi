@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import datetime
 import json
 import os
 import re
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import threading
 import traceback
+import zipfile
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
@@ -249,6 +251,88 @@ def _diagnostic_summary(checks: list[dict]) -> dict:
     return {"status": status, "ok": ok, "warnings": warnings, "failed": failed, "total": len(checks)}
 
 
+SENSITIVE_KEYS = {
+    "apiKey",
+    "api_key",
+    "apikey",
+    "key",
+    "token",
+    "accessToken",
+    "access_token",
+    "password",
+    "secret",
+    "signature",
+    "dashKey",
+    "appSecret",
+}
+
+
+def _mask_secret(value: object) -> str:
+    text = str(value)
+    if len(text) <= 8:
+        return "***"
+    return f"{text[:4]}***{text[-4:]}"
+
+
+def _sanitize_payload(value: object) -> object:
+    if isinstance(value, dict):
+        result: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text in SENSITIVE_KEYS or key_text.lower().endswith(("key", "token", "secret", "password", "signature")):
+                result[key_text] = _mask_secret(item) if item else ""
+            else:
+                result[key_text] = _sanitize_payload(item)
+        return result
+    if isinstance(value, list):
+        return [_sanitize_payload(item) for item in value]
+    return value
+
+
+def _sanitize_text(value: str) -> str:
+    value = re.sub(r"\bsk-[A-Za-z0-9_\-]{12,}\b", "sk-***", value)
+    value = re.sub(r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)", r"\1\2***", value)
+    return value
+
+
+def _append_runtime_checks(payload: dict) -> dict:
+    checks = list(payload.get("checks", []))
+
+    license_data = _get_license_mgr().current_license()
+    checks.append({
+        "id": "license",
+        "label": "授权状态",
+        "status": "ok" if license_data else "fail",
+        "message": f"已授权：{license_data.get('licensee', 'OpenClaw Customer')}" if isinstance(license_data, dict) else "未授权，启动服务前需要先激活",
+        "detail": paths.license_file,
+        "repairable": False,
+    })
+
+    api_configured = _has_configured_api_profile()
+    checks.append({
+        "id": "api_config",
+        "label": "API 配置",
+        "status": "ok" if api_configured else "warn",
+        "message": "已配置模型 API" if api_configured else "未配置 API，AI 生图/视频会不可用",
+        "detail": paths.auth_profiles,
+        "repairable": False,
+    })
+
+    payload["checks"] = checks
+    payload["summary"] = _diagnostic_summary(checks)
+    payload["repairAvailable"] = any(item.get("repairable") for item in checks)
+    return payload
+
+
+def _build_diagnostics_payload() -> dict:
+    return _append_runtime_checks(_get_process_svc().diagnose_environment())
+
+
+def _read_sanitized_json(path: str, default: object = None) -> object:
+    default = {} if default is None else default
+    return _sanitize_payload(read_json(path, default))
+
+
 class Handler(BaseHTTPRequestHandler):
     """HTTP request handler for the API bridge."""
 
@@ -331,6 +415,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._diagnostics_run()
             elif path == "/api/diagnostics/repair":
                 self._diagnostics_repair()
+            elif path == "/api/diagnostics/export":
+                self._diagnostics_export()
             elif path == "/api/theme/current":
                 self._theme_current()
             elif path == "/api/theme/by_merchant":
@@ -614,66 +700,56 @@ class Handler(BaseHTTPRequestHandler):
     # === Diagnostics ===
 
     def _diagnostics_run(self) -> None:
-        svc = _get_process_svc()
-        payload = svc.diagnose_environment()
-        checks = list(payload.get("checks", []))
-
-        license_data = _get_license_mgr().current_license()
-        checks.append({
-            "id": "license",
-            "label": "授权状态",
-            "status": "ok" if license_data else "fail",
-            "message": f"已授权：{license_data.get('licensee', 'OpenClaw Customer')}" if isinstance(license_data, dict) else "未授权，启动服务前需要先激活",
-            "detail": paths.license_file,
-            "repairable": False,
-        })
-
-        api_configured = _has_configured_api_profile()
-        checks.append({
-            "id": "api_config",
-            "label": "API 配置",
-            "status": "ok" if api_configured else "warn",
-            "message": "已配置模型 API" if api_configured else "未配置 API，AI 生图/视频会不可用",
-            "detail": paths.auth_profiles,
-            "repairable": False,
-        })
-
-        payload["checks"] = checks
-        payload["summary"] = _diagnostic_summary(checks)
-        payload["repairAvailable"] = any(item.get("repairable") for item in checks)
-        self._ok(payload)
+        self._ok(_build_diagnostics_payload())
 
     def _diagnostics_repair(self) -> None:
         svc = _get_process_svc()
         result = svc.repair_environment()
-        diagnostics = result.get("diagnostics", {})
-        checks = list(diagnostics.get("checks", []))
-
-        license_data = _get_license_mgr().current_license()
-        checks.append({
-            "id": "license",
-            "label": "授权状态",
-            "status": "ok" if license_data else "fail",
-            "message": f"已授权：{license_data.get('licensee', 'OpenClaw Customer')}" if isinstance(license_data, dict) else "未授权，启动服务前需要先激活",
-            "detail": paths.license_file,
-            "repairable": False,
-        })
-
-        api_configured = _has_configured_api_profile()
-        checks.append({
-            "id": "api_config",
-            "label": "API 配置",
-            "status": "ok" if api_configured else "warn",
-            "message": "已配置模型 API" if api_configured else "未配置 API，AI 生图/视频会不可用",
-            "detail": paths.auth_profiles,
-            "repairable": False,
-        })
-
-        diagnostics["checks"] = checks
-        diagnostics["summary"] = _diagnostic_summary(checks)
-        diagnostics["repairAvailable"] = any(item.get("repairable") for item in checks)
-        result["diagnostics"] = diagnostics
+        result["diagnostics"] = _append_runtime_checks(result.get("diagnostics", {}))
         self._ok(result)
+
+    def _diagnostics_export(self) -> None:
+        diagnostics = _build_diagnostics_payload()
+        now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        export_dir = os.path.join(paths.data_dir, "diagnostics")
+        os.makedirs(export_dir, exist_ok=True)
+        filename = f"openclaw-diagnostics-{now}.zip"
+        zip_path = os.path.join(export_dir, filename)
+
+        system_info = {
+            "generatedAt": datetime.datetime.now().isoformat(timespec="seconds"),
+            "basePath": paths.base_path,
+            "nodePath": paths.node_exe,
+            "openclawMjs": paths.openclaw_mjs,
+            "stateDir": paths.state_dir,
+            "diagnosticSummary": diagnostics.get("summary", {}),
+        }
+
+        with log_lock:
+            service_log = _sanitize_text("".join(log_buffer))
+
+        readme = (
+            "OpenClaw diagnostics package\n\n"
+            "This package is generated by the launcher for troubleshooting.\n"
+            "Secrets such as API keys, tokens, passwords, signatures and app secrets are masked.\n"
+        )
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("README.txt", readme)
+            archive.writestr("diagnostics.json", json.dumps(diagnostics, ensure_ascii=False, indent=2))
+            archive.writestr("system.json", json.dumps(system_info, ensure_ascii=False, indent=2))
+            archive.writestr("service.log", service_log)
+            archive.writestr("configs/openclaw.json", json.dumps(_read_sanitized_json(paths.openclaw_config, {}), ensure_ascii=False, indent=2))
+            archive.writestr("configs/auth-profiles.json", json.dumps(_read_sanitized_json(paths.auth_profiles, {}), ensure_ascii=False, indent=2))
+            archive.writestr("configs/imgapi_config.json", json.dumps(_read_sanitized_json(paths.image_config, {}), ensure_ascii=False, indent=2))
+            archive.writestr("configs/video_config.json", json.dumps(_read_sanitized_json(paths.video_config, {}), ensure_ascii=False, indent=2))
+
+        self._ok({
+            "path": zip_path,
+            "directory": export_dir,
+            "filename": filename,
+            "size": os.path.getsize(zip_path),
+        })
 
     # === Theme ===
 

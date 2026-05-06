@@ -77,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { theme, navItems } = useTheme();
   const items = React.useMemo(() => {
     const source = navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS;
-    if (source.some((item) => item.key === 'diagnostics')) return source;
+    let next = [...source];
     const diagnosticItem: NavItem = {
       key: 'diagnostics',
       label: '环境诊断',
@@ -86,9 +86,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
       group: '缁存姢',
       accent: true,
     };
-    const updateIndex = source.findIndex((item) => item.key === 'update');
-    if (updateIndex < 0) return [...source, diagnosticItem];
-    return [...source.slice(0, updateIndex), diagnosticItem, ...source.slice(updateIndex)];
+    const deliveryItem: NavItem = {
+      key: 'delivery',
+      label: '交付验收',
+      desc: '出包前逐项检查',
+      icon: 'QA',
+      group: '缁存姢',
+      accent: true,
+    };
+    if (!next.some((item) => item.key === 'diagnostics')) {
+      const updateIndex = next.findIndex((item) => item.key === 'update');
+      next = updateIndex < 0 ? [...next, diagnosticItem] : [...next.slice(0, updateIndex), diagnosticItem, ...next.slice(updateIndex)];
+    }
+    if (!next.some((item) => item.key === 'delivery')) {
+      const afterDiagnostics = next.findIndex((item) => item.key === 'diagnostics');
+      const insertAt = afterDiagnostics >= 0 ? afterDiagnostics + 1 : next.length;
+      next = [...next.slice(0, insertAt), deliveryItem, ...next.slice(insertAt)];
+    }
+    return next;
   }, [navItems]);
   const brandName = theme.brand.name;
   const brandSubtitle = theme.brand.subtitle;

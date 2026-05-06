@@ -5,6 +5,7 @@ import { LicensePage } from './components/license/LicensePage';
 import { ImagePage } from './components/image/ImagePage';
 import { VideoPage } from './components/video/VideoPage';
 import { DiagnosticsPage } from './components/diagnostics/DiagnosticsPage';
+import { DeliveryChecklistPage } from './components/delivery/DeliveryChecklistPage';
 import { ToastContainer, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
@@ -181,6 +182,7 @@ export default function App() {
       case 'video': return <VideoPage />;
       case 'storyboard': return <StoryboardPage />;
       case 'diagnostics': return <DiagnosticsPage />;
+      case 'delivery': return <DeliveryChecklistPage />;
       default: return <TerminalPage />;
     }
   };
