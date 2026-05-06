@@ -27,6 +27,8 @@ const CHECK_KEYS: { key: keyof Scene['checks']; label: string }[] = [
 const DURATION_OPTIONS = ['5', '10'];
 const RATIO_OPTIONS = ['9:16', '16:9', '1:1', '4:3'];
 const CAMERA_OPTIONS = ['缓慢推进', '横向平移', '环绕展示', '静物特写', '拉远收束'];
+const DEFAULT_CANDIDATE_PROMPT = '产品置于干净桌面，光线明亮，主体完整清晰，突出产品核心卖点，适合作为短视频广告关键帧。';
+const DEFAULT_VIDEO_PROMPT = '从首帧开始，镜头自然运动，产品保持稳定不变形，画面节奏适合小广告短视频。';
 
 interface StoryboardProject {
   title: string;
@@ -41,8 +43,10 @@ const defaultScene = (): Scene => ({
   duration: '5',
   ratio: '9:16',
   camera: '缓慢推进',
-  prompt: '产品置于干净桌面，光线明亮，画面突出产品核心卖点，适合作为小广告视频开场镜头。',
+  prompt: DEFAULT_VIDEO_PROMPT,
   negative: '低清晰度，变形，杂乱背景，错误文字，遮挡产品，品牌错误。',
+  candidatePrompt: DEFAULT_CANDIDATE_PROMPT,
+  referenceImage: null,
   firstFrame: null,
   lastFrame: null,
   video: null,
@@ -67,6 +71,8 @@ function normalizeScene(value: any, index: number): Scene {
     checks: { ...base.checks, ...(value?.checks || {}) },
     productViews: { ...base.productViews, ...(value?.productViews || {}) },
     candidates: Array.isArray(value?.candidates) ? value.candidates : [],
+    candidatePrompt: String(value?.candidatePrompt || value?.prompt || base.candidatePrompt),
+    referenceImage: value?.referenceImage || null,
   };
 }
 
@@ -89,13 +95,22 @@ function imageSizeForRatio(ratio: string): string {
   return '1024x1024';
 }
 
+function imageAspectClass(ratio: string): string {
+  if (ratio === '9:16') return 'aspect-[9/16]';
+  if (ratio === '3:4') return 'aspect-[3/4]';
+  if (ratio === '1:1') return 'aspect-square';
+  if (ratio === '4:3') return 'aspect-[4/3]';
+  return 'aspect-video';
+}
+
 function pickReferenceImage(project: StoryboardProject, scene: Scene): string | null {
   return (
+    scene.referenceImage ||
+    scene.firstFrame ||
+    scene.lastFrame ||
     project.productViews.front ||
     project.productViews.side ||
     project.productViews.back ||
-    scene.firstFrame ||
-    scene.lastFrame ||
     null
   );
 }
@@ -226,6 +241,19 @@ export const StoryboardPage: React.FC = () => {
     input.click();
   };
 
+  const handlePickSceneReference = async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (event) => {
+      const file = (event.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      updateScene({ referenceImage: await handleFileToBase64(file) });
+      showToast('已添加九宫格产品参考图', 'success');
+    };
+    input.click();
+  };
+
   const handlePickFrame = async (slot: FrameSlot) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -295,16 +323,32 @@ export const StoryboardPage: React.FC = () => {
     setCandidateStatus('');
   };
 
-  const composePrompt = () => {
+  const composeReferenceText = () => {
     const scene = currentScene;
     const viewNames = VIEW_KEYS.filter((item) => project.productViews[item.key]).map((item) => item.label);
-    const referenceText = viewNames.length > 0
-      ? `参考产品${viewNames.join('、')}三视图，保持产品外观、比例、Logo 和包装文字一致。`
-      : '保持产品主体稳定一致，避免凭空改变外观。';
+    if (scene.referenceImage) return '严格参考上传的产品图，保持产品外观、颜色、Logo、结构和比例一致。';
+    if (viewNames.length > 0) return `参考产品${viewNames.join('、')}三视图，保持产品外观、比例、Logo 和包装文字一致。`;
+    return '保持产品主体稳定一致，避免凭空改变外观。';
+  };
+
+  const composeCandidatePrompt = () => {
+    const scene = currentScene;
+    return [
+      composeReferenceText(),
+      `广告镜头：${scene.title}`,
+      `核心卖点：${scene.sellingPoint}`,
+      `关键帧画面：${scene.candidatePrompt || scene.prompt}`,
+      `投放规格：${scene.ratio}，商业广告关键帧，主体清晰，构图完整，适合短视频投放。`,
+      `避免：${scene.negative}`,
+    ].filter(Boolean).join('\n');
+  };
+
+  const composeVideoPrompt = () => {
+    const scene = currentScene;
     const endingText = scene.lastFrame ? '画面结尾要自然过渡到已设定尾帧的构图和情绪。' : '';
 
     return [
-      referenceText,
+      composeReferenceText(),
       `广告镜头：${scene.title}`,
       `核心卖点：${scene.sellingPoint}`,
       `运镜方式：${scene.camera}`,
@@ -324,6 +368,10 @@ export const StoryboardPage: React.FC = () => {
       showToast('请先在 AI 生图页面配置中转站地址', 'error');
       return;
     }
+    if (!currentScene.candidatePrompt.trim()) {
+      showToast('请先填写九宫格提示词', 'error');
+      return;
+    }
 
     setGeneratingCandidates(true);
     setCandidates([]);
@@ -335,7 +383,7 @@ export const StoryboardPage: React.FC = () => {
       const resp = await imageApi.generate({
         baseUrl,
         apiKey,
-        prompt: composePrompt(),
+        prompt: composeCandidatePrompt(),
         size: imageSizeForRatio(currentScene.ratio),
         count: 9,
         editImagePath: referenceImage || undefined,
@@ -366,6 +414,22 @@ export const StoryboardPage: React.FC = () => {
     showToast(`已设为${slot === 'firstFrame' ? '首帧' : '尾帧'}`, 'success');
   };
 
+  const handleUseCandidateAsReference = () => {
+    if (selectedCandidate === null || selectedCandidate >= candidates.length) {
+      showToast('请先选择一张候选图', 'info');
+      return;
+    }
+    updateScene({ referenceImage: candidates[selectedCandidate] });
+    showToast('已设为下一轮九宫格参考图', 'success');
+  };
+
+  const clearCandidates = () => {
+    setCandidates([]);
+    setSelectedCandidate(null);
+    setCandidateStatus('');
+    updateScene({ candidates: [] });
+  };
+
   const handleGenerateVideo = async () => {
     if (!currentScene?.firstFrame) {
       showToast('请先为当前镜头设置首帧', 'error');
@@ -385,7 +449,7 @@ export const StoryboardPage: React.FC = () => {
     try {
       const resp = await videoApi.generate({
         dashKey: cleanDashKey,
-        prompt: composePrompt(),
+        prompt: composeVideoPrompt(),
         mode: 'i2v',
         resolution: '720P',
         duration: parseInt(currentScene.duration || '5', 10),
@@ -458,87 +522,154 @@ export const StoryboardPage: React.FC = () => {
           </div>
         </aside>
 
-        <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto">
-          <section className="rounded-2xl border border-border bg-surface-alt/75 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-xs font-bold uppercase tracking-[0.18em] text-text-subtle">Product Reference</div>
-              <div className="text-xs text-text-muted">点击卡片上传产品参考图</div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              {VIEW_KEYS.map((item) => (
-                <button
-                  key={item.key}
-                  onClick={() => handlePickProductView(item.key)}
-                  className="group aspect-video overflow-hidden rounded-xl border border-border bg-surface/80 transition-colors hover:border-border-strong"
-                >
-                  {project.productViews[item.key] ? (
-                    <img src={project.productViews[item.key]!} alt={item.label} className="h-full w-full object-contain" />
-                  ) : (
-                    <span className="flex h-full items-center justify-center text-sm text-text-muted group-hover:text-text">{item.label}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="grid grid-cols-2 gap-4">
-            {([
-              { slot: 'firstFrame' as const, label: '首帧', desc: '视频生成的起始画面' },
-              { slot: 'lastFrame' as const, label: '尾帧', desc: '用于控制结尾构图' },
-            ]).map(({ slot, label, desc }) => (
-              <div key={slot} className="rounded-2xl border border-border bg-surface-alt/75 p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-text">{label}</div>
-                    <div className="text-xs text-text-muted">{desc}</div>
-                  </div>
-                  {currentScene[slot] && <Button onClick={() => updateScene({ [slot]: null })} variant="quiet" className="px-2 py-1 text-xs">清除</Button>}
+        <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+          <section className="grid gap-4 xl:grid-cols-[minmax(320px,0.9fr)_minmax(360px,1.1fr)]">
+            <div className="rounded-2xl border border-border bg-surface-alt/75 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-text-subtle">Product Board</div>
+                  <div className="mt-1 text-sm font-semibold text-text">产品素材</div>
                 </div>
-                <button
-                  onClick={() => handlePickFrame(slot)}
-                  className="flex h-44 w-full items-center justify-center overflow-hidden rounded-xl border border-border bg-surface/80 transition-colors hover:border-border-strong"
-                >
-                  {currentScene[slot] ? (
-                    <img src={currentScene[slot]!} alt={label} className="h-full w-full object-contain" />
-                  ) : (
-                    <span className="text-sm text-text-muted">上传或从九宫格指定</span>
-                  )}
-                </button>
+                <Button onClick={handlePickSceneReference} variant="quiet" className="px-3 py-1.5 text-xs">
+                  上传产品图
+                </Button>
               </div>
-            ))}
+
+              <button
+                onClick={handlePickSceneReference}
+                className="group mb-3 flex h-44 w-full items-center justify-center overflow-hidden rounded-xl border border-border bg-surface/80 transition-colors hover:border-border-strong"
+              >
+                {currentScene.referenceImage ? (
+                  <img src={currentScene.referenceImage} alt="九宫格参考图" className="h-full w-full object-contain" />
+                ) : (
+                  <span className="text-sm text-text-muted group-hover:text-text">上传本镜头产品图，用它生成九宫格</span>
+                )}
+              </button>
+
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="font-semibold text-text-subtle">三视图备用参考</span>
+                {currentScene.referenceImage && (
+                  <button onClick={() => updateScene({ referenceImage: null })} className="text-status-danger hover:underline">
+                    清除本镜头参考
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {VIEW_KEYS.map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => handlePickProductView(item.key)}
+                    className="group aspect-video overflow-hidden rounded-xl border border-border bg-surface/80 transition-colors hover:border-border-strong"
+                  >
+                    {project.productViews[item.key] ? (
+                      <img src={project.productViews[item.key]!} alt={item.label} className="h-full w-full object-contain" />
+                    ) : (
+                      <span className="flex h-full items-center justify-center text-xs text-text-muted group-hover:text-text">{item.label}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              {([
+                { slot: 'firstFrame' as const, label: '首帧', desc: '视频起始画面' },
+                { slot: 'lastFrame' as const, label: '尾帧', desc: '结尾构图控制' },
+              ]).map(({ slot, label, desc }) => (
+                <div key={slot} className="rounded-2xl border border-border bg-surface-alt/75 p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-text">{label}</div>
+                      <div className="text-xs text-text-muted">{desc}</div>
+                    </div>
+                    {currentScene[slot] && <Button onClick={() => updateScene({ [slot]: null })} variant="quiet" className="px-2 py-1 text-xs">清除</Button>}
+                  </div>
+                  <button
+                    onClick={() => handlePickFrame(slot)}
+                    className={`flex w-full items-center justify-center overflow-hidden rounded-xl border border-border bg-surface/80 transition-colors hover:border-border-strong ${imageAspectClass(currentScene.ratio)}`}
+                  >
+                    {currentScene[slot] ? (
+                      <img src={currentScene[slot]!} alt={label} className="h-full w-full object-contain" />
+                    ) : (
+                      <span className="text-sm text-text-muted">上传或从九宫格指定</span>
+                    )}
+                  </button>
+                </div>
+              ))}
+            </div>
           </section>
 
-          <section className="rounded-2xl border border-border bg-surface-alt/75 p-4">
-            <div className="mb-3 flex flex-wrap items-center gap-3">
-              <div className="mr-auto">
-                <div className="text-sm font-semibold text-text">九宫格候选图</div>
-                <div className="text-xs text-text-muted">优先使用三视图或首帧作为参考图，生成更稳定的广告关键帧。</div>
+          <section className="grid gap-4 rounded-2xl border border-border bg-surface-alt/75 p-4 xl:grid-cols-[minmax(300px,0.8fr)_minmax(420px,1.2fr)]">
+            <div className="min-w-0">
+              <div className="mb-3">
+                <div className="text-sm font-semibold text-text">九宫格创作</div>
+                <div className="mt-1 text-xs text-text-muted">当前参考源：{currentScene.referenceImage ? '本镜头产品图' : pickReferenceImage(project, currentScene) ? '三视图 / 首尾帧' : '仅提示词'}</div>
               </div>
-              <Button onClick={handleGenerateCandidates} variant="primary" disabled={generatingCandidates} className="px-3 py-1.5 text-xs">
-                {generatingCandidates ? '生成中...' : '生成九宫格'}
-              </Button>
-              <Button onClick={() => handleAssignCandidate('firstFrame')} variant="quiet" disabled={selectedCandidate === null} className="px-3 py-1.5 text-xs">设为首帧</Button>
-              <Button onClick={() => handleAssignCandidate('lastFrame')} variant="quiet" disabled={selectedCandidate === null} className="px-3 py-1.5 text-xs">设为尾帧</Button>
+              <FieldLabel text="九宫格提示词" required />
+              <TextArea
+                value={currentScene.candidatePrompt}
+                onChange={(event) => updateScene({ candidatePrompt: event.target.value })}
+                rows={8}
+                placeholder="写清楚画面、主体、光线、背景、卖点和投放平台风格..."
+                className="min-h-[180px]"
+              />
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <Button onClick={handleGenerateCandidates} variant="primary" disabled={generatingCandidates}>
+                  {generatingCandidates ? '生成中...' : '生成九宫格'}
+                </Button>
+                <Button onClick={clearCandidates} variant="quiet" disabled={generatingCandidates || candidates.length === 0}>
+                  清空候选
+                </Button>
+                <Button onClick={() => handleAssignCandidate('firstFrame')} variant="quiet" disabled={selectedCandidate === null}>
+                  设为首帧
+                </Button>
+                <Button onClick={() => handleAssignCandidate('lastFrame')} variant="quiet" disabled={selectedCandidate === null}>
+                  设为尾帧
+                </Button>
+                <Button onClick={handleUseCandidateAsReference} variant="quiet" disabled={selectedCandidate === null} className="col-span-2">
+                  作为下一轮参考图
+                </Button>
+              </div>
+              {candidateStatus && (
+                <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                  candidateStatus.includes('失败')
+                    ? 'border-status-danger/30 bg-status-danger/10 text-status-danger'
+                    : 'border-border bg-surface/70 text-text-muted'
+                }`}>
+                  {candidateStatus}
+                </div>
+              )}
+              {selectedCandidate !== null && candidates[selectedCandidate] && (
+                <div className="mt-3 overflow-hidden rounded-xl border border-border bg-surface/80">
+                  <img src={candidates[selectedCandidate]} alt="当前选中的候选图" className="max-h-72 w-full object-contain" />
+                </div>
+              )}
             </div>
-            {candidateStatus && <div className="mb-3 text-xs text-text-muted">{candidateStatus}</div>}
-            <div className="grid grid-cols-3 gap-2">
-              {Array.from({ length: 9 }).map((_, index) => (
-                <button
-                  key={index}
-                  onClick={() => index < candidates.length && setSelectedCandidate(index)}
-                  className={`aspect-video overflow-hidden rounded-xl border bg-surface/80 transition-all ${
-                    index === selectedCandidate ? 'border-border-strong ring-2 ring-accent/35' : 'border-border hover:border-border-strong'
-                  }`}
-                >
-                  {index < candidates.length ? (
-                    <img src={candidates[index]} alt={`候选图 ${index + 1}`} className="h-full w-full object-cover" />
-                  ) : generatingCandidates ? (
-                    <Loading text="" />
-                  ) : (
-                    <span className="text-lg text-text-subtle">{index + 1}</span>
-                  )}
-                </button>
-              ))}
+
+            <div className="min-w-0">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-text-subtle">Nine Frames</div>
+                <span className="text-xs text-text-muted">{candidates.length}/9</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {Array.from({ length: 9 }).map((_, index) => (
+                  <button
+                    key={index}
+                    onClick={() => index < candidates.length && setSelectedCandidate(index)}
+                    className={`overflow-hidden rounded-xl border bg-surface/80 transition-all ${imageAspectClass(currentScene.ratio)} ${
+                      index === selectedCandidate ? 'border-accent ring-2 ring-accent/35' : 'border-border hover:border-border-strong'
+                    }`}
+                  >
+                    {index < candidates.length ? (
+                      <img src={candidates[index]} alt={`候选图 ${index + 1}`} className="h-full w-full object-cover" />
+                    ) : generatingCandidates ? (
+                      <Loading text="" />
+                    ) : (
+                      <span className="flex h-full items-center justify-center text-lg text-text-subtle">{index + 1}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
         </main>
@@ -575,7 +706,7 @@ export const StoryboardPage: React.FC = () => {
               </Select>
             </div>
             <div>
-              <FieldLabel text="画面提示词" />
+              <FieldLabel text="视频提示词" />
               <TextArea value={currentScene.prompt} onChange={(event) => updateScene({ prompt: event.target.value })} rows={5} />
             </div>
             <div>

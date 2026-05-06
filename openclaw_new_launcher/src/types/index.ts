@@ -61,6 +61,8 @@ export interface Scene {
   camera: string;
   prompt: string;
   negative: string;
+  candidatePrompt: string;
+  referenceImage: string | null;
   firstFrame: string | null;
   lastFrame: string | null;
   video: string | null;
