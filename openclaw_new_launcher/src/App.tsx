@@ -5,6 +5,7 @@ import { LicensePage } from './components/license/LicensePage';
 import { ImagePage } from './components/image/ImagePage';
 import { VideoPage } from './components/video/VideoPage';
 import { DiagnosticsPage } from './components/diagnostics/DiagnosticsPage';
+import { WindowTitlebar } from './components/window/WindowTitlebar';
 import { ToastContainer, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
@@ -188,20 +189,23 @@ export default function App() {
   return (
     <ThemeProvider>
       <DynamicTitle />
-      <div className="flex h-screen w-screen overflow-hidden bg-surface">
-        <Sidebar
-          activePage={currentPage}
-          serviceRunning={serviceRunning}
-          serviceStatus={serviceStatus}
-          isAuthorized={isAuthorized}
-          isApiConfigured={apiConfigured}
-          onNavigate={handleNavigate}
-          onStart={handleStart}
-          onStop={handleStop}
-        />
-        <main className="relative flex-1 overflow-hidden bg-surface">
-          {renderPage()}
-        </main>
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-surface">
+        <WindowTitlebar />
+        <div className="flex min-h-0 flex-1 overflow-hidden bg-surface">
+          <Sidebar
+            activePage={currentPage}
+            serviceRunning={serviceRunning}
+            serviceStatus={serviceStatus}
+            isAuthorized={isAuthorized}
+            isApiConfigured={apiConfigured}
+            onNavigate={handleNavigate}
+            onStart={handleStart}
+            onStop={handleStop}
+          />
+          <main className="relative flex-1 overflow-hidden bg-surface">
+            {renderPage()}
+          </main>
+        </div>
 
         <ToastContainer />
         {showApiConfig && <ModernApiConfigDialog onClose={() => setShowApiConfig(false)} onSaved={refreshApiConfigured} />}
