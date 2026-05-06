@@ -76,6 +76,24 @@ DEFAULT_THEME: dict[str, Any] = {
 }
 
 
+def _normalize_nav_items(items: Any) -> list[dict[str, Any]]:
+    default_items = DEFAULT_THEME["navItems"]
+    default_by_key = {item["key"]: item for item in default_items}
+    source = items if isinstance(items, list) and items else default_items
+    normalized: list[dict[str, Any]] = []
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key")
+        if key == "delivery" or key not in default_by_key:
+            continue
+        merged = dict(default_by_key[key])
+        if "accent" in item:
+            merged["accent"] = bool(item["accent"])
+        normalized.append(merged)
+    return normalized or list(default_items)
+
+
 def _validate_theme(theme: dict[str, Any]) -> dict[str, Any]:
     default = DEFAULT_THEME
     if not isinstance(theme, dict):
@@ -93,7 +111,7 @@ def _validate_theme(theme: dict[str, Any]) -> dict[str, Any]:
     result["brand"] = dict(default["brand"])
     if isinstance(theme.get("brand"), dict):
         result["brand"].update(theme["brand"])
-    result["navItems"] = theme.get("navItems", default["navItems"])
+    result["navItems"] = _normalize_nav_items(theme.get("navItems"))
     result["window"] = dict(default["window"])
     if isinstance(theme.get("window"), dict):
         result["window"].update(theme["window"])

@@ -1,9 +1,81 @@
-import type { ThemeConfig, NavItem } from '../types/theme';
+import type { NavItem, ThemeConfig } from '../types/theme';
 
 type ThemeColors = ThemeConfig['colors'];
 
-export const DEFAULT_THEME: ThemeConfig = {
-  name: '永浩科技主题',
+export type BuiltinThemeMode = 'light' | 'dark';
+
+export const THEME_MODE_STORAGE_KEY = 'lumi_theme_mode';
+
+const BASE_FONTS: ThemeConfig['fonts'] = {
+  display: ['Microsoft YaHei UI', 21, 'bold'],
+  title: ['Microsoft YaHei UI', 14, 'bold'],
+  section: ['Microsoft YaHei UI', 10, 'bold'],
+  body: ['Microsoft YaHei UI', 10, 'normal'],
+  small: ['Microsoft YaHei UI', 9, 'normal'],
+  mono: ['Consolas', 10, 'normal'],
+};
+
+export const DEFAULT_NAV_ITEMS: NavItem[] = [
+  { key: 'terminal', label: '服务日志', desc: '查看运行状态', icon: 'LOG', group: '工作台' },
+  { key: 'storyboard', label: '广告视频', desc: '分镜/首尾帧/九宫格', icon: 'AD', group: '工作台', accent: true },
+  { key: 'image', label: 'AI 生图', desc: '生成/编辑图片', icon: 'IMG', group: '工作台', accent: true },
+  { key: 'video', label: 'AI 视频', desc: '文生/图生视频', icon: 'VID', group: '工作台', accent: true },
+  { key: 'license', label: '授权码', desc: '在线激活解锁', icon: 'LIC', group: '配置' },
+  { key: 'api', label: 'API 配置', desc: '设置模型密钥', icon: 'KEY', group: '配置' },
+  { key: 'feishu', label: '飞书机器人', desc: '绑定消息通道', icon: 'BOT', group: '配置' },
+  { key: 'web', label: '网页界面', desc: '打开本地控制台', icon: 'WEB', group: '维护' },
+  { key: 'update', label: '检查更新', desc: '更新 OpenClaw', icon: 'UP', group: '维护' },
+  { key: 'help', label: '帮助文档', desc: '查看使用说明', icon: 'DOC', group: '维护' },
+];
+
+const NAV_ITEM_BY_KEY = new Map(DEFAULT_NAV_ITEMS.map((item) => [item.key, item]));
+
+export const LIGHT_THEME: ThemeConfig = {
+  name: '永浩科技浅色主题',
+  colors: {
+    app_bg: '#F3F4F6',
+    sidebar_bg: '#F8FAFC',
+    surface: '#FFFFFF',
+    surface_alt: '#F8FAFC',
+    surface_deep: '#1E293B',
+    surface_deeper: '#0F172A',
+    hover: '#EDEFF3',
+    input: '#FFFFFF',
+    border: '#DDE3EA',
+    border_strong: '#B8C4D2',
+    text: '#102033',
+    text_muted: '#64748B',
+    text_subtle: '#94A3B8',
+    accent: '#2563EB',
+    accent_hover: '#1D4ED8',
+    accent_soft: '#E8EEFD',
+    accent_ink: '#1E40AF',
+    success: '#059669',
+    warning: '#D97706',
+    danger: '#DC2626',
+    danger_hover: '#B91C1C',
+    terminal_bg: '#0F172A',
+    terminal_header: '#1E293B',
+    terminal_text: '#34D399',
+  },
+  fonts: BASE_FONTS,
+  brand: {
+    name: '永浩科技',
+    subtitle: '智能AI服务平台',
+    app_user_model_id: 'YonghaoTech.Launcher',
+    terminal_header: 'Service Console',
+  },
+  navItems: DEFAULT_NAV_ITEMS,
+  window: {
+    title: '永浩科技 - 智能AI服务平台',
+    width: 1200,
+    height: 800,
+  },
+};
+
+export const DARK_THEME: ThemeConfig = {
+  ...LIGHT_THEME,
+  name: '永浩科技暗紫主题',
   colors: {
     app_bg: '#050510',
     sidebar_bg: '#090A18',
@@ -30,34 +102,60 @@ export const DEFAULT_THEME: ThemeConfig = {
     terminal_header: '#101328',
     terminal_text: '#00F5D4',
   },
-  fonts: {
-    display: ['Microsoft YaHei UI', 21, 'bold'],
-    title: ['Microsoft YaHei UI', 14, 'bold'],
-    section: ['Microsoft YaHei UI', 10, 'bold'],
-    body: ['Microsoft YaHei UI', 10, 'normal'],
-    small: ['Microsoft YaHei UI', 9, 'normal'],
-    mono: ['Consolas', 10, 'normal'],
-  },
-  brand: {
-    name: '永浩科技',
-    subtitle: '智能AI服务平台',
-    app_user_model_id: 'YonghaoTech.Launcher',
-    terminal_header: 'Service Console',
-  },
 };
 
-export const DEFAULT_NAV_ITEMS: NavItem[] = [
-  { key: 'terminal', label: '服务日志', desc: '查看运行状态', icon: 'LOG', group: '工作台' },
-  { key: 'storyboard', label: '广告视频', desc: '分镜/首尾帧/九宫格', icon: 'AD', group: '工作台', accent: true },
-  { key: 'image', label: 'AI 生图', desc: '生成/编辑图片', icon: 'IMG', group: '工作台', accent: true },
-  { key: 'video', label: 'AI 视频', desc: '文生/图生视频', icon: 'VID', group: '工作台', accent: true },
-  { key: 'license', label: '授权码', desc: '在线激活解锁', icon: 'LIC', group: '配置' },
-  { key: 'api', label: 'API 配置', desc: '设置模型密钥', icon: 'KEY', group: '配置' },
-  { key: 'feishu', label: '飞书机器人', desc: '绑定消息通道', icon: 'BOT', group: '配置' },
-  { key: 'web', label: '网页界面', desc: '打开本地控制台', icon: 'WEB', group: '维护' },
-  { key: 'update', label: '检查更新', desc: '更新 OpenClaw', icon: 'UP', group: '维护' },
-  { key: 'help', label: '帮助文档', desc: '查看使用说明', icon: 'DOC', group: '维护' },
-];
+export const DEFAULT_THEME = LIGHT_THEME;
+
+export function getStoredThemeMode(): BuiltinThemeMode {
+  if (typeof window === 'undefined') return 'light';
+  try {
+    return window.localStorage.getItem(THEME_MODE_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+export function persistThemeMode(mode: BuiltinThemeMode): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(THEME_MODE_STORAGE_KEY, mode);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function getBuiltinTheme(mode: BuiltinThemeMode): ThemeConfig {
+  return mode === 'dark' ? DARK_THEME : LIGHT_THEME;
+}
+
+export function normalizeNavItems(items?: NavItem[]): NavItem[] {
+  const source = Array.isArray(items) && items.length > 0 ? items : DEFAULT_NAV_ITEMS;
+  const normalized = source
+    .filter((item) => item?.key && item.key !== 'delivery')
+    .map((item) => {
+      const known = NAV_ITEM_BY_KEY.get(item.key);
+      if (!known) return null;
+      return { ...known, accent: item.accent ?? known.accent };
+    })
+    .filter(Boolean) as NavItem[];
+
+  return normalized.length > 0 ? normalized : DEFAULT_NAV_ITEMS;
+}
+
+export function buildRuntimeTheme(baseTheme: ThemeConfig | null | undefined, mode: BuiltinThemeMode): ThemeConfig {
+  const palette = getBuiltinTheme(mode);
+  const brand = baseTheme?.brand ? { ...palette.brand, ...baseTheme.brand } : palette.brand;
+  const windowConfig = baseTheme?.window ? { ...palette.window, ...baseTheme.window } : palette.window;
+
+  return {
+    ...palette,
+    name: palette.name,
+    brand,
+    window: windowConfig,
+    fonts: { ...palette.fonts, ...(baseTheme?.fonts ?? {}) },
+    navItems: normalizeNavItems(baseTheme?.navItems),
+  };
+}
 
 const CSS_VAR_MAP: Record<keyof ThemeColors, string> = {
   app_bg: '--color-app-bg',
@@ -99,4 +197,9 @@ export function applyThemeToCssVars(theme: ThemeConfig): void {
   root.style.setProperty('--font-mono', theme.fonts.mono[0]);
   root.style.setProperty('--brand-name', theme.brand.name);
   root.style.setProperty('--brand-subtitle', theme.brand.subtitle);
+}
+
+export function bootstrapThemeFromStorage(): void {
+  if (typeof document === 'undefined') return;
+  applyThemeToCssVars(getBuiltinTheme(getStoredThemeMode()));
 }

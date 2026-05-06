@@ -1,28 +1,28 @@
 :root {
-  --color-app-bg: #050510;
-  --color-sidebar-bg: #090A18;
-  --color-surface: #0B0D1A;
-  --color-surface-alt: #111426;
-  --color-surface-deep: #171B32;
-  --color-surface-deeper: #070812;
-  --color-hover: #1A1F38;
-  --color-input: #0C1020;
-  --color-border: rgba(157, 78, 221, 0.24);
-  --color-border-strong: rgba(0, 212, 255, 0.38);
-  --color-text: #F4F7FB;
-  --color-text-muted: #A8B0C3;
-  --color-text-subtle: #66708B;
-  --color-accent: #9D4EDD;
-  --color-accent-hover: #B76BFF;
-  --color-accent-soft: rgba(157, 78, 221, 0.18);
-  --color-accent-ink: #F5EAFF;
-  --color-success: #16C784;
-  --color-warning: #F59E0B;
-  --color-danger: #FF4D6D;
-  --color-danger-hover: #FF6B84;
-  --color-terminal-bg: #050510;
-  --color-terminal-header: #101328;
-  --color-terminal-text: #00F5D4;
+  --color-app-bg: #F3F4F6;
+  --color-sidebar-bg: #F8FAFC;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #F8FAFC;
+  --color-surface-deep: #1E293B;
+  --color-surface-deeper: #0F172A;
+  --color-hover: #EDEFF3;
+  --color-input: #FFFFFF;
+  --color-border: #DDE3EA;
+  --color-border-strong: #B8C4D2;
+  --color-text: #102033;
+  --color-text-muted: #64748B;
+  --color-text-subtle: #94A3B8;
+  --color-accent: #2563EB;
+  --color-accent-hover: #1D4ED8;
+  --color-accent-soft: #E8EEFD;
+  --color-accent-ink: #1E40AF;
+  --color-success: #059669;
+  --color-warning: #D97706;
+  --color-danger: #DC2626;
+  --color-danger-hover: #B91C1C;
+  --color-terminal-bg: #0F172A;
+  --color-terminal-header: #1E293B;
+  --color-terminal-text: #34D399;
 
   --font-display: 'Microsoft YaHei UI', system-ui, sans-serif;
   --font-mono: Consolas, monospace;
@@ -32,10 +32,7 @@
 }
 
 body {
-  background:
-    linear-gradient(135deg, rgba(157, 78, 221, 0.10), transparent 34%),
-    linear-gradient(315deg, rgba(0, 212, 255, 0.08), transparent 38%),
-    var(--color-app-bg);
+  background: var(--color-app-bg);
 }
 
 body::before {
@@ -44,8 +41,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
   background-size: 44px 44px;
   mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.72), transparent 88%);
 }

@@ -1,7 +1,7 @@
 import React from 'react';
 import logoImg from '../../assets/logo.png';
 import { useTheme } from '../../hooks/useTheme';
-import { DEFAULT_NAV_ITEMS } from '../../theme/default';
+import { DEFAULT_NAV_ITEMS, normalizeNavItems } from '../../theme/default';
 import type { NavItem } from '../../types/theme';
 
 interface SidebarProps {
@@ -39,19 +39,19 @@ const NavButton: React.FC<{
     onClick={onClick}
     className={`group relative w-full overflow-hidden rounded-lg px-3 py-3 text-left transition-all ${
       isActive
-        ? 'border border-border-strong bg-accent-soft text-text shadow-[0_0_24px_rgba(157,78,221,0.18)]'
-        : 'border border-transparent text-text-muted hover:border-border hover:bg-white/5 hover:text-text'
+        ? 'border border-border-strong bg-accent-soft text-text shadow-[0_0_24px_rgba(37,99,235,0.18)]'
+        : 'border border-transparent text-text-muted hover:border-border hover:bg-hover hover:text-text'
     } ${item.accent ? 'font-medium' : ''}`}
   >
     {isActive && (
-      <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r bg-accent shadow-[0_0_14px_rgba(157,78,221,0.9)]" />
+      <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded-r bg-accent shadow-[0_0_14px_rgba(37,99,235,0.7)]" />
     )}
     <div className="flex items-center gap-3">
       <span
         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-[10px] font-bold tracking-wide ${
           isActive
-            ? 'border-border-strong bg-white/10 text-accent-ink'
-            : 'border-white/10 bg-white/[0.03] text-text-subtle group-hover:text-text-muted'
+            ? 'border-border-strong bg-white/45 text-accent-ink'
+            : 'border-border bg-white/30 text-text-subtle group-hover:text-text-muted'
         }`}
       >
         {item.icon}
@@ -74,23 +74,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onStart,
   onStop,
 }) => {
-  const { theme, navItems } = useTheme();
+  const { theme, navItems, themeMode, toggleTheme } = useTheme();
   const items = React.useMemo(() => {
-    const source = (navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS).filter((item) => item.key !== 'delivery');
+    const source = normalizeNavItems(navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS);
     let next = [...source];
     const diagnosticItem: NavItem = {
       key: 'diagnostics',
       label: '环境诊断',
       desc: '检查/修复启动环境',
       icon: 'FIX',
-      group: '缁存姢',
+      group: '维护',
       accent: true,
     };
     if (!next.some((item) => item.key === 'diagnostics')) {
       const updateIndex = next.findIndex((item) => item.key === 'update');
       next = updateIndex < 0 ? [...next, diagnosticItem] : [...next.slice(0, updateIndex), diagnosticItem, ...next.slice(updateIndex)];
     }
-    return next;
+    return next.filter((item) => item.key !== 'delivery');
   }, [navItems]);
   const brandName = theme.brand.name;
   const brandSubtitle = theme.brand.subtitle;
@@ -101,11 +101,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [items]);
 
   return (
-    <aside className="relative z-10 flex h-full w-[286px] shrink-0 flex-col border-r border-white/10 bg-app-sidebar/95">
-      <div className="absolute inset-x-0 top-0 h-40 bg-[radial-gradient(circle_at_30%_0%,rgba(157,78,221,0.24),transparent_62%)] pointer-events-none" />
+    <aside className="relative z-10 flex h-full w-[286px] shrink-0 flex-col border-r border-border bg-app-sidebar">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(circle_at_30%_0%,rgba(37,99,235,0.14),transparent_62%)]" />
 
       <div className="relative flex shrink-0 items-center gap-3 px-5 py-6">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-white/5 shadow-[0_0_28px_rgba(157,78,221,0.18)]">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-white/55 shadow-[0_0_28px_rgba(37,99,235,0.12)]">
           <img src={logoImg} alt="Logo" className="h-9 w-9 rounded-lg object-contain" />
         </div>
         <div className="min-w-0">
@@ -118,7 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           onClick={onStart}
           disabled={serviceRunning || serviceStatus === 'starting'}
-          className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-[0_0_28px_rgba(157,78,221,0.30)] transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-55"
+          className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-[0_0_28px_rgba(37,99,235,0.24)] transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-55"
         >
           {serviceStatus === 'starting' ? '启动中...' : serviceRunning ? '服务已运行' : '启动核心服务'}
         </button>
@@ -145,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         })}
       </nav>
 
-      <div className="relative shrink-0 border-t border-white/10 p-4">
+      <div className="relative shrink-0 border-t border-border p-4">
         <button
           onClick={onStop}
           disabled={!serviceRunning && serviceStatus !== 'starting'}
@@ -153,7 +153,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           停止服务
         </button>
-        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-3">
+        <button
+          onClick={toggleTheme}
+          className="mb-3 w-full rounded-xl border border-border bg-surface-alt px-4 py-2.5 text-sm font-bold text-text transition-all hover:bg-hover"
+        >
+          {themeMode === 'dark' ? '切换浅色风格' : '切换暗紫风格'}
+        </button>
+        <div className="rounded-xl border border-border bg-white/35 p-3">
           <div className="mb-2 flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-text-muted">系统状态</span>
             <span className="text-[10px] uppercase tracking-[0.18em] text-text-subtle">OpenClaw</span>

@@ -1,32 +1,61 @@
 import { useAppStore } from '../stores/appStore';
+import {
+  DEFAULT_THEME,
+  applyThemeToCssVars,
+  buildRuntimeTheme,
+  normalizeNavItems,
+  persistThemeMode,
+  type BuiltinThemeMode,
+} from '../theme/default';
 import type { ThemeConfig } from '../types/theme';
-import { DEFAULT_THEME, DEFAULT_NAV_ITEMS } from '../theme/default';
-import { applyThemeToDOM } from '../providers/ThemeProvider';
 
 export function useTheme() {
-  const { themeConfig, setThemeConfig, navItems, setNavItems } = useAppStore();
+  const {
+    themeConfig,
+    setThemeConfig,
+    themeMode,
+    setThemeMode,
+    navItems,
+    setNavItems,
+  } = useAppStore();
 
   const current = themeConfig ?? DEFAULT_THEME;
-  const currentNavItems = navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS;
+  const currentNavItems = normalizeNavItems(navItems);
 
   const applyTheme = (config: ThemeConfig) => {
-    setThemeConfig(config);
-    applyThemeToDOM(config);
+    const runtimeTheme = buildRuntimeTheme(config, themeMode);
+    setThemeConfig(runtimeTheme);
+    setNavItems(normalizeNavItems(runtimeTheme.navItems));
+    applyThemeToCssVars(runtimeTheme);
+  };
+
+  const switchThemeMode = (mode: BuiltinThemeMode) => {
+    persistThemeMode(mode);
+    setThemeMode(mode);
+    const runtimeTheme = buildRuntimeTheme(current, mode);
+    setThemeConfig(runtimeTheme);
+    setNavItems(normalizeNavItems(runtimeTheme.navItems));
+    applyThemeToCssVars(runtimeTheme);
+  };
+
+  const toggleTheme = () => {
+    switchThemeMode(themeMode === 'dark' ? 'light' : 'dark');
   };
 
   const resetTheme = () => {
-    setThemeConfig(null);
-    setNavItems(DEFAULT_NAV_ITEMS);
-    applyThemeToDOM(DEFAULT_THEME);
+    switchThemeMode('light');
   };
 
   return {
     theme: current,
     navItems: currentNavItems,
-    isCustom: themeConfig !== null && themeConfig.name !== DEFAULT_THEME.name,
+    themeMode,
+    isCustom: false,
     brandName: current.brand.name,
     brandSubtitle: current.brand.subtitle,
     applyTheme,
     resetTheme,
+    switchThemeMode,
+    toggleTheme,
   };
 }

@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import { type License } from '../types';
 import { type ThemeConfig, type NavItem } from '../types/theme';
-import { DEFAULT_NAV_ITEMS } from '../theme/default';
+import {
+  DEFAULT_NAV_ITEMS,
+  type BuiltinThemeMode,
+  getBuiltinTheme,
+  getStoredThemeMode,
+} from '../theme/default';
 import { licenseApi } from '../services/api';
 
 interface AppState {
@@ -13,6 +18,7 @@ interface AppState {
   licenseInfo: License | null;
   apiConfigured: boolean;
   themeConfig: ThemeConfig | null;
+  themeMode: BuiltinThemeMode;
   navItems: NavItem[];
 
   setCurrentPage: (page: string) => void;
@@ -23,6 +29,7 @@ interface AppState {
   setApiConfigured: (configured: boolean) => void;
   setLicenseChecking: (checking: boolean) => void;
   setThemeConfig: (config: ThemeConfig | null) => void;
+  setThemeMode: (mode: BuiltinThemeMode) => void;
   setNavItems: (items: NavItem[]) => void;
   checkLicense: () => Promise<void>;
 }
@@ -36,6 +43,8 @@ const persistedAuth = (() => {
   return null;
 })();
 
+const initialThemeMode = getStoredThemeMode();
+
 export const useAppStore = create<AppState>((set) => ({
   currentPage: 'terminal',
   serviceRunning: false,
@@ -44,7 +53,8 @@ export const useAppStore = create<AppState>((set) => ({
   isLicenseChecking: true,
   licenseInfo: persistedAuth?.licenseInfo ?? null,
   apiConfigured: false,
-  themeConfig: null,
+  themeConfig: getBuiltinTheme(initialThemeMode),
+  themeMode: initialThemeMode,
   navItems: DEFAULT_NAV_ITEMS,
 
   setCurrentPage: (currentPage) => set({ currentPage }),
@@ -60,6 +70,7 @@ export const useAppStore = create<AppState>((set) => ({
   },
   setApiConfigured: (apiConfigured) => set({ apiConfigured }),
   setThemeConfig: (themeConfig) => set({ themeConfig }),
+  setThemeMode: (themeMode) => set({ themeMode }),
   setNavItems: (navItems) => set({ navItems }),
   setLicenseChecking: (val: boolean) => set({ isLicenseChecking: val }),
   checkLicense: async () => {
