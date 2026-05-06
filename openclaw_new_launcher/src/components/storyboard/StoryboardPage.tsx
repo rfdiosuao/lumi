@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { Button, Input, TextArea, Select, Loading, showToast, FieldLabel } from '../common';
 import { imageApi, videoApi, configApi } from '../../services/api';
 import { useLogStore } from '../../stores/logStore';
@@ -100,8 +101,12 @@ function pickReferenceImage(project: StoryboardProject, scene: Scene): string | 
 }
 
 function createVideoObjectUrl(video: string): { url: string; size: number; revoke: () => void } {
-  if (!video.startsWith('data:')) {
+  if (/^(https?:|asset:|file:|tauri:)/i.test(video)) {
     return { url: video, size: 0, revoke: () => undefined };
+  }
+
+  if (!video.startsWith('data:')) {
+    return { url: convertFileSrc(video), size: 0, revoke: () => undefined };
   }
 
   const [header, payload = ''] = video.split(',');
@@ -392,7 +397,7 @@ export const StoryboardPage: React.FC = () => {
         throw { error: '生成成功但没有返回视频数据' };
       }
 
-      updateScene({ video: `data:${resp.mime || 'video/mp4'};base64,${resp.video}` });
+      updateScene({ video: resp.path || `data:${resp.mime || 'video/mp4'};base64,${resp.video}` });
       setVideoStatus(`视频已生成${resp.size ? `，大小 ${formatBytes(resp.size)}` : ''}${resp.path ? `，保存路径：${resp.path}` : ''}`);
       showToast('视频生成成功', 'success');
       appendLog('[分镜视频] 视频生成成功\n');

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { Button, FieldLabel, Input, Loading, Select, TextArea, showToast } from '../common';
 import { videoApi } from '../../services/api';
 import { useLogStore } from '../../stores/logStore';
@@ -9,7 +9,9 @@ const DURATIONS = [5, 10];
 const RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
 
 type GeneratedVideo = {
-  url: string;
+  previewUrl: string;
+  downloadUrl: string;
+  blobUrl?: string;
   mime: string;
   size: number;
   path?: string;
@@ -17,7 +19,7 @@ type GeneratedVideo = {
   filename?: string;
 };
 
-function createVideoUrl(base64: string, mime = 'video/mp4'): GeneratedVideo {
+function createVideoBlobUrl(base64: string, mime = 'video/mp4') {
   const cleanBase64 = base64.includes(',') ? base64.split(',').pop() || '' : base64;
   const binary = atob(cleanBase64);
   const chunkSize = 32768;
@@ -33,7 +35,35 @@ function createVideoUrl(base64: string, mime = 'video/mp4'): GeneratedVideo {
   }
 
   const blob = new Blob(chunks, { type: mime });
-  return { url: URL.createObjectURL(blob), mime, size: blob.size };
+  return { url: URL.createObjectURL(blob), size: blob.size };
+}
+
+function createGeneratedVideo(resp: {
+  video?: string;
+  mime?: string;
+  size?: number;
+  path?: string;
+  directory?: string;
+  filename?: string;
+}): GeneratedVideo {
+  const mime = resp.mime || 'video/mp4';
+  const blobVideo = resp.video ? createVideoBlobUrl(resp.video, mime) : null;
+  const previewUrl = resp.path ? convertFileSrc(resp.path) : blobVideo?.url || '';
+
+  if (!previewUrl) {
+    throw { error: '生成成功但没有可预览的视频地址' };
+  }
+
+  return {
+    previewUrl,
+    downloadUrl: blobVideo?.url || previewUrl,
+    blobUrl: blobVideo?.url,
+    mime,
+    size: resp.size || blobVideo?.size || 0,
+    path: resp.path,
+    directory: resp.directory,
+    filename: resp.filename,
+  };
 }
 
 function formatBytes(size: number): string {
@@ -65,10 +95,10 @@ export const VideoPage: React.FC = () => {
   const appendLog = useLogStore((s) => s.append);
 
   React.useEffect(() => () => {
-    if (resultVideo?.url) {
-      URL.revokeObjectURL(resultVideo.url);
+    if (resultVideo?.blobUrl) {
+      URL.revokeObjectURL(resultVideo.blobUrl);
     }
-  }, [resultVideo?.url]);
+  }, [resultVideo?.blobUrl]);
 
   const handlePickImage = () => {
     const input = document.createElement('input');
@@ -121,14 +151,7 @@ export const VideoPage: React.FC = () => {
         throw { error: '生成成功但没有返回视频数据' };
       }
 
-      const video = createVideoUrl(resp.video, resp.mime || 'video/mp4');
-      const result: GeneratedVideo = {
-        ...video,
-        size: resp.size || video.size,
-        path: resp.path,
-        directory: resp.directory,
-        filename: resp.filename,
-      };
+      const result = createGeneratedVideo(resp);
       setResultVideo(result);
 
       const savedMessage = resp.path ? `视频生成成功，已保存到：${resp.path}` : '视频生成成功';
@@ -255,13 +278,13 @@ export const VideoPage: React.FC = () => {
         {resultVideo && (
           <div className="mt-8 max-w-3xl">
             <video
-              key={resultVideo.url}
+              key={resultVideo.previewUrl}
               controls
               preload="metadata"
               className="aspect-video w-full rounded-lg border border-border bg-black"
-              onError={() => setVideoError('视频已生成并保存，但当前播放器无法解码。请点击下载视频或打开保存目录查看。')}
+              onError={() => setVideoError('视频已生成并保存，但当前播放器无法读取本地预览。请点击下载视频或打开保存目录查看。')}
             >
-              <source src={resultVideo.url} type={resultVideo.mime || 'video/mp4'} />
+              <source src={resultVideo.previewUrl} type={resultVideo.mime || 'video/mp4'} />
             </video>
 
             <div className="mt-3 space-y-2 text-sm text-text-muted">
@@ -271,7 +294,7 @@ export const VideoPage: React.FC = () => {
 
             <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
               <a
-                href={resultVideo.url}
+                href={resultVideo.downloadUrl}
                 download={resultVideo.filename || `lumi-video-${Date.now()}.mp4`}
                 onClick={handleDownloadClick}
                 className="text-accent hover:underline"
