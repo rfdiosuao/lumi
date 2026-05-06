@@ -25,7 +25,7 @@ interface BotChannel {
   secretPlaceholder: string;
   docsUrl?: string;
   docsLabel?: string;
-  requireManualConfig: boolean;
+  manualConfig: boolean;
 }
 
 const CHANNELS: Record<BotChannelKey, BotChannel> = {
@@ -48,12 +48,12 @@ const CHANNELS: Record<BotChannelKey, BotChannel> = {
     secretPlaceholder: '请输入 App Secret',
     docsUrl: 'https://open.feishu.cn/app',
     docsLabel: '打开飞书开放平台',
-    requireManualConfig: true,
+    manualConfig: true,
   },
   weixin: {
     key: 'weixin',
     title: '微信机器人',
-    description: '安装 OpenClaw 微信绑定插件。微信绑定需要在命令行输出中扫码完成。',
+    description: '安装 OpenClaw 微信绑定插件。微信绑定只能通过命令行输出中的二维码扫码完成。',
     pluginName: 'openclaw-weixin',
     packagePaths: [
       'data/.openclaw/extensions/openclaw-weixin/package.json',
@@ -64,11 +64,11 @@ const CHANNELS: Record<BotChannelKey, BotChannel> = {
     commandName: 'install-openclaw-weixin',
     fallbackCommandName: 'install-openclaw-weixin-cmd',
     installArgs: ['-y', '@tencent-weixin/openclaw-weixin-cli@latest', 'install'],
-    idLabel: '机器人 ID',
-    idPlaceholder: '请输入微信机器人 ID',
-    secretLabel: '机器人 Key',
-    secretPlaceholder: '请输入微信机器人 Key',
-    requireManualConfig: false,
+    idLabel: '',
+    idPlaceholder: '',
+    secretLabel: '',
+    secretPlaceholder: '',
+    manualConfig: false,
   },
 };
 
@@ -375,34 +375,44 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
             )}
           </div>
 
-          <div className="rounded-xl border border-border bg-surface-alt/70 p-4">
-            <p className="text-sm font-semibold text-text">手动绑定配置</p>
-            <p className="mt-1 text-xs leading-5 text-text-muted">
-              {channel.requireManualConfig
-                ? '安装插件后，填入开放平台中的应用信息即可写入 OpenClaw 配置。'
-                : '微信通常通过扫码绑定；如果你已经拿到机器人 ID 和 Key，也可以在这里手动写入配置。'}
-            </p>
-            {channel.docsUrl && (
-              <a href={channel.docsUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-medium text-accent hover:underline">
-                {channel.docsLabel}
-              </a>
-            )}
+          {channel.manualConfig ? (
+            <div className="rounded-xl border border-border bg-surface-alt/70 p-4">
+              <p className="text-sm font-semibold text-text">手动绑定配置</p>
+              <p className="mt-1 text-xs leading-5 text-text-muted">
+                安装插件后，填入开放平台中的应用信息即可写入 OpenClaw 配置。
+              </p>
+              {channel.docsUrl && (
+                <a href={channel.docsUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-medium text-accent hover:underline">
+                  {channel.docsLabel}
+                </a>
+              )}
 
-            <div className="mt-4 space-y-3">
-              <div>
-                <FieldLabel text={channel.idLabel} />
-                <Input value={idValue} onChange={(event) => setIdValue(event.target.value)} placeholder={channel.idPlaceholder} />
-              </div>
-              <div>
-                <FieldLabel text={channel.secretLabel} />
-                <Input type="password" value={secretValue} onChange={(event) => setSecretValue(event.target.value)} placeholder={channel.secretPlaceholder} />
-              </div>
-              <div className="flex gap-3 pt-2">
-                <Button onClick={handleSave} variant="primary">保存配置</Button>
-                <Button onClick={onClose} variant="quiet">取消</Button>
+              <div className="mt-4 space-y-3">
+                <div>
+                  <FieldLabel text={channel.idLabel} />
+                  <Input value={idValue} onChange={(event) => setIdValue(event.target.value)} placeholder={channel.idPlaceholder} />
+                </div>
+                <div>
+                  <FieldLabel text={channel.secretLabel} />
+                  <Input type="password" value={secretValue} onChange={(event) => setSecretValue(event.target.value)} placeholder={channel.secretPlaceholder} />
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <Button onClick={handleSave} variant="primary">保存配置</Button>
+                  <Button onClick={onClose} variant="quiet">取消</Button>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-xl border border-border bg-surface-alt/70 p-4">
+              <p className="text-sm font-semibold text-text">扫码绑定</p>
+              <p className="mt-1 text-xs leading-5 text-text-muted">
+                微信机器人不支持输入 ID 和 Key 绑定。点击安装后，请在右侧命令行输出区扫描二维码，或按输出提示打开绑定链接。
+              </p>
+              <div className="mt-4 rounded-lg border border-border bg-terminal-bg px-3 py-2 font-mono text-xs leading-5 text-terminal-text">
+                {channel.installCommand}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-terminal-bg shadow-inner lg:min-h-[520px]">

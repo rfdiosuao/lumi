@@ -10,8 +10,34 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
     "shell:allow-open",
+    "shell:allow-kill",
     {
       "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "install-openclaw-lark",
+          "cmd": "npx",
+          "args": ["-y", "@larksuite/openclaw-lark", "install"]
+        },
+        {
+          "name": "install-openclaw-lark-cmd",
+          "cmd": "npx.cmd",
+          "args": ["-y", "@larksuite/openclaw-lark", "install"]
+        },
+        {
+          "name": "install-openclaw-weixin",
+          "cmd": "npx",
+          "args": ["-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install"]
+        },
+        {
+          "name": "install-openclaw-weixin-cmd",
+          "cmd": "npx.cmd",
+          "args": ["-y", "@tencent-weixin/openclaw-weixin-cli@latest", "install"]
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-spawn",
       "allow": [
         {
           "name": "install-openclaw-lark",
