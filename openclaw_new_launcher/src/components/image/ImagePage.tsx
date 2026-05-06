@@ -123,7 +123,7 @@ export const ImagePage: React.FC = () => {
         <div className="bg-surface-alt rounded-lg border border-border p-6 max-w-3xl">
           <div className="space-y-4">
             <div>
-              <FieldLabel text="中转站地址" required />
+              <FieldLabel text="URL 链接" required />
               <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://..." />
             </div>
             <div>

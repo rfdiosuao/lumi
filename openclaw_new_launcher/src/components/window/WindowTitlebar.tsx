@@ -30,8 +30,7 @@ const WindowButton: React.FC<{
 );
 
 export const WindowTitlebar: React.FC = () => {
-  const { brandName, brandSubtitle, themeMode } = useTheme();
-  const isDark = themeMode === 'dark';
+  const { brandName, brandSubtitle } = useTheme();
 
   const toggleMaximize = () => {
     appWindow.toggleMaximize().catch(() => {});
@@ -41,14 +40,10 @@ export const WindowTitlebar: React.FC = () => {
     <div
       data-tauri-drag-region
       onDoubleClick={toggleMaximize}
-      className={`flex h-10 shrink-0 items-center justify-between border-b px-3 ${
-        isDark
-          ? 'border-white/10 bg-[#080A16]/95 text-slate-100'
-          : 'border-border bg-surface/95 text-text'
-      }`}
+      className="flex h-10 shrink-0 items-stretch bg-surface text-text"
     >
-      <div data-tauri-drag-region className="flex min-w-0 items-center gap-2">
-        <div className="flex h-6 w-6 items-center justify-center rounded-md border border-border bg-white/60">
+      <div data-tauri-drag-region className="flex w-[286px] shrink-0 items-center gap-2 bg-app-sidebar px-3">
+        <div className="flex h-6 w-6 items-center justify-center rounded-md border border-border bg-surface-alt">
           <img src={logoImg} alt="" className="h-4 w-4 object-contain" />
         </div>
         <div data-tauri-drag-region className="truncate text-xs font-semibold">
@@ -59,10 +54,12 @@ export const WindowTitlebar: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex items-center gap-1">
-        <WindowButton title="最小化" label="-" onClick={() => appWindow.minimize()} />
-        <WindowButton title="最大化/还原" label="□" onClick={toggleMaximize} />
-        <WindowButton title="关闭" label="×" danger onClick={() => appWindow.close()} />
+      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-end bg-surface px-3">
+        <div className="flex items-center gap-1">
+          <WindowButton title="最小化" label="-" onClick={() => appWindow.minimize()} />
+          <WindowButton title="最大化/还原" label="□" onClick={toggleMaximize} />
+          <WindowButton title="关闭" label="×" danger onClick={() => appWindow.close()} />
+        </div>
       </div>
     </div>
   );

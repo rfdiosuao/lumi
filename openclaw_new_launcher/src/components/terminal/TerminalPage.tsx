@@ -10,6 +10,7 @@ export const TerminalPage: React.FC = () => {
   const { theme, themeMode } = useTheme();
   const isLight = themeMode === 'light';
   const containerRef = React.useRef<HTMLPreElement>(null);
+  const bottomRef = React.useRef<HTMLSpanElement>(null);
   const [followTail, setFollowTail] = React.useState(true);
   const [exporting, setExporting] = React.useState(false);
   const [lastExportPath, setLastExportPath] = React.useState('');
@@ -17,8 +18,11 @@ export const TerminalPage: React.FC = () => {
 
   const scrollToBottom = React.useCallback((smooth = false) => {
     const el = containerRef.current;
+    const bottom = bottomRef.current;
     if (!el) return;
-    const top = Math.max(0, el.scrollHeight - el.clientHeight);
+    const top = Math.max(0, el.scrollHeight);
+    el.scrollTop = top;
+    bottom?.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
     if (smooth) {
       el.scrollTo({ top, behavior: 'smooth' });
     } else {
@@ -47,24 +51,26 @@ export const TerminalPage: React.FC = () => {
 
   const highlightLine = (line: string) => {
     if (line.includes('[Error]') || line.includes('Error:') || line.includes('failed')) {
-      return <span className="text-[#F87171]">{line}</span>;
+      return <span className={isLight ? 'text-[#B91C1C]' : 'text-[#F87171]'}>{line}</span>;
     }
     if (line.includes('[WARN]') || line.includes('[Warning]') || line.includes('warning')) {
-      return <span className="text-[#FBBF24]">{line}</span>;
+      return <span className={isLight ? 'text-[#B45309]' : 'text-[#FBBF24]'}>{line}</span>;
     }
     if (line.includes('[OpenClaw]')) {
-      return <span className="text-[#00F5D4]">{line}</span>;
+      return <span className={isLight ? 'text-[#047857]' : 'text-[#00F5D4]'}>{line}</span>;
     }
     if (line.includes('[Bridge]')) {
-      return <span className="text-[#93C5FD]">{line}</span>;
+      return <span className={isLight ? 'text-[#1D4ED8]' : 'text-[#93C5FD]'}>{line}</span>;
     }
-    return <span className="text-slate-100">{line}</span>;
+    return <span className={isLight ? 'text-slate-800' : 'text-slate-100'}>{line}</span>;
   };
 
   const handleJumpToBottom = () => {
     setFollowTail(true);
-    scrollToBottom(true);
-    window.setTimeout(() => scrollToBottom(false), 180);
+    requestAnimationFrame(() => scrollToBottom(true));
+    window.setTimeout(() => scrollToBottom(false), 120);
+    window.setTimeout(() => scrollToBottom(false), 320);
+    showToast('已跟随到底部', 'info');
   };
 
   const handleExport = async () => {
@@ -137,22 +143,29 @@ export const TerminalPage: React.FC = () => {
       </div>
 
       <div className="flex-1 p-6">
-        <div className="h-full overflow-hidden rounded-2xl border border-slate-700 bg-[#080C18] shadow-[0_18px_50px_rgba(15,23,42,0.28)]">
-          <div className="flex h-10 items-center justify-between border-b border-slate-700 bg-[#111827] px-4">
-            <span className="text-xs font-bold uppercase tracking-[0.18em] text-[#93C5FD]">Live Output</span>
-            <span className="text-xs text-slate-300">{logLines.length} lines</span>
+        <div className={`h-full overflow-hidden rounded-2xl border shadow-[0_18px_50px_rgba(15,23,42,0.14)] ${
+          isLight ? 'border-border bg-white' : 'border-slate-700 bg-[#080C18]'
+        }`}>
+          <div className={`flex h-10 items-center justify-between border-b px-4 ${
+            isLight ? 'border-border bg-surface-alt' : 'border-slate-700 bg-[#111827]'
+          }`}>
+            <span className={`text-xs font-bold uppercase tracking-[0.18em] ${isLight ? 'text-accent' : 'text-[#93C5FD]'}`}>Live Output</span>
+            <span className={`text-xs ${isLight ? 'text-text-muted' : 'text-slate-300'}`}>{logLines.length} lines</span>
           </div>
           <pre
             ref={containerRef}
-            className="h-[calc(100%-40px)] overflow-y-scroll overflow-x-auto bg-[#080C18] p-5 font-mono text-sm leading-relaxed text-slate-100"
+            className={`h-[calc(100%-40px)] overflow-y-scroll overflow-x-auto p-5 font-mono text-sm leading-relaxed ${
+              isLight ? 'bg-white text-slate-800' : 'bg-[#080C18] text-slate-100'
+            }`}
             onKeyDown={handleKeyDown}
             onScroll={handleScroll}
           >
             {logLines.map((line, i) => (
               <div key={i}>{highlightLine(line)}</div>
             ))}
+            <span ref={bottomRef} className="block h-px" />
             {lines.length === 0 && (
-              <span className="text-slate-400">等待服务启动...</span>
+              <span className={isLight ? 'text-text-muted' : 'text-slate-400'}>等待服务启动...</span>
             )}
           </pre>
         </div>
