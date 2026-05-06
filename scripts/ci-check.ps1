@@ -2,7 +2,8 @@ param(
     [switch]$SkipFrontend,
     [switch]$SkipRust,
     [switch]$SkipPython,
-    [switch]$SkipLicenseServer
+    [switch]$SkipLicenseServer,
+    [switch]$SkipSourceText
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 $LauncherDir = Join-Path $Root "openclaw_new_launcher"
 $TauriDir = Join-Path $LauncherDir "src-tauri"
 $LicenseServerDir = Join-Path $Root "license_server"
+$VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
 
 function Invoke-Step {
     param(
@@ -21,6 +23,12 @@ function Invoke-Step {
     Write-Host "==> $Name" -ForegroundColor Cyan
     & $Script
     Write-Host "OK: $Name" -ForegroundColor Green
+}
+
+if (-not $SkipSourceText) {
+    Invoke-Step "Source text guard" {
+        & powershell -ExecutionPolicy Bypass -File $VerifySourceTextScript
+    }
 }
 
 if (-not $SkipFrontend) {
@@ -77,4 +85,3 @@ if (-not $SkipLicenseServer -and (Test-Path -LiteralPath (Join-Path $LicenseServ
 
 Write-Host ""
 Write-Host "All CI checks passed." -ForegroundColor Green
-

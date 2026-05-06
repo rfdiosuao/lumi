@@ -14,6 +14,7 @@ $TauriDir = Join-Path $LauncherDir "src-tauri"
 $ReleaseDir = Join-Path $Root "release"
 $CleanScript = Join-Path $PSScriptRoot "clean-workspace.ps1"
 $VerifyScript = Join-Path $PSScriptRoot "verify-release.ps1"
+$VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
 
 function Invoke-Step {
     param(
@@ -388,6 +389,10 @@ Write-Host "Seed portable dir: $seedDir"
 
 Invoke-Step "Clean source workspace" {
     & powershell -ExecutionPolicy Bypass -File $CleanScript
+}
+
+Invoke-Step "Verify source text" {
+    & powershell -ExecutionPolicy Bypass -File $VerifySourceTextScript
 }
 
 if (-not $SkipBuild) {
