@@ -84,14 +84,6 @@ const CHANNELS: Record<BotChannelKey, BotChannel> = {
     ],
     installSteps: [
       {
-        label: '安装微信插件',
-        displayCommand: 'node scripts/bot-plugin-helper.mjs install weixin',
-        commandName: 'bot-plugin-install-weixin',
-        fallbackCommandName: 'bot-plugin-install-weixin-node-exe',
-        args: ['scripts/bot-plugin-helper.mjs', 'install', 'weixin'],
-        successMessage: '微信插件已写入本地配置，准备打开扫码绑定命令。',
-      },
-      {
         label: '微信扫码绑定',
         displayCommand: 'node scripts/bot-plugin-helper.mjs login-weixin',
         commandName: 'bot-plugin-login-weixin',
@@ -529,7 +521,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
           </div>
           <pre
             ref={outputRef}
-            className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-4 py-4 font-mono text-xs leading-5 text-terminal-text"
+            className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-4 py-4 font-mono text-xs leading-[1.05] text-terminal-text"
           >
             {hasCommandLog
               ? commandLog.join('')

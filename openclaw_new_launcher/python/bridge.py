@@ -662,6 +662,8 @@ class Handler(BaseHTTPRequestHandler):
         """Validate that the resolved path stays within allowed directories."""
         if not file_path:
             return None
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(paths.base_path, file_path)
         # Resolve to absolute path (handles relative paths and symlinks)
         real_path = os.path.realpath(file_path)
         # Allow paths within base_path or data_dir

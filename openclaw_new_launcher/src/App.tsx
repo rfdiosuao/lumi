@@ -44,7 +44,7 @@ function hasConfiguredApiProfile(data: unknown): boolean {
 
 
 export default function App() {
-  const { currentPage, setCurrentPage, serviceRunning, setServiceRunning, serviceStatus, setServiceStatus, isAuthorized, checkLicense } = useAppStore();
+  const { currentPage, setCurrentPage, serviceRunning, setServiceRunning, serviceStatus, setServiceStatus, isAuthorized, isLicenseChecking, checkLicense } = useAppStore();
   const appendLog = useLogStore((s) => s.append);
   const [showApiConfig, setShowApiConfig] = useState(false);
   const [showFeishuConfig, setShowFeishuConfig] = useState(false);
@@ -87,6 +87,12 @@ export default function App() {
     checkLicense();
     refreshApiConfigured();
   }, [checkLicense, refreshApiConfigured]);
+
+  useEffect(() => {
+    if (!isLicenseChecking && !isAuthorized && currentPage !== 'license') {
+      setCurrentPage('license');
+    }
+  }, [currentPage, isAuthorized, isLicenseChecking, setCurrentPage]);
 
   const handleStart = async () => {
     if (!isAuthorized) {

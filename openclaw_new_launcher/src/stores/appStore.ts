@@ -34,24 +34,15 @@ interface AppState {
   checkLicense: () => Promise<void>;
 }
 
-// Restore persisted auth state
-const persistedAuth = (() => {
-  try {
-    const raw = localStorage.getItem('openclaw_auth');
-    if (raw) return JSON.parse(raw) as { isAuthorized: boolean; licenseInfo: License | null };
-  } catch { /* ignore */ }
-  return null;
-})();
-
 const initialThemeMode = getStoredThemeMode();
 
 export const useAppStore = create<AppState>((set) => ({
   currentPage: 'terminal',
   serviceRunning: false,
   serviceStatus: 'idle',
-  isAuthorized: persistedAuth?.isAuthorized ?? false,
+  isAuthorized: false,
   isLicenseChecking: true,
-  licenseInfo: persistedAuth?.licenseInfo ?? null,
+  licenseInfo: null,
   apiConfigured: false,
   themeConfig: getBuiltinTheme(initialThemeMode),
   themeMode: initialThemeMode,
@@ -61,11 +52,12 @@ export const useAppStore = create<AppState>((set) => ({
   setServiceRunning: (serviceRunning) => set({ serviceRunning }),
   setServiceStatus: (serviceStatus) => set({ serviceStatus }),
   setAuthorized: (isAuthorized) => {
-    try { localStorage.setItem('openclaw_auth', JSON.stringify({ isAuthorized, licenseInfo: useAppStore.getState().licenseInfo })); } catch { /* ignore */ }
+    if (!isAuthorized) {
+      try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }
+    }
     set({ isAuthorized, isLicenseChecking: false });
   },
   setLicenseInfo: (licenseInfo) => {
-    try { localStorage.setItem('openclaw_auth', JSON.stringify({ isAuthorized: licenseInfo !== null, licenseInfo })); } catch { /* ignore */ }
     set({ licenseInfo });
   },
   setApiConfigured: (apiConfigured) => set({ apiConfigured }),
@@ -79,16 +71,13 @@ export const useAppStore = create<AppState>((set) => ({
       const resp = await licenseApi.current();
       if (resp.license && typeof resp.license === 'object') {
         set({ isAuthorized: true, licenseInfo: resp.license as License, isLicenseChecking: false });
-        try { localStorage.setItem('openclaw_auth', JSON.stringify({ isAuthorized: true, licenseInfo: resp.license })); } catch { /* ignore */ }
       } else {
         set({ isAuthorized: false, licenseInfo: null, isLicenseChecking: false });
-        try { localStorage.setItem('openclaw_auth', JSON.stringify({ isAuthorized: false, licenseInfo: null })); } catch { /* ignore */ }
+        try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }
       }
     } catch {
-      const current = useAppStore.getState();
-      if (!current.isAuthorized) {
-        set({ isLicenseChecking: false });
-      }
+      set({ isAuthorized: false, licenseInfo: null, isLicenseChecking: false });
+      try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }
     }
   },
 }));
