@@ -40,13 +40,15 @@ powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\build-porta
 - 对离线包执行交付校验：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\verify-release.ps1 -Path D:\Axiangmu\AUSTART\release\OpenClaw-Portable-fixed-2026.05.05.zip
+$zip = Get-ChildItem D:\Axiangmu\AUSTART\release\OpenClaw-Portable-v*.zip | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\verify-release.ps1 -Path $zip.FullName
 ```
 
 - 生成 SHA256，作为交付记录：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 D:\Axiangmu\AUSTART\release\OpenClaw-Portable-fixed-2026.05.05.zip
+$zip = Get-ChildItem D:\Axiangmu\AUSTART\release\OpenClaw-Portable-v*.zip | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+Get-FileHash -Algorithm SHA256 $zip.FullName
 ```
 
 - 离线包至少应包含：
