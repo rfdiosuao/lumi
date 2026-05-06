@@ -10,37 +10,20 @@ export const TerminalPage: React.FC = () => {
   const { theme, themeMode } = useTheme();
   const isLight = themeMode === 'light';
   const containerRef = React.useRef<HTMLPreElement>(null);
-  const bottomRef = React.useRef<HTMLSpanElement>(null);
-  const [followTail, setFollowTail] = React.useState(true);
   const [exporting, setExporting] = React.useState(false);
   const [lastExportPath, setLastExportPath] = React.useState('');
   const logLines = lines.split('\n').filter(Boolean);
 
   const scrollToBottom = React.useCallback((smooth = false) => {
     const el = containerRef.current;
-    const bottom = bottomRef.current;
     if (!el) return;
-    const top = Math.max(0, el.scrollHeight);
-    el.scrollTop = top;
-    bottom?.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
+    const top = Math.max(0, el.scrollHeight - el.clientHeight);
     if (smooth) {
       el.scrollTo({ top, behavior: 'smooth' });
     } else {
       el.scrollTop = top;
     }
   }, []);
-
-  React.useLayoutEffect(() => {
-    if (followTail) {
-      scrollToBottom(false);
-    }
-  }, [lines, followTail, scrollToBottom]);
-
-  const handleScroll = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    setFollowTail(el.scrollTop + el.clientHeight >= el.scrollHeight - 80);
-  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.ctrlKey && (e.key === 'c' || e.key === 'C' || e.key === 'a' || e.key === 'A')) {
@@ -66,11 +49,8 @@ export const TerminalPage: React.FC = () => {
   };
 
   const handleJumpToBottom = () => {
-    setFollowTail(true);
     requestAnimationFrame(() => scrollToBottom(true));
-    window.setTimeout(() => scrollToBottom(false), 120);
-    window.setTimeout(() => scrollToBottom(false), 320);
-    showToast('已跟随到底部', 'info');
+    showToast('已跳到底部', 'info');
   };
 
   const handleExport = async () => {
@@ -125,8 +105,8 @@ export const TerminalPage: React.FC = () => {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant={followTail ? 'success' : 'quiet'} className="px-3 py-1.5 text-xs" onClick={handleJumpToBottom}>
-            跟随底部
+          <Button variant="quiet" className="px-3 py-1.5 text-xs" onClick={handleJumpToBottom}>
+            跳到底部
           </Button>
           <Button variant="quiet" className="px-3 py-1.5 text-xs" onClick={handleExport} disabled={exporting}>
             {exporting ? '导出中...' : '导出日志'}
@@ -158,12 +138,10 @@ export const TerminalPage: React.FC = () => {
               isLight ? 'bg-white text-slate-800' : 'bg-[#080C18] text-slate-100'
             }`}
             onKeyDown={handleKeyDown}
-            onScroll={handleScroll}
           >
             {logLines.map((line, i) => (
               <div key={i}>{highlightLine(line)}</div>
             ))}
-            <span ref={bottomRef} className="block h-px" />
             {lines.length === 0 && (
               <span className={isLight ? 'text-text-muted' : 'text-slate-400'}>等待服务启动...</span>
             )}
