@@ -26,9 +26,16 @@ The first low-risk endpoints have been moved to native FastAPI routes:
 | `/api/system/info` | FastAPI native |
 | `/api/process/status` | FastAPI native |
 | `/api/log/get` | FastAPI native |
+| `/api/log/clear` | FastAPI native |
 | `/api/license/current` | FastAPI native |
 | `/api/license/authorized` | FastAPI native |
 | `/api/theme/current` | FastAPI native |
+| `/api/theme/by_merchant` | FastAPI native |
+| `/api/theme/list` | FastAPI native |
+| `/api/config/read` | FastAPI native |
+| `/api/config/write` | FastAPI native |
+| `/api/auth/profiles` | FastAPI native |
+| `/api/diagnostics/run` | FastAPI native |
 | `/api/skills/list` | FastAPI native |
 | `/api/skills/paths` | FastAPI native |
 

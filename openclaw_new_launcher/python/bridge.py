@@ -899,6 +899,19 @@ def _capture_legacy_route(path: str, method: str, headers, body: dict | None) ->
     return int(handler._captured_code), dict(handler._captured_data)
 
 
+def _safe_config_path(file_path: str) -> str | None:
+    """Validate that the resolved path stays within allowed directories."""
+    if not file_path:
+        return None
+    if not os.path.isabs(file_path):
+        file_path = os.path.join(paths.base_path, file_path)
+    real_path = os.path.realpath(file_path)
+    allowed_prefixes = (os.path.realpath(paths.base_path), os.path.realpath(paths.data_dir))
+    if real_path.startswith(allowed_prefixes):
+        return real_path
+    return None
+
+
 async def _fastapi_dispatch(request):
     body: dict | None = None
     if request.method in {"POST", "PUT"}:
@@ -964,6 +977,11 @@ def _serve_fastapi(port: int, token: str) -> None:
         openapi_url=None,
     )
 
+    @app.exception_handler(Exception)
+    async def unhandled_exception(request: FastApiRequest, exc: Exception):
+        append_log(f"[Bridge Error] {request.url.path}: {exc}\n{traceback.format_exc()}\n")
+        return _fastapi_json({"error": str(exc)}, 500)
+
     @app.api_route("/api/system/info", methods=["GET", "POST"])
     async def system_info(request: FastApiRequest):
         if error := _fastapi_auth_error(request):
@@ -993,6 +1011,14 @@ def _serve_fastapi(port: int, token: str) -> None:
             text = "".join(log_buffer)
         return _fastapi_json({"log": text})
 
+    @app.post("/api/log/clear")
+    async def log_clear(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        with log_lock:
+            log_buffer.clear()
+        return _fastapi_json({"status": "cleared"})
+
     @app.api_route("/api/license/current", methods=["GET", "POST"])
     async def license_current(request: FastApiRequest):
         if error := _fastapi_auth_error(request):
@@ -1015,6 +1041,68 @@ def _serve_fastapi(port: int, token: str) -> None:
         license_data = _get_license_mgr().current_license()
         theme = _get_theme_mgr().get_current(license_data)
         return _fastapi_json({"theme": theme})
+
+    @app.post("/api/theme/by_merchant")
+    async def theme_by_merchant(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        body = await _fastapi_body(request)
+        merchant_id = body.get("merchantId", "")
+        if not merchant_id:
+            return _fastapi_json({"error": "merchantId 不能为空"}, 400)
+        theme = _get_theme_mgr().get_by_merchant(merchant_id)
+        if theme is None:
+            return _fastapi_json({"error": f"未找到商户 {merchant_id} 的主题"}, 404)
+        return _fastapi_json({"theme": theme})
+
+    @app.api_route("/api/theme/list", methods=["GET", "POST"])
+    async def theme_list(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        return _fastapi_json({"themes": _get_theme_mgr().list_themes()})
+
+    @app.post("/api/config/read")
+    async def config_read(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        body = await _fastapi_body(request)
+        safe = _safe_config_path(body.get("path", ""))
+        if safe is None:
+            return _fastapi_json({"error": "路径不在允许的范围内"}, 403)
+        return _fastapi_json({"data": read_json(safe, body.get("default", {}))})
+
+    @app.post("/api/config/write")
+    async def config_write(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        body = await _fastapi_body(request)
+        file_path = body.get("path", "")
+        safe = _safe_config_path(file_path)
+        if safe is None:
+            return _fastapi_json({"error": "路径不在允许的范围内"}, 403)
+        write_json(safe, body["data"])
+        if file_path.replace("\\", "/").endswith(("auth-profiles.json", "openclaw.json")):
+            _sync_openclaw_models_from_api_profiles()
+        return _fastapi_json({"status": "ok"})
+
+    @app.api_route("/api/auth/profiles", methods=["GET", "POST", "PUT"])
+    async def auth_profiles(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        if request.method == "PUT":
+            body = await _fastapi_body(request)
+            profiles = read_json(paths.auth_profiles, {"models": {"providers": {}}})
+            profiles.update(body)
+            write_json(paths.auth_profiles, profiles)
+            _sync_openclaw_models_from_api_profiles()
+            return _fastapi_json({"status": "ok"})
+        return _fastapi_json({"profiles": read_json(paths.auth_profiles, {})})
+
+    @app.api_route("/api/diagnostics/run", methods=["GET", "POST"])
+    async def diagnostics_run(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        return _fastapi_json(_build_diagnostics_payload())
 
     @app.api_route("/api/skills/list", methods=["GET", "POST"])
     async def skills_list(request: FastApiRequest):

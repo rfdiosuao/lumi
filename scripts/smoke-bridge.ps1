@@ -68,6 +68,8 @@ function Get-FileText {
 $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-bridge-smoke-$timestamp.out"
 $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-bridge-smoke-$timestamp.err"
+$smokeConfigRelativePath = "data/.openclaw/launcher/bridge-smoke.json"
+$smokeConfigPath = Join-Path $LauncherDir $smokeConfigRelativePath
 $process = $null
 $previousUtf8 = $env:PYTHONUTF8
 $previousIoEncoding = $env:PYTHONIOENCODING
@@ -158,6 +160,12 @@ try {
         @{ Name = "license current"; Path = "/api/license/current"; Method = "GET"; Props = @("license") },
         @{ Name = "license authorized"; Path = "/api/license/authorized"; Method = "POST"; Body = @{ feature = "openclaw" }; Props = @("authorized") },
         @{ Name = "theme current"; Path = "/api/theme/current"; Method = "GET"; Props = @("theme") },
+        @{ Name = "theme list"; Path = "/api/theme/list"; Method = "GET"; Props = @("themes") },
+        @{ Name = "auth profiles"; Path = "/api/auth/profiles"; Method = "GET"; Props = @("profiles") },
+        @{ Name = "diagnostics run"; Path = "/api/diagnostics/run"; Method = "GET"; Props = @("checks", "summary") },
+        @{ Name = "config write"; Path = "/api/config/write"; Method = "POST"; Body = @{ path = $smokeConfigRelativePath; data = @{ smoke = "ok"; timestamp = $timestamp } }; Props = @("status") },
+        @{ Name = "config read"; Path = "/api/config/read"; Method = "POST"; Body = @{ path = $smokeConfigRelativePath; default = @{} }; Props = @("data") },
+        @{ Name = "log clear"; Path = "/api/log/clear"; Method = "POST"; Props = @("status") },
         @{ Name = "skills list"; Path = "/api/skills/list"; Method = "GET"; Props = @("skills", "directories", "sites") },
         @{ Name = "skills paths"; Path = "/api/skills/paths"; Method = "GET"; Props = @("directories", "sites") }
     )
@@ -187,4 +195,5 @@ try {
     }
 
     Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $smokeConfigPath -Force -ErrorAction SilentlyContinue
 }
