@@ -31,6 +31,7 @@ from services.process import OpenClawProcessService
 from services.image_api import ImageApiClient, ImageApiError
 from services.video_api import DashScopeVideoClient, VideoApiError
 from services.updater import OpenClawUpdater
+from services.skills import SkillService, SkillError
 
 paths = AppPaths.discover()
 log_buffer: list[str] = []
@@ -55,6 +56,7 @@ _updater: OpenClawUpdater | None = None
 _image_client: ImageApiClient | None = None
 _video_client: DashScopeVideoClient | None = None
 _theme_mgr: ThemeManager | None = None
+_skill_svc: SkillService | None = None
 
 PROTECTED_PATHS = {"/api/process/start", "/api/image/generate", "/api/video/generate"}
 
@@ -93,6 +95,12 @@ def _get_theme_mgr() -> ThemeManager:
     if _theme_mgr is None:
         _theme_mgr = ThemeManager(paths)
     return _theme_mgr
+
+def _get_skill_svc() -> SkillService:
+    global _skill_svc
+    if _skill_svc is None:
+        _skill_svc = SkillService(paths)
+    return _skill_svc
 
 
 def _provider_id_from_base_url(base_url: str, fallback: str) -> str:
@@ -394,6 +402,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._theme_by_merchant(body)
             elif path == "/api/theme/list":
                 self._theme_list()
+            elif path == "/api/skills/list":
+                self._skills_list()
+            elif path == "/api/skills/install_zip":
+                self._skills_install_zip(body)
+            elif path == "/api/skills/enable":
+                self._skills_enable(body)
+            elif path == "/api/skills/paths":
+                self._skills_paths()
             else:
                 self._error(404, f"Not found: {path}")
         except Exception as e:
@@ -770,6 +786,35 @@ class Handler(BaseHTTPRequestHandler):
         mgr = _get_theme_mgr()
         themes = mgr.list_themes()
         self._ok({"themes": themes})
+
+    # === Skills ===
+
+    def _skills_list(self) -> None:
+        self._ok(_get_skill_svc().list_skills())
+
+    def _skills_install_zip(self, body: dict) -> None:
+        filename = body.get("filename", "skill.zip")
+        data = body.get("data", "")
+        if not data:
+            self._error(400, "Skill 包数据为空")
+            return
+        try:
+            self._ok(_get_skill_svc().install_zip(filename, data))
+        except SkillError as e:
+            self._error(400, str(e))
+
+    def _skills_enable(self, body: dict) -> None:
+        skill_id = body.get("id", "")
+        if not skill_id:
+            self._error(400, "Skill ID 不能为空")
+            return
+        try:
+            self._ok(_get_skill_svc().set_enabled(skill_id, bool(body.get("enabled"))))
+        except SkillError as e:
+            self._error(400, str(e))
+
+    def _skills_paths(self) -> None:
+        self._ok(_get_skill_svc().paths_payload())
 
     # === Helpers ===
 

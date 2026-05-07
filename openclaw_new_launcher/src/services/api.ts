@@ -200,3 +200,48 @@ export const diagnosticsApi = {
   repair: (): Promise<DiagnosticRepairResult> => api('/api/diagnostics/repair', 'POST'),
   export: (): Promise<DiagnosticExportResult> => api('/api/diagnostics/export', 'POST'),
 };
+
+// === Skills API ===
+export interface SkillDirectory {
+  key: string;
+  label: string;
+  path: string;
+  writable: boolean;
+}
+
+export interface SkillSite {
+  name: string;
+  url: string;
+}
+
+export interface SkillItem {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  category: string;
+  runtime: string;
+  icon: string;
+  source: string;
+  sourceLabel: string;
+  path: string;
+  installed: boolean;
+  enabled: boolean;
+  writable: boolean;
+  installedAt?: string;
+}
+
+export interface SkillsListResponse {
+  skills: SkillItem[];
+  directories: SkillDirectory[];
+  sites: SkillSite[];
+}
+
+export const skillsApi = {
+  list: (): Promise<SkillsListResponse> => api('/api/skills/list'),
+  installZip: (filename: string, data: string): Promise<{ skill: SkillItem }> =>
+    api('/api/skills/install_zip', 'POST', { filename, data }),
+  setEnabled: (id: string, enabled: boolean): Promise<{ skill: SkillItem }> =>
+    api('/api/skills/enable', 'POST', { id, enabled }),
+  paths: (): Promise<{ directories: SkillDirectory[]; sites: SkillSite[] }> => api('/api/skills/paths'),
+};

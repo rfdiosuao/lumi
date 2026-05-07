@@ -35,3 +35,13 @@ export interface SkillInstallState {
   version?: string;
   lastError?: string;
 }
+
+export interface LocalSkillItem extends SkillModuleContract {
+  source: 'uploaded' | 'openclaw-extensions' | 'node-modules' | string;
+  sourceLabel: string;
+  path: string;
+  installed: boolean;
+  enabled: boolean;
+  writable: boolean;
+  installedAt?: string;
+}

@@ -129,6 +129,22 @@ class AppPaths:
         return os.path.join(self.storyboard_dir, "assets")
 
     @property
+    def launcher_dir(self) -> str:
+        return os.path.join(self.state_dir, "launcher")
+
+    @property
+    def skills_dir(self) -> str:
+        return os.path.join(self.state_dir, "skills")
+
+    @property
+    def skills_state(self) -> str:
+        return os.path.join(self.launcher_dir, "skills-state.json")
+
+    @property
+    def openclaw_extensions_dir(self) -> str:
+        return os.path.join(self.state_dir, "extensions")
+
+    @property
     def license_file(self) -> str:
         return os.path.join(self.data_dir, "license.json")
 
