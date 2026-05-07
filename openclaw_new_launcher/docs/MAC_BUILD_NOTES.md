@@ -88,25 +88,32 @@ npm install @tencent-weixin/openclaw-weixin@latest
 - 微信插件只能扫码绑定，不能用 ID/Key 绑定。
 - 微信插件在 Mac 上是否完全可用，要以真实扫码测试为准。
 
-## 6. 当前源码里的 Mac 适配风险
+## 6. 当前源码里的 Mac 适配状态
 
-下面这些地方目前仍带有 Windows 优先逻辑，Mac 编译前需要重点检查：
+下面这些底层路径已经做过跨平台候选，Mac 迁移时不需要再从零改：
 
 - `python/core/paths.py`
-  - 当前 `node_exe` 默认返回 `node.exe`。
-  - Mac 应改为按平台返回 `node`，或直接使用 Mac 离线 Node 路径。
+  - Windows 查 `node.exe`，Mac / Linux 查 `node`。
+  - 支持 `node/` 和 `SystemData/.core/node/` 两套目录。
+  - 会把 Node 和 `node_modules/.bin` 加入子进程 PATH。
 
 - `src-tauri/src/lib.rs`
-  - Python Bridge 优先查找 `python.exe`，最后回退到 `python`。
-  - Mac 建议改为优先查找 `python3`，或者随包内置 macOS Python runtime。
-
-- `python/core/paths.py`
-  - `pnpm_cli` 当前按 `node/node_modules/pnpm/bin/pnpm.cjs` 查找。
-  - 如果 Mac 离线包把 Node 放到别的目录，需要同步修改。
+  - Windows 查 `python.exe/python`。
+  - Mac / Linux 查 `python3/python`。
+  - Bridge 会优先从随包资源里找 Python，再回退系统 Python。
 
 - 机器人插件命令
-  - Tauri shell capability 里保留了 `node` 和 `node.exe` 两套命令。
-  - Mac 只会用 `node`，打包时要确认 `node` 能被启动器找到。
+  - 前端插件命令会按当前系统生成 PATH 分隔符。
+  - Windows 用 `;`，Mac / Linux 用 `:`。
+  - Mac 仍需实机验证飞书 / 微信二维码输出和扫码流程。
+
+仍需在 Mac 上实测确认的风险：
+
+- Tauri `.app` 资源目录和 `OpenClawFiles/` 的相对位置。
+- 是否内置 Mac 版 Node，还是要求客户机预装 Node。
+- 是否内置 Python runtime，还是要求客户机预装 Python 3。
+- 微信插件在 Mac 上的扫码登录是否稳定。
+- `.app` / `.dmg` 是否需要签名和公证后才能顺利打开。
 
 ## 7. Mac 离线包建议结构
 
