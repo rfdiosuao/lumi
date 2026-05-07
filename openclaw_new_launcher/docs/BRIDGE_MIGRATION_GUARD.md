@@ -57,6 +57,13 @@ All known launcher API endpoints now have native FastAPI handlers. The legacy
 route class is still kept during the cleanup phase for the legacy bridge
 implementation and unknown-route fallback.
 
+Cleanup has started:
+
+| Module | Responsibility |
+| --- | --- |
+| `python/bridge.py` | bridge process entrypoint, legacy fallback, shared service context |
+| `python/api/fastapi_routes.py` | native FastAPI route registration |
+
 Target call chain after the full migration:
 
 ```text

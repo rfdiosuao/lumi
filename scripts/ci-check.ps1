@@ -65,6 +65,9 @@ if (-not $SkipPython) {
             $files = @("python/bridge.py")
             $files += Get-ChildItem -LiteralPath "python/core" -Filter "*.py" | ForEach-Object { $_.FullName }
             $files += Get-ChildItem -LiteralPath "python/services" -Filter "*.py" | ForEach-Object { $_.FullName }
+            if (Test-Path -LiteralPath "python/api") {
+                $files += Get-ChildItem -LiteralPath "python/api" -Filter "*.py" | ForEach-Object { $_.FullName }
+            }
             python -m py_compile @files
         } finally {
             Pop-Location

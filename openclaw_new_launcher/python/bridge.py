@@ -19,11 +19,6 @@ from collections.abc import Callable
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
-try:
-    from fastapi import Request as FastApiRequest
-except ModuleNotFoundError:
-    FastApiRequest = object
-
 # Ensure the python package root is on sys.path
 _python_dir = os.path.dirname(os.path.abspath(__file__))
 if _python_dir not in sys.path:
@@ -988,9 +983,43 @@ def _data_url_to_temp_file(data_url: str) -> tuple[str, str]:
         raise ValueError(f"图片数据解码失败: {exc}") from exc
 
 
+def _build_fastapi_context():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        append_log=append_log,
+        append_runtime_checks=_append_runtime_checks,
+        auth_error=_fastapi_auth_error,
+        body=_fastapi_body,
+        build_diagnostics_payload=_build_diagnostics_payload,
+        data_url_to_temp_file=_data_url_to_temp_file,
+        dispatch=_fastapi_dispatch,
+        fastapi_json=_fastapi_json,
+        get_image_client=_get_image_client,
+        get_license_mgr=_get_license_mgr,
+        get_process_svc=_get_process_svc,
+        get_skill_svc=_get_skill_svc,
+        get_theme_mgr=_get_theme_mgr,
+        get_updater=_get_updater,
+        get_video_client=_get_video_client,
+        log_buffer=log_buffer,
+        log_lock=log_lock,
+        paths=paths,
+        protected_error=_fastapi_protected_error,
+        read_json=read_json,
+        read_sanitized_json=_read_sanitized_json,
+        safe_config_path=_safe_config_path,
+        sanitize_text=_sanitize_text,
+        sync_openclaw_models_from_api_profiles=_sync_openclaw_models_from_api_profiles,
+        write_json=write_json,
+    )
+
+
 def _serve_fastapi(port: int, token: str) -> None:
     from fastapi import FastAPI
     import uvicorn
+
+    from api.fastapi_routes import register_fastapi_routes
 
     app = FastAPI(
         title="OpenClaw Bridge",
@@ -998,447 +1027,7 @@ def _serve_fastapi(port: int, token: str) -> None:
         redoc_url=None,
         openapi_url=None,
     )
-
-    @app.exception_handler(Exception)
-    async def unhandled_exception(request: FastApiRequest, exc: Exception):
-        append_log(f"[Bridge Error] {request.url.path}: {exc}\n{traceback.format_exc()}\n")
-        return _fastapi_json({"error": str(exc)}, 500)
-
-    @app.api_route("/api/system/info", methods=["GET", "POST"])
-    async def system_info(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        updater = _get_updater()
-        return _fastapi_json({
-            "node_path": paths.node_exe,
-            "base_path": paths.base_path,
-            "openclaw_version": updater.current_version(),
-        })
-
-    @app.api_route("/api/process/status", methods=["GET", "POST"])
-    async def process_status(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        svc = _get_process_svc()
-        return _fastapi_json({
-            "running": svc.running,
-            "pid": svc.process.pid if svc.process and svc.process.poll() is None else None,
-        })
-
-    @app.post("/api/process/start")
-    async def process_start(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        if error := _fastapi_protected_error("/api/process/start"):
-            return error
-
-        svc = _get_process_svc()
-        if svc.running:
-            return _fastapi_json({"status": "already_running"})
-
-        def on_exit(code: int | None) -> None:
-            append_log(f"\n[OpenClaw] Process ended (exit: {code})\n")
-
-        svc.start(on_exit=on_exit)
-        return _fastapi_json({"status": "started", "pid": svc.process.pid if svc.process else None})
-
-    @app.post("/api/process/stop")
-    async def process_stop(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        message = _get_process_svc().stop()
-        return _fastapi_json({"status": "stopped", "message": message})
-
-    @app.api_route("/api/log/get", methods=["GET", "POST"])
-    async def log_get(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        with log_lock:
-            text = "".join(log_buffer)
-        return _fastapi_json({"log": text})
-
-    @app.post("/api/log/clear")
-    async def log_clear(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        with log_lock:
-            log_buffer.clear()
-        return _fastapi_json({"status": "cleared"})
-
-    @app.api_route("/api/license/current", methods=["GET", "POST"])
-    async def license_current(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        lic = _get_license_mgr().current_license()
-        return _fastapi_json({"license": lic})
-
-    @app.post("/api/license/authorized")
-    async def license_authorized(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        body = await _fastapi_body(request)
-        feature = body.get("feature")
-        return _fastapi_json({"authorized": _get_license_mgr().is_authorized(feature)})
-
-    @app.post("/api/license/activate")
-    async def license_activate(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        from core.license_manager import LicenseError
-
-        body = await _fastapi_body(request)
-        code = body.get("code", "")
-        if not code:
-            return _fastapi_json({"error": "授权码不能为空"}, 400)
-        try:
-            result = _get_license_mgr().activate(code)
-            theme = _get_theme_mgr().get_current(_get_license_mgr().current_license())
-            return _fastapi_json({"license": result, "theme": theme})
-        except LicenseError as exc:
-            return _fastapi_json({"error": str(exc)}, 400)
-
-    @app.post("/api/image/generate")
-    async def image_generate(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        if error := _fastapi_protected_error("/api/image/generate"):
-            return error
-
-        body = await _fastapi_body(request)
-        client = _get_image_client()
-        base_url = body.get("baseUrl", "")
-        api_key = body.get("apiKey", "")
-        prompt = body.get("prompt", "")
-        size = body.get("size", "1024x1024")
-        edit_path = body.get("editImagePath")
-        count = body.get("count", 1)
-
-        if not base_url:
-            return _fastapi_json({"error": "中转站地址不能为空"}, 400)
-        if not prompt:
-            return _fastapi_json({"error": "提示词不能为空"}, 400)
-
-        temp_file: str | None = None
-        if edit_path and edit_path.startswith("data:"):
-            try:
-                edit_path, temp_file = _data_url_to_temp_file(edit_path)
-            except ValueError as exc:
-                return _fastapi_json({"error": str(exc)}, 400)
-
-        try:
-            results = client.generate_many(base_url, api_key, prompt, size, count=count, edit_image_path=edit_path)
-            images_b64 = [base64.b64encode(result).decode() for result in results]
-            return _fastapi_json({"images": images_b64, "count": len(images_b64)})
-        except ImageApiError as exc:
-            return _fastapi_json({"error": str(exc)}, 500)
-        finally:
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except OSError:
-                    pass
-
-    @app.post("/api/video/generate")
-    async def video_generate(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        if error := _fastapi_protected_error("/api/video/generate"):
-            return error
-
-        body = await _fastapi_body(request)
-        client = _get_video_client()
-        provider_id = body.get("providerId", "dashscope")
-        api_base = body.get("apiBase", "")
-        model = body.get("model", "")
-        dash_key = body.get("dashKey", "")
-        prompt = body.get("prompt", "")
-        mode = body.get("mode", "t2v")
-        resolution = body.get("resolution", "720P")
-        duration = body.get("duration", 5)
-        ratio = body.get("ratio", "16:9")
-        image_path = body.get("imagePath")
-
-        if not dash_key:
-            return _fastapi_json({"error": "视频服务密钥不能为空"}, 400)
-        if not prompt:
-            return _fastapi_json({"error": "提示词不能为空"}, 400)
-
-        temp_file: str | None = None
-        if image_path and image_path.startswith("data:"):
-            try:
-                image_path, temp_file = _data_url_to_temp_file(image_path)
-            except ValueError as exc:
-                return _fastapi_json({"error": str(exc)}, 400)
-
-        try:
-            video_bytes = client.generate(
-                dash_key,
-                prompt,
-                mode,
-                resolution,
-                duration,
-                ratio,
-                image_path,
-                provider_id=provider_id,
-                api_base=api_base,
-                model=model,
-            )
-            video_dir = os.path.join(paths.data_dir, "videos")
-            os.makedirs(video_dir, exist_ok=True)
-            filename = f"lumi-video-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
-            save_path = os.path.join(video_dir, filename)
-            with open(save_path, "wb") as file:
-                file.write(video_bytes)
-            return _fastapi_json({
-                "video": base64.b64encode(video_bytes).decode(),
-                "mime": "video/mp4",
-                "size": len(video_bytes),
-                "path": save_path,
-                "directory": video_dir,
-                "filename": filename,
-            })
-        except VideoApiError as exc:
-            return _fastapi_json({"error": str(exc)}, 500)
-        finally:
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except OSError:
-                    pass
-
-    @app.api_route("/api/theme/current", methods=["GET", "POST"])
-    async def theme_current(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        license_data = _get_license_mgr().current_license()
-        theme = _get_theme_mgr().get_current(license_data)
-        return _fastapi_json({"theme": theme})
-
-    @app.post("/api/theme/by_merchant")
-    async def theme_by_merchant(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        body = await _fastapi_body(request)
-        merchant_id = body.get("merchantId", "")
-        if not merchant_id:
-            return _fastapi_json({"error": "merchantId 不能为空"}, 400)
-        theme = _get_theme_mgr().get_by_merchant(merchant_id)
-        if theme is None:
-            return _fastapi_json({"error": f"未找到商户 {merchant_id} 的主题"}, 404)
-        return _fastapi_json({"theme": theme})
-
-    @app.api_route("/api/theme/list", methods=["GET", "POST"])
-    async def theme_list(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        return _fastapi_json({"themes": _get_theme_mgr().list_themes()})
-
-    @app.post("/api/config/read")
-    async def config_read(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        body = await _fastapi_body(request)
-        safe = _safe_config_path(body.get("path", ""))
-        if safe is None:
-            return _fastapi_json({"error": "路径不在允许的范围内"}, 403)
-        return _fastapi_json({"data": read_json(safe, body.get("default", {}))})
-
-    @app.post("/api/config/write")
-    async def config_write(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        body = await _fastapi_body(request)
-        file_path = body.get("path", "")
-        safe = _safe_config_path(file_path)
-        if safe is None:
-            return _fastapi_json({"error": "路径不在允许的范围内"}, 403)
-        write_json(safe, body["data"])
-        if file_path.replace("\\", "/").endswith(("auth-profiles.json", "openclaw.json")):
-            _sync_openclaw_models_from_api_profiles()
-        return _fastapi_json({"status": "ok"})
-
-    @app.api_route("/api/auth/profiles", methods=["GET", "POST", "PUT"])
-    async def auth_profiles(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        if request.method == "PUT":
-            body = await _fastapi_body(request)
-            profiles = read_json(paths.auth_profiles, {"models": {"providers": {}}})
-            profiles.update(body)
-            write_json(paths.auth_profiles, profiles)
-            _sync_openclaw_models_from_api_profiles()
-            return _fastapi_json({"status": "ok"})
-        return _fastapi_json({"profiles": read_json(paths.auth_profiles, {})})
-
-    @app.api_route("/api/diagnostics/run", methods=["GET", "POST"])
-    async def diagnostics_run(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        return _fastapi_json(_build_diagnostics_payload())
-
-    @app.api_route("/api/diagnostics/repair", methods=["GET", "POST"])
-    async def diagnostics_repair(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        result = _get_process_svc().repair_environment()
-        result["diagnostics"] = _append_runtime_checks(result.get("diagnostics", {}))
-        return _fastapi_json(result)
-
-    @app.api_route("/api/diagnostics/export", methods=["GET", "POST"])
-    async def diagnostics_export(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-
-        diagnostics = _build_diagnostics_payload()
-        now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        export_dir = os.path.join(paths.data_dir, "diagnostics")
-        os.makedirs(export_dir, exist_ok=True)
-        filename = f"openclaw-diagnostics-{now}.zip"
-        zip_path = os.path.join(export_dir, filename)
-
-        system_info = {
-            "generatedAt": datetime.datetime.now().isoformat(timespec="seconds"),
-            "basePath": paths.base_path,
-            "nodePath": paths.node_exe,
-            "openclawMjs": paths.openclaw_mjs,
-            "stateDir": paths.state_dir,
-            "diagnosticSummary": diagnostics.get("summary", {}),
-        }
-
-        with log_lock:
-            service_log = _sanitize_text("".join(log_buffer))
-
-        readme = (
-            "OpenClaw diagnostics package\n\n"
-            "This package is generated by the launcher for troubleshooting.\n"
-            "Secrets such as API keys, tokens, passwords, signatures and app secrets are masked.\n"
-        )
-
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("README.txt", readme)
-            archive.writestr("diagnostics.json", json.dumps(diagnostics, ensure_ascii=False, indent=2))
-            archive.writestr("system.json", json.dumps(system_info, ensure_ascii=False, indent=2))
-            archive.writestr("service.log", service_log)
-            archive.writestr("configs/openclaw.json", json.dumps(_read_sanitized_json(paths.openclaw_config, {}), ensure_ascii=False, indent=2))
-            archive.writestr("configs/auth-profiles.json", json.dumps(_read_sanitized_json(paths.auth_profiles, {}), ensure_ascii=False, indent=2))
-            archive.writestr("configs/imgapi_config.json", json.dumps(_read_sanitized_json(paths.image_config, {}), ensure_ascii=False, indent=2))
-            archive.writestr("configs/video_config.json", json.dumps(_read_sanitized_json(paths.video_config, {}), ensure_ascii=False, indent=2))
-
-        return _fastapi_json({
-            "path": zip_path,
-            "directory": export_dir,
-            "filename": filename,
-            "size": os.path.getsize(zip_path),
-        })
-
-    @app.api_route("/api/update/check", methods=["GET", "POST"])
-    async def update_check(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        updater = _get_updater()
-        current = updater.current_version()
-        latest, error_message = updater.latest_version()
-        if error_message:
-            return _fastapi_json({"error": error_message}, 500)
-        return _fastapi_json({"current": current, "latest": latest, "hasUpdate": current != latest})
-
-    @app.post("/api/update/do")
-    async def update_do(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-
-        updater = _get_updater()
-        node_exe = paths.node_exe
-        pnpm_cli = paths.pnpm_cli
-        try:
-            proc = subprocess.Popen(
-                [node_exe, pnpm_cli, "add", "openclaw@latest"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                encoding="utf-8",
-                errors="replace",
-                cwd=paths.base_path,
-            )
-            output = []
-            if proc.stdout:
-                for line in iter(proc.stdout.readline, ""):
-                    if line:
-                        output.append(line)
-                        append_log(line)
-            exit_code = proc.wait()
-            current = updater.current_version()
-            return _fastapi_json({"success": exit_code == 0, "current_version": current, "log": output})
-        except Exception as exc:
-            return _fastapi_json({"error": str(exc)}, 500)
-
-    @app.api_route("/api/skills/list", methods=["GET", "POST"])
-    async def skills_list(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        return _fastapi_json(_get_skill_svc().list_skills())
-
-    @app.post("/api/skills/install_zip")
-    async def skills_install_zip(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        body = await _fastapi_body(request)
-        filename = body.get("filename", "skill.zip")
-        data = body.get("data", "")
-        if not data:
-            return _fastapi_json({"error": "Skill 包数据不能为空"}, 400)
-        try:
-            return _fastapi_json(_get_skill_svc().install_zip(filename, data))
-        except SkillError as exc:
-            return _fastapi_json({"error": str(exc)}, 400)
-
-    @app.post("/api/skills/enable")
-    async def skills_enable(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        body = await _fastapi_body(request)
-        skill_id = body.get("id", "")
-        if not skill_id:
-            return _fastapi_json({"error": "Skill ID 不能为空"}, 400)
-        try:
-            return _fastapi_json(_get_skill_svc().set_enabled(skill_id, bool(body.get("enabled"))))
-        except SkillError as exc:
-            return _fastapi_json({"error": str(exc)}, 400)
-
-    @app.post("/api/skills/uninstall")
-    async def skills_uninstall(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        body = await _fastapi_body(request)
-        skill_id = body.get("id", "")
-        if not skill_id:
-            return _fastapi_json({"error": "Skill ID 不能为空"}, 400)
-        try:
-            return _fastapi_json(_get_skill_svc().uninstall(skill_id))
-        except SkillError as exc:
-            return _fastapi_json({"error": str(exc)}, 400)
-
-    @app.post("/api/skills/readme")
-    async def skills_readme(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        body = await _fastapi_body(request)
-        skill_id = body.get("id", "")
-        if not skill_id:
-            return _fastapi_json({"error": "Skill ID 不能为空"}, 400)
-        try:
-            return _fastapi_json(_get_skill_svc().read_readme(skill_id))
-        except SkillError as exc:
-            return _fastapi_json({"error": str(exc)}, 400)
-
-    @app.api_route("/api/skills/paths", methods=["GET", "POST"])
-    async def skills_paths(request: FastApiRequest):
-        if error := _fastapi_auth_error(request):
-            return error
-        return _fastapi_json(_get_skill_svc().paths_payload())
-
-    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT"])
-    async def route_all(path: str, request: FastApiRequest):
-        return await _fastapi_dispatch(request)
+    register_fastapi_routes(app, _build_fastapi_context())
 
     print(f"BRIDGE_PORT={port}", flush=True)
     print(f"BRIDGE_TOKEN={token}", flush=True)
@@ -1454,7 +1043,6 @@ def _serve_fastapi(port: int, token: str) -> None:
     )
     server = uvicorn.Server(config)
     server.run()
-
 
 def _serve_legacy(port: int, token: str) -> None:
     Handler.bridge_token = token
