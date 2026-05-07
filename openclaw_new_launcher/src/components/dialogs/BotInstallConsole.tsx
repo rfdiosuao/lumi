@@ -28,7 +28,7 @@ export const BotInstallConsole: React.FC<BotInstallConsoleProps> = ({
     </div>
     <pre
       ref={outputRef}
-      className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-4 py-4 font-mono text-xs leading-[1.05] text-terminal-text"
+      className="min-h-0 flex-1 overflow-auto whitespace-pre px-4 py-4 font-mono text-[11px] leading-[1.1] text-terminal-text [tab-size:2]"
     >
       {commandLog.length > 0
         ? commandLog.join('')

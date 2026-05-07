@@ -12,10 +12,18 @@ export function stripAnsi(text: string): string {
   return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
 }
 
+function visibleAnsiQrBlocks(text: string): string {
+  return text
+    .replace(/\x1B\[(?:\d+;)*(?:47|46|107|106)m( +)\x1B\[0m/g, (_, spaces: string) => '█'.repeat(spaces.length))
+    .replace(/\x1B\[(?:\d+;)*(?:40|100)m( +)\x1B\[0m/g, (_, spaces: string) => ' '.repeat(spaces.length))
+    .replace(/\x1B\[7m( +)\x1B\[0m/g, (_, spaces: string) => '█'.repeat(spaces.length));
+}
+
 export function normalizeCommandOutput(data: unknown): string {
-  if (typeof data === 'string') return stripAnsi(data);
-  if (data instanceof Uint8Array) return stripAnsi(new TextDecoder('utf-8').decode(data));
-  return stripAnsi(String(data ?? ''));
+  const text = data instanceof Uint8Array
+    ? new TextDecoder('utf-8').decode(data)
+    : String(data ?? '');
+  return stripAnsi(visibleAnsiQrBlocks(text));
 }
 
 export function buildChannelConfig(channel: BotChannel, idValue: string, secretValue: string) {
@@ -52,7 +60,15 @@ export function makeCommandOptions(cwd?: string) {
   const base = { encoding: 'utf-8' as const };
   if (!cwd) return base;
 
-  const portablePath = `${cwd}\\node;${cwd}\\node_modules\\.bin`;
+  const portablePath = [
+    `${cwd}\\node`,
+    `${cwd}\\SystemData\\.core\\node`,
+    `${cwd}\\node_modules\\.bin`,
+    `${cwd}\\SystemData\\.core\\node_modules\\.bin`,
+    'C:\\Windows\\System32',
+    'C:\\Windows',
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0',
+  ].join(';');
   return {
     ...base,
     cwd,

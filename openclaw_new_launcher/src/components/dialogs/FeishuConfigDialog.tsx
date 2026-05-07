@@ -16,6 +16,26 @@ import {
   resolvePortableBasePath,
 } from './botPluginRuntime';
 
+interface PluginCheckCommandResult {
+  packageInstalled?: boolean;
+  extensionInstalled?: boolean;
+  configured?: boolean;
+  installed?: boolean;
+  savedId?: string;
+}
+
+function parsePluginCheckOutput(output: string): PluginCheckCommandResult {
+  const line = output
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .reverse()
+    .find((item) => item.startsWith('{') && item.endsWith('}'));
+  if (!line) {
+    throw new Error('检测命令没有返回有效结果');
+  }
+  return JSON.parse(line) as PluginCheckCommandResult;
+}
+
 const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = ({ channel, onClose }) => {
   const [idValue, setIdValue] = useState('');
   const [secretValue, setSecretValue] = useState('');
@@ -56,28 +76,65 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
     };
   }, []);
 
+  const runLocalPluginCheck = useCallback(async () => {
+    const cwd = await resolvePortableBasePath();
+    const args = ['scripts/bot-plugin-helper.mjs', 'check', channel.key];
+    const options = makeCommandOptions(cwd);
+
+    const run = async (commandName: string) => {
+      const output = await Command.create(commandName, args, options).execute();
+      const stdout = normalizeCommandOutput(output.stdout);
+      const stderr = normalizeCommandOutput(output.stderr);
+      if (output.code !== 0) {
+        throw new Error(stderr || stdout || `检测命令退出码：${output.code}`);
+      }
+      return parsePluginCheckOutput(stdout);
+    };
+
+    try {
+      return await run(`bot-plugin-check-${channel.key}`);
+    } catch (error) {
+      appendMainLog(`[${channel.title}] 检测命令切换到 node.exe：${error}\n`);
+      return await run(`bot-plugin-check-${channel.key}-node-exe`);
+    }
+  }, [appendMainLog, channel]);
+
   const checkPlugin = useCallback(async () => {
     setChecking(true);
     setStatusMessage(`正在检测${channel.title}插件...`);
 
-    const configResp = await configApi.read(OPENCLAW_CONFIG_PATH, {}).catch((error) => {
-      appendMainLog(`[${channel.title}] 配置读取失败，继续检测本地插件包：${error}\n`);
-      return { data: {} };
-    });
+    let bundledPackage = false;
+    let configured = false;
+    let detected = false;
 
-    const packageResponses = await Promise.all(
-      channel.packagePaths.map((packagePath) => configApi.read(packagePath, null).catch(() => ({ data: null }))),
-    );
+    try {
+      const status = await runLocalPluginCheck();
+      bundledPackage = Boolean(status.packageInstalled || status.extensionInstalled);
+      configured = Boolean(status.configured);
+      detected = Boolean(status.installed || bundledPackage || configured);
+      if (status.savedId) setIdValue(status.savedId);
+    } catch (localError) {
+      appendMainLog(`[${channel.title}] 本地检测命令失败，改用 Bridge 配置读取：${localError}\n`);
 
-    const config = (configResp.data as any) || {};
-    const savedChannel = getSavedChannelConfig(config, channel);
-    if (savedChannel?.appId || savedChannel?.robotId) {
-      setIdValue(String(savedChannel.appId || savedChannel.robotId));
+      const configResp = await configApi.read(OPENCLAW_CONFIG_PATH, {}).catch((error) => {
+        appendMainLog(`[${channel.title}] 配置读取失败，继续检测本地插件包：${error}\n`);
+        return { data: {} };
+      });
+
+      const packageResponses = await Promise.all(
+        channel.packagePaths.map((packagePath) => configApi.read(packagePath, null).catch(() => ({ data: null }))),
+      );
+
+      const config = (configResp.data as any) || {};
+      const savedChannel = getSavedChannelConfig(config, channel);
+      if (savedChannel?.appId || savedChannel?.robotId) {
+        setIdValue(String(savedChannel.appId || savedChannel.robotId));
+      }
+
+      bundledPackage = packageResponses.some((resp) => isInstalledPackage(resp.data, channel.packageName));
+      configured = configHasPlugin(config, channel);
+      detected = bundledPackage || configured;
     }
-
-    const bundledPackage = packageResponses.some((resp) => isInstalledPackage(resp.data, channel.packageName));
-    const configured = configHasPlugin(config, channel);
-    const detected = bundledPackage || configured;
 
     setPluginStatus(detected ? 'installed' : 'missing');
     setStatusMessage(
@@ -90,7 +147,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
     appendMainLog(`[${channel.title}] 插件检测：${detected ? '已预置/已安装' : '未检测到'}\n`);
     setChecking(false);
     return detected;
-  }, [appendMainLog, channel]);
+  }, [appendMainLog, channel, runLocalPluginCheck]);
 
   useEffect(() => {
     checkPlugin().catch((error) => {

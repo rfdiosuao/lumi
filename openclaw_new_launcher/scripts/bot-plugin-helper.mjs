@@ -5,23 +5,37 @@ import { pathToFileURL } from 'node:url';
 
 const rootDir = process.cwd();
 const nodeExe = process.execPath;
-const openclawMjs = path.join(rootDir, 'node_modules', 'openclaw', 'openclaw.mjs');
 const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(rootDir, 'data', '.openclaw');
 const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, 'openclaw.json');
 const extensionsDir = path.join(stateDir, 'extensions');
+
+function firstExisting(candidates) {
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+}
+
+const openclawMjs = firstExisting([
+  path.join(rootDir, 'node_modules', 'openclaw', 'openclaw.mjs'),
+  path.join(rootDir, 'SystemData', '.core', 'node_modules', 'openclaw', 'openclaw.mjs'),
+]);
 
 const channels = {
   feishu: {
     title: '飞书机器人',
     pluginId: 'openclaw-lark',
     packageName: '@larksuite/openclaw-lark',
-    packageDir: path.join(rootDir, 'node_modules', '@larksuite', 'openclaw-lark'),
+    packageDir: firstExisting([
+      path.join(rootDir, 'node_modules', '@larksuite', 'openclaw-lark'),
+      path.join(rootDir, 'SystemData', '.core', 'node_modules', '@larksuite', 'openclaw-lark'),
+    ]),
   },
   weixin: {
     title: '微信机器人',
     pluginId: 'openclaw-weixin',
     packageName: '@tencent-weixin/openclaw-weixin',
-    packageDir: path.join(rootDir, 'node_modules', '@tencent-weixin', 'openclaw-weixin'),
+    packageDir: firstExisting([
+      path.join(rootDir, 'node_modules', '@tencent-weixin', 'openclaw-weixin'),
+      path.join(rootDir, 'SystemData', '.core', 'node_modules', '@tencent-weixin', 'openclaw-weixin'),
+    ]),
   },
 };
 
@@ -121,9 +135,42 @@ function updateOpenClawConfig(channel) {
   log(`[launcher] 已写入 OpenClaw 配置：${configPath}`);
 }
 
+function readChannelConfig(channelKey, channel) {
+  const data = readJson(configPath, {});
+  const saved = data?.channels?.[channel.pluginId] || (channelKey === 'feishu' ? data?.channels?.feishu : null);
+  const entries = data?.plugins?.entries || {};
+  const loadPaths = data?.plugins?.load?.paths || [];
+  const packageJsonPath = path.join(channel.packageDir, 'package.json');
+  const extensionPath = path.join(extensionsDir, channel.pluginId);
+  const extensionPackagePath = path.join(extensionPath, 'package.json');
+  const packageData = readJson(packageJsonPath, null);
+  const extensionPackageData = readJson(extensionPackagePath, null);
+  const configuredByPath = Array.isArray(loadPaths)
+    ? loadPaths.some((item) => String(item).toLowerCase().includes(channel.pluginId.toLowerCase()))
+    : false;
+
+  return {
+    packageInstalled: packageData?.name === channel.packageName,
+    extensionInstalled: extensionPackageData?.name === channel.packageName,
+    configured: Boolean(entries?.[channel.pluginId]?.enabled || configuredByPath || saved?.enabled),
+    savedId: saved?.appId || saved?.robotId || '',
+    paths: {
+      packageJsonPath,
+      extensionPath,
+      configPath,
+    },
+  };
+}
+
 function openclawEnv() {
-  const nodeDir = path.join(rootDir, 'node');
-  const binDir = path.join(rootDir, 'node_modules', '.bin');
+  const nodeDir = firstExisting([
+    path.join(rootDir, 'node'),
+    path.join(rootDir, 'SystemData', '.core', 'node'),
+  ]);
+  const binDir = firstExisting([
+    path.join(rootDir, 'node_modules', '.bin'),
+    path.join(rootDir, 'SystemData', '.core', 'node_modules', '.bin'),
+  ]);
   const currentPath = process.env.Path || process.env.PATH || '';
   return {
     ...process.env,
@@ -156,12 +203,14 @@ function patchWeixinFetchHeaders(channel) {
   }
 }
 
-function runOpenClaw(args) {
+function runOpenClaw(args, options = {}) {
   if (!fs.existsSync(openclawMjs)) {
     fail(`找不到 OpenClaw 本体：${openclawMjs}`);
   }
 
+  const timeoutMs = Number(options.timeoutMs || 0);
   return new Promise((resolve, reject) => {
+    let settled = false;
     const child = spawn(nodeExe, [openclawMjs, ...args], {
       cwd: rootDir,
       env: openclawEnv(),
@@ -169,19 +218,31 @@ function runOpenClaw(args) {
       windowsHide: true,
     });
 
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback();
+    };
+
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      child.kill();
+      finish(() => reject(new Error(`OpenClaw 命令超时：${args.join(' ')}`)));
+    }, timeoutMs) : null;
+
     child.stdout.on('data', (chunk) => process.stdout.write(chunk));
     child.stderr.on('data', (chunk) => process.stderr.write(chunk));
-    child.on('error', reject);
+    child.on('error', (error) => finish(() => reject(error)));
     child.on('close', (code, signal) => {
       if (signal) {
-        reject(new Error(`OpenClaw 命令被终止：${signal}`));
+        finish(() => reject(new Error(`OpenClaw 命令被终止：${signal}`)));
         return;
       }
       if (code !== 0) {
-        reject(new Error(`OpenClaw 命令退出码：${code}`));
+        finish(() => reject(new Error(`OpenClaw 命令退出码：${code}`)));
         return;
       }
-      resolve();
+      finish(resolve);
     });
   });
 }
@@ -202,12 +263,22 @@ async function install(channelKey) {
 
   try {
     log('[launcher] 刷新 OpenClaw 插件索引...');
-    await runOpenClaw(['plugins', 'registry', '--refresh']);
+    await runOpenClaw(['plugins', 'registry', '--refresh'], { timeoutMs: 20_000 });
   } catch (error) {
     log(`[launcher] 插件索引刷新未完成，可在重启核心服务后自动生效：${error.message}`);
   }
 
   log(`[launcher] ${channel.title}插件已安装到本地配置。`);
+}
+
+async function check(channelKey) {
+  const channel = channels[channelKey];
+  if (!channel) fail(`未知插件：${channelKey}`);
+  const status = readChannelConfig(channelKey, channel);
+  process.stdout.write(`${JSON.stringify({
+    ...status,
+    installed: status.packageInstalled || status.extensionInstalled || status.configured,
+  })}\n`);
 }
 
 async function loginWeixin() {
@@ -230,8 +301,13 @@ async function loginWeixin() {
     throw new Error(startResult.message || '微信二维码获取失败');
   }
 
+  log(`\n[launcher] 微信登录链接：${startResult.qrcodeUrl}`);
+  log('[launcher] 如果二维码没有显示完整，请复制上面的链接到浏览器打开。');
   log('\n用手机微信扫描以下二维码，以继续连接：\n');
-  await loginQr.displayQRCode(startResult.qrcodeUrl);
+  const rendered = await printQrCode(startResult.qrcodeUrl);
+  if (!rendered) {
+    await loginQr.displayQRCode(startResult.qrcodeUrl);
+  }
   log('\n正在等待扫码确认。完成后会自动写入本地配置；如果暂时不绑定，可以点击“停止命令”。\n');
 
   const waitResult = await loginQr.waitForWeixinLogin({
@@ -263,11 +339,14 @@ async function loginWeixin() {
 async function printQrCode(url) {
   try {
     const qrcode = await import('qrcode-terminal');
-    qrcode.default.generate(url, { small: true });
+    qrcode.default.generate(url, { small: false });
   } catch {
     log('[launcher] 二维码渲染组件不可用，请复制下面链接打开：');
+    log(url);
+    return false;
   }
   log(url);
+  return true;
 }
 
 async function postFeishuForm(baseUrl, params) {
@@ -389,12 +468,14 @@ const [command, channelKey] = process.argv.slice(2);
 try {
   if (command === 'install') {
     await install(channelKey);
+  } else if (command === 'check') {
+    await check(channelKey);
   } else if (command === 'login-feishu') {
     await loginFeishu();
   } else if (command === 'login-weixin') {
     await loginWeixin();
   } else {
-    fail('用法：node scripts/bot-plugin-helper.mjs install feishu|weixin 或 login-feishu 或 login-weixin');
+    fail('用法：node scripts/bot-plugin-helper.mjs check|install feishu|weixin 或 login-feishu 或 login-weixin');
   }
 } catch (error) {
   fail(error?.message || String(error));

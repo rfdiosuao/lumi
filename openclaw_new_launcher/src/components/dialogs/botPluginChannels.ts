@@ -11,6 +11,7 @@ export const CHANNELS: Record<BotChannelKey, BotChannel> = {
     packageName: '@larksuite/openclaw-lark',
     packagePaths: [
       'node_modules/@larksuite/openclaw-lark/package.json',
+      'SystemData/.core/node_modules/@larksuite/openclaw-lark/package.json',
       'data/.openclaw/extensions/openclaw-lark/package.json',
       'data/.openclaw/extensions/lark/package.json',
     ],
@@ -41,6 +42,7 @@ export const CHANNELS: Record<BotChannelKey, BotChannel> = {
     packageName: '@tencent-weixin/openclaw-weixin',
     packagePaths: [
       'node_modules/@tencent-weixin/openclaw-weixin/package.json',
+      'SystemData/.core/node_modules/@tencent-weixin/openclaw-weixin/package.json',
       'data/.openclaw/extensions/openclaw-weixin/package.json',
       'data/.openclaw/extensions/weixin/package.json',
       'data/.openclaw/extensions/wechat/package.json',
