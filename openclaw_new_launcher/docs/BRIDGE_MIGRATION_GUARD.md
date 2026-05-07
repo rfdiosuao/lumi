@@ -36,7 +36,13 @@ The first low-risk endpoints have been moved to native FastAPI routes:
 | `/api/config/write` | FastAPI native |
 | `/api/auth/profiles` | FastAPI native |
 | `/api/diagnostics/run` | FastAPI native |
+| `/api/diagnostics/export` | FastAPI native |
+| `/api/update/check` | FastAPI native |
 | `/api/skills/list` | FastAPI native |
+| `/api/skills/install_zip` | FastAPI native |
+| `/api/skills/enable` | FastAPI native |
+| `/api/skills/uninstall` | FastAPI native |
+| `/api/skills/readme` | FastAPI native |
 | `/api/skills/paths` | FastAPI native |
 
 All other endpoints still go through the legacy catch-all route until they are
@@ -96,8 +102,19 @@ Checked endpoints:
 | `/api/license/current` | `GET` | `license` |
 | `/api/license/authorized` | `POST` | `authorized` |
 | `/api/theme/current` | `GET` | `theme` |
+| `/api/theme/list` | `GET` | `themes` |
+| `/api/auth/profiles` | `GET` | `profiles` |
+| `/api/diagnostics/run` | `GET` | `checks`, `summary` |
+| `/api/diagnostics/export` | `POST` | `path`, `directory`, `filename`, `size` |
+| `/api/config/write` | `POST` | `status` |
+| `/api/config/read` | `POST` | `data` |
+| `/api/log/clear` | `POST` | `status` |
 | `/api/skills/list` | `GET` | `skills`, `directories`, `sites` |
 | `/api/skills/paths` | `GET` | `directories`, `sites` |
+| `/api/skills/install_zip` | `POST` | `skill` |
+| `/api/skills/readme` | `POST` | `id`, `path`, `content` |
+| `/api/skills/enable` | `POST` | `skill` |
+| `/api/skills/uninstall` | `POST` | `status`, `id` |
 
 ## FastAPI Migration Phases
 

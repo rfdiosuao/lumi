@@ -32,7 +32,26 @@ function Invoke-BridgeJson {
         $params.ContentType = "application/json"
         $params.Body = ($Body | ConvertTo-Json -Depth 20)
     }
-    return Invoke-RestMethod @params
+    try {
+        return Invoke-RestMethod @params
+    } catch {
+        $response = $_.Exception.Response
+        if ($null -ne $response) {
+            $stream = $response.GetResponseStream()
+            if ($null -ne $stream) {
+                $reader = [System.IO.StreamReader]::new($stream)
+                try {
+                    $text = $reader.ReadToEnd()
+                    if ($text) {
+                        throw "Bridge request failed: $Method $Url HTTP $([int]$response.StatusCode) $text"
+                    }
+                } finally {
+                    $reader.Dispose()
+                }
+            }
+        }
+        throw
+    }
 }
 
 function Assert-Property {
@@ -70,6 +89,13 @@ $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-bridge-smoke
 $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-bridge-smoke-$timestamp.err"
 $smokeConfigRelativePath = "data/.openclaw/launcher/bridge-smoke.json"
 $smokeConfigPath = Join-Path $LauncherDir $smokeConfigRelativePath
+$smokeSkillId = "bridge-smoke-skill-$timestamp"
+$smokeSkillFilename = "$smokeSkillId.zip"
+$smokeSkillSourceDir = Join-Path ([System.IO.Path]::GetTempPath()) $smokeSkillId
+$smokeSkillZipPath = Join-Path ([System.IO.Path]::GetTempPath()) $smokeSkillFilename
+$smokeSkillInstalledDir = Join-Path $LauncherDir "data\.openclaw\skills\$smokeSkillId"
+$smokeSkillUploadPath = Join-Path $LauncherDir "data\.openclaw\launcher\skill-uploads\$smokeSkillFilename"
+$diagnosticsExportPath = $null
 $process = $null
 $previousUtf8 = $env:PYTHONUTF8
 $previousIoEncoding = $env:PYTHONIOENCODING
@@ -77,6 +103,33 @@ $previousDontWriteBytecode = $env:PYTHONDONTWRITEBYTECODE
 $previousRequireFastApi = $env:OPENCLAW_BRIDGE_REQUIRE_FASTAPI
 
 try {
+    if (Test-Path -LiteralPath $smokeSkillSourceDir) {
+        Remove-Item -LiteralPath $smokeSkillSourceDir -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $smokeSkillZipPath) {
+        Remove-Item -LiteralPath $smokeSkillZipPath -Force
+    }
+    New-Item -ItemType Directory -Path $smokeSkillSourceDir -Force | Out-Null
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $skillJson = @{
+        id = $smokeSkillId
+        name = "Bridge Smoke Skill"
+        version = "0.0.1"
+        description = "Temporary skill used by bridge smoke tests."
+        runtime = "external"
+        category = "test"
+        icon = "TS"
+    } | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText((Join-Path $smokeSkillSourceDir "skill.json"), $skillJson, $utf8NoBom)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $smokeSkillSourceDir "README.md"),
+        "# Bridge Smoke Skill`n`nTemporary README for bridge smoke tests.",
+        $utf8NoBom
+    )
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($smokeSkillSourceDir, $smokeSkillZipPath)
+    $smokeSkillData = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($smokeSkillZipPath))
+
     Write-Host "Starting Python bridge smoke test..."
     $env:PYTHONUTF8 = "1"
     $env:PYTHONIOENCODING = "utf-8"
@@ -167,7 +220,12 @@ try {
         @{ Name = "config read"; Path = "/api/config/read"; Method = "POST"; Body = @{ path = $smokeConfigRelativePath; default = @{} }; Props = @("data") },
         @{ Name = "log clear"; Path = "/api/log/clear"; Method = "POST"; Props = @("status") },
         @{ Name = "skills list"; Path = "/api/skills/list"; Method = "GET"; Props = @("skills", "directories", "sites") },
-        @{ Name = "skills paths"; Path = "/api/skills/paths"; Method = "GET"; Props = @("directories", "sites") }
+        @{ Name = "skills paths"; Path = "/api/skills/paths"; Method = "GET"; Props = @("directories", "sites") },
+        @{ Name = "skills install zip"; Path = "/api/skills/install_zip"; Method = "POST"; Body = @{ filename = $smokeSkillFilename; data = $smokeSkillData }; Props = @("skill") },
+        @{ Name = "skills readme"; Path = "/api/skills/readme"; Method = "POST"; Body = @{ id = $smokeSkillId }; Props = @("id", "path", "content") },
+        @{ Name = "skills disable"; Path = "/api/skills/enable"; Method = "POST"; Body = @{ id = $smokeSkillId; enabled = $false }; Props = @("skill") },
+        @{ Name = "skills enable"; Path = "/api/skills/enable"; Method = "POST"; Body = @{ id = $smokeSkillId; enabled = $true }; Props = @("skill") },
+        @{ Name = "skills uninstall"; Path = "/api/skills/uninstall"; Method = "POST"; Body = @{ id = $smokeSkillId }; Props = @("status", "id") }
     )
 
     foreach ($check in $checks) {
@@ -176,6 +234,16 @@ try {
         foreach ($prop in $check.Props) {
             Assert-Property -Object $response -Name $prop -Context $check.Name
         }
+    }
+
+    Write-Host "Checking diagnostics export..."
+    $exportResponse = Invoke-BridgeJson -Url "$baseUrl/api/diagnostics/export" -Headers $headers -Method "POST"
+    foreach ($prop in @("path", "directory", "filename", "size")) {
+        Assert-Property -Object $exportResponse -Name $prop -Context "diagnostics export"
+    }
+    $diagnosticsExportPath = [string]$exportResponse.path
+    if (-not (Test-Path -LiteralPath $diagnosticsExportPath)) {
+        throw "diagnostics export did not create file: $diagnosticsExportPath"
     }
 
     Write-Host "Bridge smoke check passed." -ForegroundColor Green
@@ -196,4 +264,11 @@ try {
 
     Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $smokeConfigPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $smokeSkillZipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $smokeSkillSourceDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $smokeSkillInstalledDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $smokeSkillUploadPath -Force -ErrorAction SilentlyContinue
+    if ($diagnosticsExportPath) {
+        Remove-Item -LiteralPath $diagnosticsExportPath -Force -ErrorAction SilentlyContinue
+    }
 }
