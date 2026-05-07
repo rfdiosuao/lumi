@@ -10,16 +10,19 @@ start by rewriting `python/bridge.py` directly. First we need a small behavior
 contract and a repeatable smoke check. After those pass, each endpoint can be
 moved to FastAPI without guessing what the old bridge used to return.
 
-Current call chain:
+Current call chain after phase 1:
 
 ```text
-React UI -> Tauri invoke(proxy_request) -> Rust -> HTTP -> Python Bridge
+React UI -> Tauri invoke(proxy_request) -> Rust -> HTTP -> FastAPI Bridge
 ```
 
-Target call chain after migration:
+The FastAPI service currently delegates endpoint behavior to the legacy route
+logic so the response contract stays stable during the migration.
+
+Target call chain after the full migration:
 
 ```text
-React UI -> Tauri/Rust security gate -> FastAPI Bridge
+React UI -> Tauri/Rust security gate -> FastAPI routers
 ```
 
 ## Migration Rule
@@ -53,6 +56,13 @@ Run it from the repository root:
 powershell -ExecutionPolicy Bypass -File scripts\smoke-bridge.ps1
 ```
 
+To force the FastAPI implementation during local migration testing, run:
+
+```powershell
+python -m pip install -r openclaw_new_launcher\python\requirements.txt
+powershell -ExecutionPolicy Bypass -File scripts\smoke-bridge.ps1 -RequireFastApi
+```
+
 Checked endpoints:
 
 | Endpoint | Method | Expected shape |
@@ -73,15 +83,17 @@ Checked endpoints:
    - Keep this document and `scripts/smoke-bridge.ps1` passing.
 
 2. Skeleton phase
-   - Add `python/api/` routers and Pydantic models.
-   - Add FastAPI dependencies, but do not switch the launcher entrypoint yet.
+   - Add FastAPI dependencies.
+   - Switch the HTTP service layer to FastAPI.
+   - Keep endpoint behavior delegated to the legacy route logic.
 
 3. Shadow phase
-   - Run the old bridge and FastAPI bridge behind a development flag.
-   - Compare smoke responses for read-only endpoints.
+   - Add `python/api/` routers and Pydantic models.
+   - Move read-only endpoints first.
+   - Compare smoke responses before and after each endpoint move.
 
 4. Switch phase
-   - Replace the entrypoint only after smoke checks pass.
+   - Move protected and write endpoints only after read-only routes are stable.
    - Keep Rust license checks in place for protected endpoints.
 
 5. Cleanup phase

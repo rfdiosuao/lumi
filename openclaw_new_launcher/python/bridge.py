@@ -7,6 +7,7 @@ import datetime
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -17,6 +18,11 @@ import zipfile
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
+
+try:
+    from fastapi import Request as FastApiRequest
+except ModuleNotFoundError:
+    FastApiRequest = object
 
 # Ensure the python package root is on sys.path
 _python_dir = os.path.dirname(os.path.abspath(__file__))
@@ -859,6 +865,14 @@ class Handler(BaseHTTPRequestHandler):
         pass  # Suppress default HTTP logging
 
 
+class _FastApiCaptureHandler(Handler):
+    """Run the existing route logic under FastAPI without socket I/O."""
+
+    def _send_json(self, code: int, data: dict) -> None:
+        self._captured_code = code
+        self._captured_data = data
+
+
 def find_port(start: int = 18791, end: int = 18950) -> int:
     """Find an available port in the given range."""
     for port in range(start, end + 1):
@@ -871,14 +885,106 @@ def find_port(start: int = 18791, end: int = 18950) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    import secrets as _secrets
-    port = find_port()
-    token = _secrets.token_hex(32)
+def _legacy_headers() -> dict[str, str]:
+    return {"Access-Control-Allow-Origin": "http://tauri.localhost"}
+
+
+def _capture_legacy_route(path: str, method: str, headers, body: dict | None) -> tuple[int, dict]:
+    handler = object.__new__(_FastApiCaptureHandler)
+    handler.path = path
+    handler.headers = headers
+    handler._captured_code = 500
+    handler._captured_data = {"error": "Bridge route did not produce a response"}
+    handler._route(method, body or {})
+    return int(handler._captured_code), dict(handler._captured_data)
+
+
+async def _fastapi_dispatch(request):
+    body: dict | None = None
+    if request.method in {"POST", "PUT"}:
+        raw = await request.body()
+        if raw:
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception:
+                body = {}
+
+    path = request.url.path
+    if request.url.query:
+        path = f"{path}?{request.url.query}"
+
+    code, payload = _capture_legacy_route(path, request.method, request.headers, body)
+
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=code,
+        content=payload,
+        headers=_legacy_headers(),
+    )
+
+
+def _serve_fastapi(port: int, token: str) -> None:
+    from fastapi import FastAPI
+    import uvicorn
+
+    app = FastAPI(
+        title="OpenClaw Bridge",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+
+    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT"])
+    async def route_all(path: str, request: FastApiRequest):
+        return await _fastapi_dispatch(request)
+
+    print(f"BRIDGE_PORT={port}", flush=True)
+    print(f"BRIDGE_TOKEN={token}", flush=True)
+    print("BRIDGE_IMPL=fastapi", flush=True)
+    append_log(f"[Bridge] Started on port {port} (fastapi)\n")
+
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+    server.run()
+
+
+def _serve_legacy(port: int, token: str) -> None:
     Handler.bridge_token = token
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     actual_port = int(server.server_address[1])
     print(f"BRIDGE_PORT={actual_port}", flush=True)
     print(f"BRIDGE_TOKEN={token}", flush=True)
-    append_log(f"[Bridge] Started on port {actual_port}\n")
+    print("BRIDGE_IMPL=legacy", flush=True)
+    append_log(f"[Bridge] Started on port {actual_port} (legacy)\n")
     server.serve_forever()
+
+
+def main() -> None:
+    port = find_port()
+    token = secrets.token_hex(32)
+    Handler.bridge_token = token
+
+    preferred_impl = os.environ.get("OPENCLAW_BRIDGE_IMPL", "fastapi").strip().lower()
+    require_fastapi = os.environ.get("OPENCLAW_BRIDGE_REQUIRE_FASTAPI") == "1"
+
+    if preferred_impl != "legacy":
+        try:
+            _serve_fastapi(port, token)
+            return
+        except ModuleNotFoundError as error:
+            if require_fastapi:
+                raise
+            append_log(f"[Bridge] FastAPI unavailable, falling back to legacy bridge: {error}\n")
+
+    _serve_legacy(port, token)
+
+
+if __name__ == "__main__":
+    main()

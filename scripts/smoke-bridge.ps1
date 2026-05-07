@@ -1,5 +1,7 @@
 param(
-    [int]$TimeoutSeconds = 20
+    [int]$TimeoutSeconds = 20,
+    [string]$PythonExe = "python",
+    [switch]$RequireFastApi
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,15 +72,19 @@ $process = $null
 $previousUtf8 = $env:PYTHONUTF8
 $previousIoEncoding = $env:PYTHONIOENCODING
 $previousDontWriteBytecode = $env:PYTHONDONTWRITEBYTECODE
+$previousRequireFastApi = $env:OPENCLAW_BRIDGE_REQUIRE_FASTAPI
 
 try {
     Write-Host "Starting Python bridge smoke test..."
     $env:PYTHONUTF8 = "1"
     $env:PYTHONIOENCODING = "utf-8"
     $env:PYTHONDONTWRITEBYTECODE = "1"
+    if ($RequireFastApi) {
+        $env:OPENCLAW_BRIDGE_REQUIRE_FASTAPI = "1"
+    }
 
     $process = Start-Process `
-        -FilePath "python" `
+        -FilePath $PythonExe `
         -ArgumentList "`"$BridgePath`"" `
         -WorkingDirectory $LauncherDir `
         -RedirectStandardOutput $stdoutPath `
@@ -88,9 +94,10 @@ try {
 
     $port = $null
     $token = $null
+    $impl = $null
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 
-    while ([DateTime]::UtcNow -lt $deadline -and (-not $port -or -not $token)) {
+    while ([DateTime]::UtcNow -lt $deadline -and (-not $port -or -not $token -or ($RequireFastApi -and -not $impl))) {
         if ($process.HasExited) {
             $stderrText = Get-FileText -Path $stderrPath
             throw "Bridge exited before becoming ready. $stderrText"
@@ -106,9 +113,13 @@ try {
                 $token = $Matches[1]
                 Write-Host "Bridge token received."
             }
+            if (-not $impl -and $line -match "^BRIDGE_IMPL=(.+)$") {
+                $impl = $Matches[1]
+                Write-Host "Bridge implementation: $impl"
+            }
         }
 
-        if (-not $port -or -not $token) {
+        if (-not $port -or -not $token -or ($RequireFastApi -and -not $impl)) {
             Start-Sleep -Milliseconds 100
         }
     }
@@ -117,6 +128,9 @@ try {
         $stderrText = Get-FileText -Path $stderrPath
         $stdoutText = Get-FileText -Path $stdoutPath
         throw "Bridge did not become ready within ${TimeoutSeconds}s.`nSTDOUT:`n$stdoutText`nSTDERR:`n$stderrText"
+    }
+    if ($RequireFastApi -and $impl -ne "fastapi") {
+        throw "Expected FastAPI bridge implementation, got: $impl"
     }
 
     $baseUrl = "http://127.0.0.1:$port"
@@ -161,6 +175,7 @@ try {
     $env:PYTHONUTF8 = $previousUtf8
     $env:PYTHONIOENCODING = $previousIoEncoding
     $env:PYTHONDONTWRITEBYTECODE = $previousDontWriteBytecode
+    $env:OPENCLAW_BRIDGE_REQUIRE_FASTAPI = $previousRequireFastApi
 
     if ($process -and -not $process.HasExited) {
         try {

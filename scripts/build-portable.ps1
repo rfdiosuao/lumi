@@ -231,6 +231,30 @@ function Remove-PythonCacheFiles {
         Remove-Item -Force
 }
 
+function Install-PythonBridgeDependencies {
+    param([string]$PackageDir)
+
+    $requirements = Join-Path $LauncherDir "python\requirements.txt"
+    $target = Join-Path $PackageDir "_up_\python"
+
+    if (-not (Test-Path -LiteralPath $requirements)) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $target)) {
+        throw "Python bridge target not found: $target"
+    }
+
+    & python -m pip install `
+        --disable-pip-version-check `
+        --no-warn-script-location `
+        --upgrade `
+        --target $target `
+        -r $requirements
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip install Python bridge dependencies failed with exit code $LASTEXITCODE"
+    }
+}
+
 function Expand-PortablePayloadForBuild {
     param([string]$PackageDir)
 
@@ -444,6 +468,8 @@ Invoke-Step "Create portable directory" {
         -Destination (Join-Path $packageDir "_up_\python") `
         -ExcludeDirs @("__pycache__") `
         -ExcludeFiles @("*.pyc", "*.pyo")
+
+    Install-PythonBridgeDependencies -PackageDir $packageDir
 
     Copy-Directory `
         -Source (Join-Path $LauncherDir "data\themes") `
