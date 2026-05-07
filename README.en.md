@@ -1,36 +1,86 @@
-# Lumi
+# Lumi / OpenClaw Portable Launcher
 
-#### Description
-{**When you're done, you can delete the content in this README and update the file with details for others getting started with your repository**}
+Lumi is a merchant-facing portable desktop launcher for OpenClaw. It packages the launcher UI, Python bridge, offline OpenClaw runtime, license activation, AI image/video tools, ad storyboard workflow, and bot binding utilities into a customer-ready desktop experience.
 
-#### Software Architecture
-Software architecture description
+Main version: `v2.0.1`
 
-#### Installation
+## Repository Layout
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+```text
+.
+├─ openclaw_new_launcher/      # Tauri + React + Python Bridge launcher
+├─ license_server/             # Online license server
+├─ scripts/                    # Local verification, packaging, release scripts
+├─ docs/                       # Project-level documents
+├─ release/                    # Local build outputs, not committed
+└─ openclaw_launcher/          # Legacy Python launcher, kept for reference
+```
 
-#### Instructions
+## Development
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+Recommended environment:
 
-#### Contribution
+- Windows 10/11
+- Node.js 20+
+- Rust stable
+- Python 3.11+
 
-1.  Fork the repository
-2.  Create Feat_xxx branch
-3.  Commit your code
-4.  Create Pull Request
+```powershell
+cd openclaw_new_launcher
+npm ci
+npm run build
+npm run tauri dev
+```
 
+Run local checks:
 
-#### Gitee Feature
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1
+```
 
-1.  You can use Readme\_XXX.md to support different languages, such as Readme\_en.md, Readme\_zh.md
-2.  Gitee blog [blog.gitee.com](https://blog.gitee.com)
-3.  Explore open source project [https://gitee.com/explore](https://gitee.com/explore)
-4.  The most valuable open source project [GVP](https://gitee.com/gvp)
-5.  The manual of Gitee [https://gitee.com/help](https://gitee.com/help)
-6.  The most popular members  [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+## Windows Portable Package
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -Version 2.0.1 -PackageName OpenClaw-Portable-v2.0.1-YYYY.MM.DD
+```
+
+The final customer package should contain only:
+
+- `OpenClaw.exe`
+- `OpenClawFiles/`
+
+It must not include license files, install IDs, API keys, user bot bindings, build caches, or historical release artifacts.
+
+## macOS Migration
+
+Read these documents before building on macOS:
+
+- `openclaw_new_launcher/docs/MAC_BUILD_NOTES.md`
+- `openclaw_new_launcher/docs/MAC_MIGRATION_CHECKLIST.md`
+- `openclaw_new_launcher/docs/RUNTIME_PATHS.md`
+
+Basic macOS workflow:
+
+```bash
+cd openclaw_new_launcher
+npm ci
+npm run build
+npm run tauri dev
+npm run tauri build -- --bundles app,dmg
+```
+
+Do not reuse Windows `node_modules`, `src-tauri/target`, Windows Node runtime, or `.exe` files on macOS.
+
+## Security Rules
+
+Never commit or ship:
+
+- License server private keys, backend tokens, database files
+- `data/license.json`
+- `data/install_id.txt`
+- Customer API keys
+- Customer WeChat/Feishu bot cache
+- `node_modules/`
+- `dist/`
+- `src-tauri/target/`
+- `release/`
