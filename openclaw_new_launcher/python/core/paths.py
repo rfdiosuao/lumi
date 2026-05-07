@@ -51,9 +51,15 @@ class AppPaths:
             os.path.join(self.base_path, "node"),
         ]
         for path in candidates:
-            if os.path.exists(os.path.join(path, "node.exe")):
+            if any(os.path.exists(os.path.join(path, name)) for name in self.node_binary_names()):
                 return path
         return candidates[-1]
+
+    @staticmethod
+    def node_binary_names() -> tuple[str, ...]:
+        if os.name == "nt":
+            return ("node.exe", "node")
+        return ("node", "node.exe")
 
     def find_file(self, filename: str, search_dirs: tuple[str, ...] = ("", "back", "backup", "SystemData")) -> str:
         for directory in search_dirs:
@@ -68,11 +74,23 @@ class AppPaths:
 
     @property
     def node_exe(self) -> str:
-        return os.path.join(self.node_dir, "node.exe")
+        for name in self.node_binary_names():
+            path = os.path.join(self.node_dir, name)
+            if os.path.exists(path):
+                return path
+        return os.path.join(self.node_dir, self.node_binary_names()[0])
 
     @property
     def pnpm_cli(self) -> str:
-        return os.path.join(self.node_dir, "node_modules", "pnpm", "bin", "pnpm.cjs")
+        candidates = [
+            os.path.join(self.node_dir, "node_modules", "pnpm", "bin", "pnpm.cjs"),
+            os.path.join(self.base_path, "node_modules", "pnpm", "bin", "pnpm.cjs"),
+            os.path.join(self.base_path, "SystemData", ".core", "node_modules", "pnpm", "bin", "pnpm.cjs"),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return candidates[0]
 
     @property
     def data_dir(self) -> str:
@@ -137,11 +155,28 @@ class AppPaths:
 
     @property
     def openclaw_mjs(self) -> str:
-        return os.path.join(self.base_path, "node_modules", "openclaw", "openclaw.mjs")
+        candidates = [
+            os.path.join(self.base_path, "node_modules", "openclaw", "openclaw.mjs"),
+            os.path.join(self.base_path, "SystemData", ".core", "node_modules", "openclaw", "openclaw.mjs"),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return candidates[0]
 
     def process_env(self) -> dict[str, str]:
         env = os.environ.copy()
         env["OPENCLAW_HOME"] = self.data_dir
         env["OPENCLAW_STATE_DIR"] = self.state_dir
         env["OPENCLAW_CONFIG_PATH"] = self.openclaw_config
+        path_entries = [
+            self.node_dir,
+            os.path.join(self.base_path, "node_modules", ".bin"),
+            os.path.join(self.base_path, "SystemData", ".core", "node_modules", ".bin"),
+        ]
+        existing_path = env.get("Path") or env.get("PATH") or ""
+        portable_path = os.pathsep.join([entry for entry in path_entries if entry])
+        merged_path = portable_path if not existing_path else f"{portable_path}{os.pathsep}{existing_path}"
+        env["PATH"] = merged_path
+        env["Path"] = merged_path
         return env

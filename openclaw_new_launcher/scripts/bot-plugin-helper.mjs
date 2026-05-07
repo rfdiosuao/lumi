@@ -5,7 +5,11 @@ import { pathToFileURL } from 'node:url';
 
 const rootDir = process.cwd();
 const nodeExe = process.execPath;
-const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(rootDir, 'data', '.openclaw');
+const envHome = process.env.OPENCLAW_HOME || '';
+const dataDir = envHome && path.basename(envHome) !== '.openclaw'
+  ? envHome
+  : path.join(rootDir, 'data');
+const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(dataDir, '.openclaw');
 const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, 'openclaw.json');
 const extensionsDir = path.join(stateDir, 'extensions');
 
@@ -179,7 +183,7 @@ function openclawEnv() {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG: configPath,
     OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_HOME: stateDir,
+    OPENCLAW_HOME: dataDir,
     OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT || '18790',
     NO_COLOR: '1',
   };

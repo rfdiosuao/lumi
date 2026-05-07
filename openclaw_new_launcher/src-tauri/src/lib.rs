@@ -33,22 +33,38 @@ fn portable_base_dir() -> Result<std::path::PathBuf, String> {
     Ok(exe_dir.to_path_buf())
 }
 
+fn python_binary_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["python.exe", "python"]
+    } else {
+        &["python3", "python"]
+    }
+}
+
 fn bridge_python_exe(py_path: &std::path::Path) -> std::path::PathBuf {
     if let Some(bridge_dir) = py_path.parent() {
-        let local_python = bridge_dir.join("python.exe");
-        if local_python.exists() {
-            return local_python;
+        for binary_name in python_binary_names() {
+            let local_python = bridge_dir.join(binary_name);
+            if local_python.exists() {
+                return local_python;
+            }
         }
 
         if let Some(resource_dir) = bridge_dir.parent() {
-            let runtime_python = resource_dir.join("python-runtime").join("python.exe");
-            if runtime_python.exists() {
-                return runtime_python;
+            for binary_name in python_binary_names() {
+                let runtime_python = resource_dir.join("python-runtime").join(binary_name);
+                if runtime_python.exists() {
+                    return runtime_python;
+                }
             }
         }
     }
 
-    std::path::PathBuf::from("python")
+    if cfg!(windows) {
+        std::path::PathBuf::from("python")
+    } else {
+        std::path::PathBuf::from("python3")
+    }
 }
 
 fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
