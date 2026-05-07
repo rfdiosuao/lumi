@@ -28,14 +28,21 @@ export interface ImageConfig {
 
 // === Video ===
 export interface VideoConfig {
+  providerId: VideoProviderId;
+  apiBase: string;
+  model: string;
   dashKey: string;
 }
+
+export type VideoProviderId = 'dashscope' | 'seedance' | 'custom';
 
 export type VideoMode = 't2v' | 'i2v';
 
 export interface VideoGenerationParams {
   prompt: string;
   mode: VideoMode;
+  providerId?: VideoProviderId;
+  apiBase?: string;
   model?: string;
   resolution?: string;
   duration?: number;

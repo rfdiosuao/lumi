@@ -3,7 +3,8 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { Button, Input, TextArea, Select, Loading, showToast, FieldLabel } from '../common';
 import { imageApi, videoApi, configApi } from '../../services/api';
 import { useLogStore } from '../../stores/logStore';
-import { Scene } from '../../types';
+import { Scene, type VideoProviderId } from '../../types';
+import { VIDEO_PROVIDERS, getDefaultVideoModel, getVideoProvider } from '../../features/video/providers';
 
 type ViewKey = 'front' | 'side' | 'back';
 type FrameSlot = 'firstFrame' | 'lastFrame';
@@ -159,12 +160,30 @@ export const StoryboardPage: React.FC = () => {
   const [videoStatus, setVideoStatus] = useState('');
   const [videoPreview, setVideoPreview] = useState<{ url: string; size: number } | null>(null);
   const [videoError, setVideoError] = useState('');
-  const [dashKey, setDashKey] = useState('');
+  const [videoProviderId, setVideoProviderId] = useState<VideoProviderId>('dashscope');
+  const [videoApiKey, setVideoApiKey] = useState('');
+  const [videoApiBase, setVideoApiBase] = useState(getVideoProvider('dashscope').apiBase);
+  const [videoModel, setVideoModel] = useState(getDefaultVideoModel('dashscope', 'i2v'));
   const [saved, setSaved] = useState(false);
 
   const appendLog = useLogStore((state) => state.append);
   const currentScene = project.scenes[currentIndex] || project.scenes[0];
   const checkedCount = CHECK_KEYS.filter((item) => currentScene?.checks?.[item.key]).length;
+  const videoProvider = getVideoProvider(videoProviderId);
+  const availableVideoModels = videoProvider.models.filter((item) => item.modes.includes('i2v'));
+
+  useEffect(() => {
+    const provider = getVideoProvider(videoProviderId);
+    if (videoProviderId !== 'custom') {
+      setVideoApiBase(provider.apiBase);
+    }
+    setVideoModel((current) => {
+      if (provider.models.some((item) => item.id === current && item.modes.includes('i2v'))) {
+        return current;
+      }
+      return getDefaultVideoModel(videoProviderId, 'i2v');
+    });
+  }, [videoProviderId]);
 
   useEffect(() => {
     (async () => {
@@ -436,9 +455,19 @@ export const StoryboardPage: React.FC = () => {
       return;
     }
 
-    const cleanDashKey = dashKey.trim();
-    if (!cleanDashKey) {
-      showToast('请填写 DashScope API Key', 'error');
+    const cleanApiKey = videoApiKey.trim();
+    const cleanApiBase = videoApiBase.trim();
+    const cleanModel = videoModel.trim();
+    if (!cleanApiKey) {
+      showToast(`请填写 ${videoProvider.authLabel}`, 'error');
+      return;
+    }
+    if (!cleanModel) {
+      showToast('请填写或选择视频模型', 'error');
+      return;
+    }
+    if (videoProviderId === 'custom' && !cleanApiBase) {
+      showToast('自定义视频服务需要填写 API Base URL', 'error');
       return;
     }
 
@@ -448,7 +477,10 @@ export const StoryboardPage: React.FC = () => {
 
     try {
       const resp = await videoApi.generate({
-        dashKey: cleanDashKey,
+        providerId: videoProviderId,
+        apiBase: cleanApiBase,
+        model: cleanModel,
+        dashKey: cleanApiKey,
         prompt: composeVideoPrompt(),
         mode: 'i2v',
         resolution: '720P',
@@ -464,7 +496,7 @@ export const StoryboardPage: React.FC = () => {
       updateScene({ video: resp.path || `data:${resp.mime || 'video/mp4'};base64,${resp.video}` });
       setVideoStatus(`视频已生成${resp.size ? `，大小 ${formatBytes(resp.size)}` : ''}${resp.path ? `，保存路径：${resp.path}` : ''}`);
       showToast('视频生成成功', 'success');
-      appendLog('[分镜视频] 视频生成成功\n');
+      appendLog(`[分镜视频] ${videoProvider.label} / ${cleanModel} 视频生成成功\n`);
     } catch (error: any) {
       const message = error?.error || '生成失败';
       setVideoStatus(`失败：${message}`);
@@ -733,13 +765,53 @@ export const StoryboardPage: React.FC = () => {
 
             <div className="border-t border-white/10 pt-3">
               <div className="mb-3">
-                <FieldLabel text="DashScope API Key" required />
+                <FieldLabel text="视频服务商" required />
+                <Select
+                  value={videoProviderId}
+                  onChange={(event) => setVideoProviderId(event.target.value as VideoProviderId)}
+                  className="w-full"
+                >
+                  {VIDEO_PROVIDERS.map((provider) => (
+                    <option key={provider.id} value={provider.id}>{provider.label}</option>
+                  ))}
+                </Select>
+                <p className="mt-1 text-xs text-text-subtle">{videoProvider.description}</p>
+              </div>
+              <div className="mb-3">
+                <FieldLabel text={videoProvider.authLabel} required />
                 <Input
                   type="password"
-                  value={dashKey}
-                  onChange={(event) => setDashKey(event.target.value)}
+                  value={videoApiKey}
+                  onChange={(event) => setVideoApiKey(event.target.value)}
                   placeholder="仅本次使用，不会保存"
                   autoComplete="off"
+                />
+              </div>
+              <div className="mb-3">
+                <FieldLabel text="API Base URL" required={videoProviderId === 'custom'} />
+                <Input
+                  value={videoApiBase}
+                  onChange={(event) => setVideoApiBase(event.target.value)}
+                  placeholder="例如 https://ark.cn-beijing.volces.com"
+                />
+              </div>
+              <div className="mb-3">
+                <FieldLabel text="视频模型" required />
+                <Select
+                  value={availableVideoModels.some((item) => item.id === videoModel) ? videoModel : ''}
+                  onChange={(event) => setVideoModel(event.target.value)}
+                  className="mb-2 w-full"
+                  disabled={availableVideoModels.length === 0}
+                >
+                  <option value="">{availableVideoModels.length > 0 ? '选择预设模型' : '暂无预设模型'}</option>
+                  {availableVideoModels.map((item) => (
+                    <option key={item.id} value={item.id}>{item.label}</option>
+                  ))}
+                </Select>
+                <Input
+                  value={videoModel}
+                  onChange={(event) => setVideoModel(event.target.value)}
+                  placeholder="也可以手动输入模型 ID"
                 />
               </div>
               <div className="mb-2 flex gap-2">

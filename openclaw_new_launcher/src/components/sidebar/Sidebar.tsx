@@ -77,21 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { theme, navItems, themeMode, toggleTheme, logoUrl } = useTheme();
   const items = React.useMemo(() => {
-    const source = normalizeNavItems(navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS);
-    let next = [...source];
-    const diagnosticItem: NavItem = {
-      key: 'diagnostics',
-      label: '环境诊断',
-      desc: '检查/修复启动环境',
-      icon: 'FIX',
-      group: '维护',
-      accent: true,
-    };
-    if (!next.some((item) => item.key === 'diagnostics')) {
-      const updateIndex = next.findIndex((item) => item.key === 'update');
-      next = updateIndex < 0 ? [...next, diagnosticItem] : [...next.slice(0, updateIndex), diagnosticItem, ...next.slice(updateIndex)];
-    }
-    return next.filter((item) => item.key !== 'delivery');
+    return normalizeNavItems(navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS);
   }, [navItems]);
   const brandName = theme.brand.name;
   const brandSubtitle = theme.brand.subtitle;

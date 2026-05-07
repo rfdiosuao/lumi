@@ -517,6 +517,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _video_generate(self, body: dict) -> None:
         client = _get_video_client()
+        provider_id = body.get("providerId", "dashscope")
+        api_base = body.get("apiBase", "")
+        model = body.get("model", "")
         dash_key = body.get("dashKey", "")
         prompt = body.get("prompt", "")
         mode = body.get("mode", "t2v")
@@ -526,7 +529,7 @@ class Handler(BaseHTTPRequestHandler):
         image_path = body.get("imagePath")
 
         if not dash_key:
-            self._error(400, "DashScope API Key 不能为空")
+            self._error(400, "视频服务密钥不能为空")
             return
         if not prompt:
             self._error(400, "提示词不能为空")
@@ -552,7 +555,16 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             video_bytes = client.generate(
-                dash_key, prompt, mode, resolution, duration, ratio, image_path
+                dash_key,
+                prompt,
+                mode,
+                resolution,
+                duration,
+                ratio,
+                image_path,
+                provider_id=provider_id,
+                api_base=api_base,
+                model=model,
             )
             video_dir = os.path.join(paths.data_dir, "videos")
             os.makedirs(video_dir, exist_ok=True)

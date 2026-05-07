@@ -105,6 +105,9 @@ export const imageApi = {
 // === Video API ===
 export const videoApi = {
   generate: (params: {
+    providerId?: import('../types').VideoProviderId;
+    apiBase?: string;
+    model?: string;
     dashKey: string;
     prompt: string;
     mode: string;

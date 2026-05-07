@@ -1,10 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sidebar } from './components/sidebar/Sidebar';
-import { TerminalPage } from './components/terminal/TerminalPage';
-import { LicensePage } from './components/license/LicensePage';
-import { ImagePage } from './components/image/ImagePage';
-import { VideoPage } from './components/video/VideoPage';
-import { DiagnosticsPage } from './components/diagnostics/DiagnosticsPage';
 import { WindowTitlebar } from './components/window/WindowTitlebar';
 import { ToastContainer, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
@@ -14,8 +9,9 @@ import { open } from '@tauri-apps/plugin-shell';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ThemeProvider } from './providers/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
+import { getFeatureDefinition } from './features/registry';
+import { renderFeaturePage } from './features/pages';
 
-import { StoryboardPage } from './components/storyboard/StoryboardPage';
 import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
 import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
 
@@ -48,9 +44,7 @@ function hasConfiguredApiProfile(data: unknown): boolean {
 export default function App() {
   const { currentPage, setCurrentPage, serviceRunning, setServiceRunning, serviceStatus, setServiceStatus, isAuthorized, isLicenseChecking, checkLicense } = useAppStore();
   const appendLog = useLogStore((s) => s.append);
-  const [showApiConfig, setShowApiConfig] = useState(false);
-  const [showFeishuConfig, setShowFeishuConfig] = useState(false);
-  const [showWeixinConfig, setShowWeixinConfig] = useState(false);
+  const [activeDialog, setActiveDialog] = useState<'api' | 'feishu' | 'weixin' | null>(null);
   const [apiConfigured, setApiConfigured] = useState(false);
   const logInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -134,18 +128,25 @@ export default function App() {
   };
 
   const handleNavigate = async (key: string) => {
-    // Protected pages
-    if (['storyboard', 'image', 'video'].includes(key) && !isAuthorized) {
+    const feature = getFeatureDefinition(key);
+
+    if (feature?.requiresLicense && !isAuthorized) {
       showToast('请先输入授权码完成在线激活', 'info');
       setCurrentPage('license');
       return;
     }
 
-    if (key === 'web') {
-      open('http://127.0.0.1:18790');
+    if (feature?.action.type === 'external') {
+      open(feature.action.url);
       return;
     }
-    if (key === 'update') {
+
+    if (feature?.action.type === 'dialog') {
+      setActiveDialog(feature.action.dialog);
+      return;
+    }
+
+    if (feature?.action.type === 'command' && feature.action.command === 'update') {
       try {
         const resp = await updateApi.check();
         if (resp.hasUpdate) {
@@ -167,36 +168,12 @@ export default function App() {
       }
       return;
     }
-    if (key === 'help') {
-      open('https://heang.top/docs.html');
-      return;
-    }
-    if (key === 'api') {
-      setShowApiConfig(true);
-      return;
-    }
-    if (key === 'feishu') {
-      setShowFeishuConfig(true);
-      return;
-    }
-    if (key === 'weixin') {
-      setShowWeixinConfig(true);
-      return;
-    }
 
     setCurrentPage(key);
   };
 
   const renderPage = () => {
-    switch (currentPage) {
-      case 'terminal': return <TerminalPage />;
-      case 'license': return <LicensePage />;
-      case 'image': return <ImagePage />;
-      case 'video': return <VideoPage />;
-      case 'storyboard': return <StoryboardPage />;
-      case 'diagnostics': return <DiagnosticsPage />;
-      default: return <TerminalPage />;
-    }
+    return renderFeaturePage(currentPage);
   };
 
   return (
@@ -221,9 +198,9 @@ export default function App() {
         </div>
 
         <ToastContainer />
-        {showApiConfig && <ModernApiConfigDialog onClose={() => setShowApiConfig(false)} onSaved={refreshApiConfigured} />}
-        {showFeishuConfig && <FeishuConfigDialog onClose={() => setShowFeishuConfig(false)} />}
-        {showWeixinConfig && <WeixinConfigDialog onClose={() => setShowWeixinConfig(false)} />}
+        {activeDialog === 'api' && <ModernApiConfigDialog onClose={() => setActiveDialog(null)} onSaved={refreshApiConfigured} />}
+        {activeDialog === 'feishu' && <FeishuConfigDialog onClose={() => setActiveDialog(null)} />}
+        {activeDialog === 'weixin' && <WeixinConfigDialog onClose={() => setActiveDialog(null)} />}
       </div>
     </ThemeProvider>
   );

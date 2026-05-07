@@ -3,6 +3,8 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { Button, FieldLabel, Input, Loading, Select, TextArea, showToast } from '../common';
 import { videoApi } from '../../services/api';
 import { useLogStore } from '../../stores/logStore';
+import type { VideoMode, VideoProviderId } from '../../types';
+import { VIDEO_PROVIDERS, getDefaultVideoModel, getVideoProvider } from '../../features/video/providers';
 
 const RESOLUTIONS = ['720P', '1080P'];
 const DURATIONS = [5, 10];
@@ -79,9 +81,12 @@ function formatBytes(size: number): string {
 }
 
 export const VideoPage: React.FC = () => {
-  const [dashKey, setDashKey] = useState('');
+  const [providerId, setProviderId] = useState<VideoProviderId>('dashscope');
+  const [apiKey, setApiKey] = useState('');
+  const [apiBase, setApiBase] = useState(getVideoProvider('dashscope').apiBase);
+  const [model, setModel] = useState(getDefaultVideoModel('dashscope', 't2v'));
   const [prompt, setPrompt] = useState('');
-  const [mode, setMode] = useState<'t2v' | 'i2v'>('t2v');
+  const [mode, setMode] = useState<VideoMode>('t2v');
   const [resolution, setResolution] = useState('720P');
   const [duration, setDuration] = useState(5);
   const [ratio, setRatio] = useState('16:9');
@@ -93,6 +98,21 @@ export const VideoPage: React.FC = () => {
   const [videoError, setVideoError] = useState('');
 
   const appendLog = useLogStore((s) => s.append);
+  const provider = getVideoProvider(providerId);
+  const availableModels = provider.models.filter((item) => item.modes.includes(mode));
+
+  React.useEffect(() => {
+    const nextProvider = getVideoProvider(providerId);
+    if (providerId !== 'custom') {
+      setApiBase(nextProvider.apiBase);
+    }
+    setModel((current) => {
+      if (nextProvider.models.some((item) => item.id === current && item.modes.includes(mode))) {
+        return current;
+      }
+      return getDefaultVideoModel(providerId, mode);
+    });
+  }, [providerId, mode]);
 
   React.useEffect(() => () => {
     if (resultVideo?.blobUrl) {
@@ -120,10 +140,20 @@ export const VideoPage: React.FC = () => {
   };
 
   const handleGenerate = async () => {
-    const cleanDashKey = dashKey.trim();
+    const cleanApiKey = apiKey.trim();
+    const cleanApiBase = apiBase.trim();
+    const cleanModel = model.trim();
     const cleanPrompt = prompt.trim();
-    if (!cleanDashKey || !cleanPrompt) {
-      showToast('请填写 DashScope API Key 和提示词', 'error');
+    if (!cleanApiKey || !cleanPrompt) {
+      showToast(`请填写 ${provider.authLabel} 和提示词`, 'error');
+      return;
+    }
+    if (!cleanModel) {
+      showToast('请填写或选择视频模型', 'error');
+      return;
+    }
+    if (providerId === 'custom' && !cleanApiBase) {
+      showToast('自定义视频服务需要填写 API Base URL', 'error');
       return;
     }
     if (mode === 'i2v' && !imageBase64) {
@@ -138,7 +168,10 @@ export const VideoPage: React.FC = () => {
 
     try {
       const resp = await videoApi.generate({
-        dashKey: cleanDashKey,
+        providerId,
+        apiBase: cleanApiBase,
+        model: cleanModel,
+        dashKey: cleanApiKey,
         prompt: cleanPrompt,
         mode,
         resolution,
@@ -156,7 +189,7 @@ export const VideoPage: React.FC = () => {
 
       const savedMessage = resp.path ? `视频生成成功，已保存到：${resp.path}` : '视频生成成功';
       showToast(savedMessage, 'success');
-      appendLog(`[视频] 生成成功，大小 ${formatBytes(result.size)}${resp.path ? `，保存路径：${resp.path}` : ''}\n`);
+      appendLog(`[视频] ${provider.label} / ${cleanModel} 生成成功，大小 ${formatBytes(result.size)}${resp.path ? `，保存路径：${resp.path}` : ''}\n`);
     } catch (error: any) {
       const message = error?.error || '生成失败';
       showToast(message, 'error');
@@ -197,14 +230,74 @@ export const VideoPage: React.FC = () => {
         <div className="max-w-3xl rounded-lg border border-border bg-surface-alt p-6">
           <div className="space-y-4">
             <div>
-              <FieldLabel text="DashScope API Key" required />
+              <FieldLabel text="视频服务商" required />
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                {VIDEO_PROVIDERS.map((item) => {
+                  const active = item.id === providerId;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setProviderId(item.id)}
+                      className={`min-h-[96px] rounded-lg border px-4 py-3 text-left transition-all ${
+                        active
+                          ? 'border-border-strong bg-accent-soft text-text shadow-[0_0_22px_rgba(37,99,235,0.16)]'
+                          : 'border-border bg-surface text-text-muted hover:border-border-strong hover:bg-hover'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold">{item.label}</div>
+                      <div className="mt-1 text-xs leading-5 text-text-subtle">{item.description}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <FieldLabel text={provider.authLabel} required />
               <Input
                 type="password"
-                value={dashKey}
-                onChange={(event) => setDashKey(event.target.value)}
-                placeholder="每次启动后需手动填写，不会保存到本地"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder={`${provider.authPlaceholder}，每次启动后需手动填写，不会保存到本地`}
                 autoComplete="off"
               />
+            </div>
+
+            <div>
+              <FieldLabel text="API Base URL" required={providerId === 'custom'} />
+              <Input
+                value={apiBase}
+                onChange={(event) => setApiBase(event.target.value)}
+                placeholder="例如 https://dashscope.aliyuncs.com/api/v1"
+              />
+              {provider.docsUrl && (
+                <a className="mt-1 inline-block text-xs text-accent hover:underline" href={provider.docsUrl} target="_blank" rel="noreferrer">
+                  查看服务商文档
+                </a>
+              )}
+            </div>
+
+            <div>
+              <FieldLabel text="视频模型" required />
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Select
+                  value={availableModels.some((item) => item.id === model) ? model : ''}
+                  onChange={(event) => setModel(event.target.value)}
+                  className="w-full"
+                  disabled={availableModels.length === 0}
+                >
+                  <option value="">{availableModels.length > 0 ? '选择预设模型' : '暂无预设模型'}</option>
+                  {availableModels.map((item) => (
+                    <option key={item.id} value={item.id}>{item.label}</option>
+                  ))}
+                </Select>
+                <Input
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  placeholder="也可以手动输入模型 ID"
+                />
+              </div>
             </div>
 
             <div className="flex gap-3">

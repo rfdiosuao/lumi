@@ -28,6 +28,20 @@ def _http_error_message(error: urllib.error.HTTPError) -> str:
         return f"HTTP {error.code}"
 
 
+def _api_error_message(data: dict, fallback: str) -> str:
+    message = data.get("message")
+    if isinstance(message, str) and message:
+        return message
+    error = data.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str) and message:
+            return message
+    if isinstance(error, str) and error:
+        return error
+    return fallback
+
+
 class DashScopeVideoClient:
     def generate(
         self,
@@ -38,23 +52,42 @@ class DashScopeVideoClient:
         duration: int,
         ratio: str,
         image_path: str | None = None,
+        provider_id: str = "dashscope",
+        api_base: str = "",
+        model: str = "",
         on_status: StatusCallback | None = None,
     ) -> bytes:
         try:
-            body = self._build_body(prompt, mode, resolution, duration, ratio, image_path)
-            task_id = self._submit_task(dash_key, body)
+            provider_id = (provider_id or "dashscope").strip().lower()
+            if provider_id in ("seedance", "custom"):
+                return self._generate_seedance_compatible(
+                    dash_key, prompt, mode, resolution, duration, ratio, image_path,
+                    api_base=api_base, model=model, on_status=on_status
+                )
+
+            body = self._build_dashscope_body(prompt, mode, resolution, duration, ratio, image_path, model)
+            task_id = self._submit_dashscope_task(dash_key, body)
             if on_status:
                 on_status(f"任务已提交：{task_id[:8]}...，等待生成", "accent")
-            return self._poll_and_download(dash_key, task_id, on_status)
+            return self._poll_dashscope_and_download(dash_key, task_id, on_status)
         except urllib.error.HTTPError as error:
             raise VideoApiError(_http_error_message(error)) from error
         except Exception as error:
             raise VideoApiError(str(error)) from error
 
-    def _build_body(self, prompt: str, mode: str, resolution: str, duration: int, ratio: str, image_path: str | None) -> dict:
+    def _build_dashscope_body(
+        self,
+        prompt: str,
+        mode: str,
+        resolution: str,
+        duration: int,
+        ratio: str,
+        image_path: str | None,
+        model: str = "",
+    ) -> dict:
         if mode == "t2v":
             return {
-                "model": VIDEO_MODEL_T2V,
+                "model": model or VIDEO_MODEL_T2V,
                 "input": {"prompt": prompt},
                 "parameters": {"resolution": resolution, "ratio": ratio, "duration": duration},
             }
@@ -72,12 +105,12 @@ class DashScopeVideoClient:
         }.get(ext, "image/png")
         data_url = f"data:{mime};base64,{base64.b64encode(image_data).decode('utf-8')}"
         return {
-            "model": VIDEO_MODEL_I2V,
+            "model": model or VIDEO_MODEL_I2V,
             "input": {"prompt": prompt, "media": [{"type": "first_frame", "url": data_url}]},
             "parameters": {"resolution": resolution, "duration": duration},
         }
 
-    def _submit_task(self, dash_key: str, body: dict) -> str:
+    def _submit_dashscope_task(self, dash_key: str, body: dict) -> str:
         request = urllib.request.Request(
             DASHSCOPE_VIDEO_URL,
             data=json.dumps(body).encode("utf-8"),
@@ -94,7 +127,7 @@ class DashScopeVideoClient:
             raise VideoApiError(data.get("message", "任务提交失败"))
         return task_id
 
-    def _poll_and_download(self, dash_key: str, task_id: str, on_status: StatusCallback | None) -> bytes:
+    def _poll_dashscope_and_download(self, dash_key: str, task_id: str, on_status: StatusCallback | None) -> bytes:
         poll_url = DASHSCOPE_TASK_URL.format(task_id=task_id)
         for attempt in range(120):
             time.sleep(5)
@@ -115,6 +148,151 @@ class DashScopeVideoClient:
             if on_status:
                 on_status(f"状态：{status or 'RUNNING'}... ({(attempt + 1) * 5}s)", "accent")
         raise VideoApiError("生成超时，请稍后重试")
+
+    def _generate_seedance_compatible(
+        self,
+        api_key: str,
+        prompt: str,
+        mode: str,
+        resolution: str,
+        duration: int,
+        ratio: str,
+        image_path: str | None,
+        api_base: str,
+        model: str,
+        on_status: StatusCallback | None,
+    ) -> bytes:
+        if not model:
+            raise VideoApiError("火山引擎 Seedance 需要填写模型 ID")
+        if mode == "i2v" and not image_path:
+            raise VideoApiError("图生视频需要上传参考图")
+
+        task_url = self._seedance_task_url(api_base)
+        body = self._build_seedance_body(prompt, mode, resolution, duration, ratio, image_path, model)
+        task_id = self._submit_seedance_task(api_key, task_url, body)
+        if on_status:
+            on_status(f"Seedance 任务已提交：{task_id[:8]}...，等待生成", "accent")
+        return self._poll_seedance_and_download(api_key, task_url, task_id, on_status)
+
+    def _seedance_task_url(self, api_base: str) -> str:
+        base = (api_base or "https://ark.cn-beijing.volces.com").strip().rstrip("/")
+        if base.endswith("/contents/generations/tasks"):
+            return base
+        if base.endswith("/api/v3"):
+            return f"{base}/contents/generations/tasks"
+        return f"{base}/api/v3/contents/generations/tasks"
+
+    def _build_seedance_body(
+        self,
+        prompt: str,
+        mode: str,
+        resolution: str,
+        duration: int,
+        ratio: str,
+        image_path: str | None,
+        model: str,
+    ) -> dict:
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        if mode == "i2v" and image_path:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": self._image_reference_url(image_path)},
+                "role": "first_frame",
+            })
+        return {
+            "model": model,
+            "content": content,
+            "parameters": {
+                "resolution": str(resolution).lower(),
+                "duration": int(duration),
+                "ratio": ratio,
+            },
+        }
+
+    def _image_reference_url(self, image_path: str) -> str:
+        if image_path.startswith(("http://", "https://", "data:")):
+            return image_path
+        with open(image_path, "rb") as file:
+            image_data = file.read()
+        ext = os.path.splitext(image_path)[1].lower()
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+        }.get(ext, "image/png")
+        return f"data:{mime};base64,{base64.b64encode(image_data).decode('utf-8')}"
+
+    def _submit_seedance_task(self, api_key: str, task_url: str, body: dict) -> str:
+        request = urllib.request.Request(
+            task_url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        task_id = data.get("id") or data.get("task_id") or data.get("output", {}).get("task_id")
+        if not task_id:
+            raise VideoApiError(_api_error_message(data, "Seedance 任务提交失败"))
+        return task_id
+
+    def _poll_seedance_and_download(
+        self,
+        api_key: str,
+        task_url: str,
+        task_id: str,
+        on_status: StatusCallback | None,
+    ) -> bytes:
+        poll_url = f"{task_url.rstrip('/')}/{task_id}"
+        for attempt in range(180):
+            time.sleep(4)
+            request = urllib.request.Request(poll_url, headers={"Authorization": f"Bearer {api_key}"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            status = str(data.get("status") or data.get("task_status") or data.get("output", {}).get("task_status") or "").lower()
+            if status in ("succeeded", "success", "completed", "done"):
+                video_url = self._extract_seedance_video_url(data)
+                if not video_url:
+                    raise VideoApiError("Seedance 未返回视频地址")
+                if on_status:
+                    on_status("正在下载 Seedance 视频...", "accent")
+                return self._download_video(video_url)
+            if status in ("failed", "error", "canceled", "cancelled"):
+                raise VideoApiError(_api_error_message(data, "Seedance 生成失败"))
+            if on_status:
+                on_status(f"Seedance 状态：{status or 'running'}... ({(attempt + 1) * 4}s)", "accent")
+        raise VideoApiError("Seedance 生成超时，请稍后重试")
+
+    def _extract_seedance_video_url(self, data: dict) -> str | None:
+        candidates = [
+            data,
+            data.get("output", {}) if isinstance(data.get("output"), dict) else {},
+            data.get("result", {}) if isinstance(data.get("result"), dict) else {},
+        ]
+        for candidate in candidates:
+            url = candidate.get("video_url") or candidate.get("url")
+            if isinstance(url, str) and url:
+                return url
+            content = candidate.get("content")
+            if isinstance(content, dict):
+                url = content.get("video_url") or content.get("url")
+                if isinstance(url, str) and url:
+                    return url
+            if isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    url = item.get("video_url") or item.get("url")
+                    if isinstance(url, str) and url:
+                        return url
+                    video_url = item.get("video_url")
+                    if isinstance(video_url, dict) and isinstance(video_url.get("url"), str):
+                        return video_url["url"]
+        return None
 
     def _extract_video_url(self, output: dict) -> str | None:
         results = output.get("video_url") or output.get("results", [])

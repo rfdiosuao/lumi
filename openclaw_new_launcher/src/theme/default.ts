@@ -1,4 +1,5 @@
 import type { NavItem, ThemeConfig } from '../types/theme';
+import { DEFAULT_FEATURE_NAV_ITEMS, normalizeFeatureNavItems } from '../features/registry';
 
 type ThemeColors = ThemeConfig['colors'];
 
@@ -15,21 +16,7 @@ const BASE_FONTS: ThemeConfig['fonts'] = {
   mono: ['Consolas', 10, 'normal'],
 };
 
-export const DEFAULT_NAV_ITEMS: NavItem[] = [
-  { key: 'terminal', label: '服务日志', desc: '查看运行状态', icon: 'LOG', group: '工作台' },
-  { key: 'storyboard', label: '广告视频', desc: '分镜/首尾帧/九宫格', icon: 'AD', group: '工作台', accent: true },
-  { key: 'image', label: 'AI 生图', desc: '生成/编辑图片', icon: 'IMG', group: '工作台', accent: true },
-  { key: 'video', label: 'AI 视频', desc: '文生/图生视频', icon: 'VID', group: '工作台', accent: true },
-  { key: 'license', label: '授权码', desc: '在线激活解锁', icon: 'LIC', group: '配置' },
-  { key: 'api', label: 'API 配置', desc: '设置模型密钥', icon: 'KEY', group: '配置' },
-  { key: 'feishu', label: '飞书机器人', desc: '绑定消息通道', icon: 'BOT', group: '配置' },
-  { key: 'weixin', label: '微信机器人', desc: '扫码绑定微信', icon: 'WX', group: '配置' },
-  { key: 'web', label: '网页界面', desc: '打开本地控制台', icon: 'WEB', group: '维护' },
-  { key: 'update', label: '检查更新', desc: '更新 OpenClaw', icon: 'UP', group: '维护' },
-  { key: 'help', label: '帮助文档', desc: '查看使用说明', icon: 'DOC', group: '维护' },
-];
-
-const NAV_ITEM_BY_KEY = new Map(DEFAULT_NAV_ITEMS.map((item) => [item.key, item]));
+export const DEFAULT_NAV_ITEMS: NavItem[] = DEFAULT_FEATURE_NAV_ITEMS;
 
 export const LIGHT_THEME: ThemeConfig = {
   name: '永浩科技浅色主题',
@@ -132,26 +119,7 @@ export function getBuiltinTheme(mode: BuiltinThemeMode): ThemeConfig {
 }
 
 export function normalizeNavItems(items?: NavItem[]): NavItem[] {
-  const source = Array.isArray(items) && items.length > 0 ? items : DEFAULT_NAV_ITEMS;
-  const normalized = source
-    .filter((item) => item?.key && item.key !== 'delivery')
-    .map((item) => {
-      const known = NAV_ITEM_BY_KEY.get(item.key);
-      if (!known) return null;
-      return { ...known, accent: item.accent ?? known.accent };
-    })
-    .filter(Boolean) as NavItem[];
-
-  const result = normalized.length > 0 ? normalized : [...DEFAULT_NAV_ITEMS];
-  if (!result.some((item) => item.key === 'weixin')) {
-    const weixin = NAV_ITEM_BY_KEY.get('weixin');
-    if (weixin) {
-      const feishuIndex = result.findIndex((item) => item.key === 'feishu');
-      const insertIndex = feishuIndex >= 0 ? feishuIndex + 1 : result.length;
-      result.splice(insertIndex, 0, weixin);
-    }
-  }
-  return result;
+  return normalizeFeatureNavItems(items);
 }
 
 export function buildRuntimeTheme(baseTheme: ThemeConfig | null | undefined, mode: BuiltinThemeMode): ThemeConfig {
