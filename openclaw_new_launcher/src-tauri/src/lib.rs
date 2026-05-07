@@ -7,6 +7,8 @@ use std::os::windows::process::CommandExt;
 use tauri::Manager;
 use tauri::path::BaseDirectory;
 
+mod license;
+
 static BRIDGE_PORT: AtomicU16 = AtomicU16::new(0);
 static BRIDGE_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static BRIDGE_START_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -14,6 +16,15 @@ static BRIDGE_START_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const PORTABLE_PAYLOAD_DIR: &str = "OpenClawFiles";
+
+fn protected_feature(path: &str) -> Option<&'static str> {
+    match path.trim_start_matches('/').split('?').next().unwrap_or("") {
+        "api/process/start" => Some("openclaw"),
+        "api/image/generate" => Some("image"),
+        "api/video/generate" => Some("video"),
+        _ => None,
+    }
+}
 
 fn portable_base_dir() -> Result<std::path::PathBuf, String> {
     if cfg!(debug_assertions) {
@@ -145,6 +156,12 @@ fn get_portable_base_path() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn verify_license() -> Result<license::LicenseStatus, String> {
+    let base_dir = portable_base_dir()?;
+    Ok(license::check_license(&base_dir))
+}
+
+#[tauri::command]
 async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
     let existing_port = BRIDGE_PORT.load(Ordering::Relaxed);
     if existing_port > 0 {
@@ -192,6 +209,11 @@ async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 async fn proxy_request(app: tauri::AppHandle, path: String, method: String, body: Option<String>) -> Result<String, String> {
+    if let Some(feature) = protected_feature(&path) {
+        let base_dir = portable_base_dir()?;
+        license::ensure_authorized(&base_dir, Some(feature))?;
+    }
+
     let mut port = BRIDGE_PORT.load(Ordering::Relaxed);
     if port == 0 {
         start_bridge(app).await?;
@@ -330,6 +352,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_bridge_port,
             get_portable_base_path,
+            verify_license,
             start_bridge,
             proxy_request,
             export_log,
