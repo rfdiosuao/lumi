@@ -20,7 +20,7 @@ The FastAPI service now owns the known launcher API endpoints directly. The
 legacy route logic is still present only for the forced legacy implementation
 and unknown-route fallback while cleanup proceeds.
 
-The first low-risk endpoints have been moved to native FastAPI routes:
+Known launcher endpoints are now registered as native FastAPI routes:
 
 | Endpoint | Status |
 | --- | --- |
@@ -62,7 +62,14 @@ Cleanup has started:
 | Module | Responsibility |
 | --- | --- |
 | `python/bridge.py` | bridge process entrypoint, legacy fallback, shared service context |
-| `python/api/fastapi_routes.py` | native FastAPI route registration |
+| `python/api/fastapi_routes.py` | route aggregator, exception handler, unknown-route fallback |
+| `python/api/routes_process.py` | OpenClaw process start/stop/status |
+| `python/api/routes_license.py` | license status, activation, feature authorization |
+| `python/api/routes_media.py` | AI image and video generation |
+| `python/api/routes_config.py` | config file read/write and API profile sync |
+| `python/api/routes_diagnostics.py` | diagnostics run/repair/export |
+| `python/api/routes_skills.py` | Skill list/install/enable/uninstall/readme |
+| `python/api/routes_system.py`, `routes_log.py`, `routes_theme.py`, `routes_update.py` | small focused system routes |
 
 Target call chain after the full migration:
 

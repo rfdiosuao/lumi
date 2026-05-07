@@ -1,0 +1,38 @@
+"""License FastAPI routes."""
+
+from __future__ import annotations
+
+from fastapi import Request
+
+from core.license_manager import LicenseError
+
+
+def register_license_routes(app, ctx) -> None:
+    @app.api_route("/api/license/current", methods=["GET", "POST"])
+    async def license_current(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        license_data = ctx.get_license_mgr().current_license()
+        return ctx.fastapi_json({"license": license_data})
+
+    @app.post("/api/license/authorized")
+    async def license_authorized(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        return ctx.fastapi_json({"authorized": ctx.get_license_mgr().is_authorized(body.get("feature"))})
+
+    @app.post("/api/license/activate")
+    async def license_activate(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        code = body.get("code", "")
+        if not code:
+            return ctx.fastapi_json({"error": "授权码不能为空"}, 400)
+        try:
+            result = ctx.get_license_mgr().activate(code)
+            theme = ctx.get_theme_mgr().get_current(ctx.get_license_mgr().current_license())
+            return ctx.fastapi_json({"license": result, "theme": theme})
+        except LicenseError as exc:
+            return ctx.fastapi_json({"error": str(exc)}, 400)
