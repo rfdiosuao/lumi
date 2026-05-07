@@ -24,6 +24,8 @@ The first low-risk endpoints have been moved to native FastAPI routes:
 | Endpoint | Status |
 | --- | --- |
 | `/api/system/info` | FastAPI native |
+| `/api/process/start` | FastAPI native |
+| `/api/process/stop` | FastAPI native |
 | `/api/process/status` | FastAPI native |
 | `/api/log/get` | FastAPI native |
 | `/api/log/clear` | FastAPI native |
@@ -98,6 +100,8 @@ Checked endpoints:
 | --- | --- | --- |
 | `/api/system/info` | `GET` | `node_path`, `base_path`, `openclaw_version` |
 | `/api/process/status` | `GET` | `running`, `pid` |
+| `/api/process/start` | `POST` | unauthenticated/protected rejection |
+| `/api/process/stop` | `POST` | `status`, `message` |
 | `/api/log/get` | `GET` | `log` |
 | `/api/license/current` | `GET` | `license` |
 | `/api/license/authorized` | `POST` | `authorized` |

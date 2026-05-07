@@ -206,9 +206,25 @@ try {
         }
     }
 
+    Write-Host "Checking protected process start rejection..."
+    try {
+        Invoke-RestMethod -Uri "$baseUrl/api/process/start" -Method POST -Headers $headers -ContentType "application/json" -Body "{}" -TimeoutSec 8 | Out-Null
+        throw "Bridge started OpenClaw without a local license."
+    } catch {
+        $response = $_.Exception.Response
+        if ($null -eq $response) {
+            throw
+        }
+        $statusCode = [int]$response.StatusCode
+        if ($statusCode -ne 403) {
+            throw "Expected HTTP 403 for protected process start, got $statusCode"
+        }
+    }
+
     $checks = @(
         @{ Name = "system info"; Path = "/api/system/info"; Method = "GET"; Props = @("node_path", "base_path", "openclaw_version") },
         @{ Name = "process status"; Path = "/api/process/status"; Method = "GET"; Props = @("running", "pid") },
+        @{ Name = "process stop"; Path = "/api/process/stop"; Method = "POST"; Props = @("status", "message") },
         @{ Name = "log get"; Path = "/api/log/get"; Method = "GET"; Props = @("log") },
         @{ Name = "license current"; Path = "/api/license/current"; Method = "GET"; Props = @("license") },
         @{ Name = "license authorized"; Path = "/api/license/authorized"; Method = "POST"; Body = @{ feature = "openclaw" }; Props = @("authorized") },

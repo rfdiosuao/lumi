@@ -955,6 +955,12 @@ def _fastapi_auth_error(request):
     return None
 
 
+def _fastapi_protected_error(path: str):
+    if path in PROTECTED_PATHS and not _get_license_mgr().is_authorized():
+        return _fastapi_json({"error": "需要有效的许可证才能使用此功能"}, 403)
+    return None
+
+
 async def _fastapi_body(request) -> dict:
     raw = await request.body()
     if not raw:
@@ -1002,6 +1008,30 @@ def _serve_fastapi(port: int, token: str) -> None:
             "running": svc.running,
             "pid": svc.process.pid if svc.process and svc.process.poll() is None else None,
         })
+
+    @app.post("/api/process/start")
+    async def process_start(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        if error := _fastapi_protected_error("/api/process/start"):
+            return error
+
+        svc = _get_process_svc()
+        if svc.running:
+            return _fastapi_json({"status": "already_running"})
+
+        def on_exit(code: int | None) -> None:
+            append_log(f"\n[OpenClaw] Process ended (exit: {code})\n")
+
+        svc.start(on_exit=on_exit)
+        return _fastapi_json({"status": "started", "pid": svc.process.pid if svc.process else None})
+
+    @app.post("/api/process/stop")
+    async def process_stop(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        message = _get_process_svc().stop()
+        return _fastapi_json({"status": "stopped", "message": message})
 
     @app.api_route("/api/log/get", methods=["GET", "POST"])
     async def log_get(request: FastApiRequest):
