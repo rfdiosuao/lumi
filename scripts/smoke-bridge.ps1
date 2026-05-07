@@ -221,6 +221,23 @@ try {
         }
     }
 
+    foreach ($protectedPath in @("/api/image/generate", "/api/video/generate")) {
+        Write-Host "Checking protected endpoint rejection: $protectedPath..."
+        try {
+            Invoke-RestMethod -Uri "$baseUrl$protectedPath" -Method POST -Headers $headers -ContentType "application/json" -Body "{}" -TimeoutSec 8 | Out-Null
+            throw "Bridge allowed protected endpoint without a local license: $protectedPath"
+        } catch {
+            $response = $_.Exception.Response
+            if ($null -eq $response) {
+                throw
+            }
+            $statusCode = [int]$response.StatusCode
+            if ($statusCode -ne 403) {
+                throw "Expected HTTP 403 for $protectedPath, got $statusCode"
+            }
+        }
+    }
+
     Write-Host "Checking empty license activation rejection..."
     try {
         Invoke-RestMethod -Uri "$baseUrl/api/license/activate" -Method POST -Headers $headers -ContentType "application/json" -Body "{}" -TimeoutSec 8 | Out-Null

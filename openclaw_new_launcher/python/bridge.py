@@ -972,6 +972,22 @@ async def _fastapi_body(request) -> dict:
         return {}
 
 
+def _data_url_to_temp_file(data_url: str) -> tuple[str, str]:
+    try:
+        header, b64_data = data_url.split(",", 1)
+        mime_type = header.split(":")[1].split(";")[0]
+        image_bytes = base64.b64decode(b64_data)
+        ext = mime_type.split("/")[-1].split("+")[0]
+        if ext not in ("png", "jpeg", "jpg", "webp"):
+            ext = "png"
+        fd, temp_file = tempfile.mkstemp(suffix=f".{ext}")
+        with os.fdopen(fd, "wb") as file:
+            file.write(image_bytes)
+        return temp_file, temp_file
+    except Exception as exc:
+        raise ValueError(f"图片数据解码失败: {exc}") from exc
+
+
 def _serve_fastapi(port: int, token: str) -> None:
     from fastapi import FastAPI
     import uvicorn
@@ -1080,6 +1096,115 @@ def _serve_fastapi(port: int, token: str) -> None:
             return _fastapi_json({"license": result, "theme": theme})
         except LicenseError as exc:
             return _fastapi_json({"error": str(exc)}, 400)
+
+    @app.post("/api/image/generate")
+    async def image_generate(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        if error := _fastapi_protected_error("/api/image/generate"):
+            return error
+
+        body = await _fastapi_body(request)
+        client = _get_image_client()
+        base_url = body.get("baseUrl", "")
+        api_key = body.get("apiKey", "")
+        prompt = body.get("prompt", "")
+        size = body.get("size", "1024x1024")
+        edit_path = body.get("editImagePath")
+        count = body.get("count", 1)
+
+        if not base_url:
+            return _fastapi_json({"error": "中转站地址不能为空"}, 400)
+        if not prompt:
+            return _fastapi_json({"error": "提示词不能为空"}, 400)
+
+        temp_file: str | None = None
+        if edit_path and edit_path.startswith("data:"):
+            try:
+                edit_path, temp_file = _data_url_to_temp_file(edit_path)
+            except ValueError as exc:
+                return _fastapi_json({"error": str(exc)}, 400)
+
+        try:
+            results = client.generate_many(base_url, api_key, prompt, size, count=count, edit_image_path=edit_path)
+            images_b64 = [base64.b64encode(result).decode() for result in results]
+            return _fastapi_json({"images": images_b64, "count": len(images_b64)})
+        except ImageApiError as exc:
+            return _fastapi_json({"error": str(exc)}, 500)
+        finally:
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except OSError:
+                    pass
+
+    @app.post("/api/video/generate")
+    async def video_generate(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        if error := _fastapi_protected_error("/api/video/generate"):
+            return error
+
+        body = await _fastapi_body(request)
+        client = _get_video_client()
+        provider_id = body.get("providerId", "dashscope")
+        api_base = body.get("apiBase", "")
+        model = body.get("model", "")
+        dash_key = body.get("dashKey", "")
+        prompt = body.get("prompt", "")
+        mode = body.get("mode", "t2v")
+        resolution = body.get("resolution", "720P")
+        duration = body.get("duration", 5)
+        ratio = body.get("ratio", "16:9")
+        image_path = body.get("imagePath")
+
+        if not dash_key:
+            return _fastapi_json({"error": "视频服务密钥不能为空"}, 400)
+        if not prompt:
+            return _fastapi_json({"error": "提示词不能为空"}, 400)
+
+        temp_file: str | None = None
+        if image_path and image_path.startswith("data:"):
+            try:
+                image_path, temp_file = _data_url_to_temp_file(image_path)
+            except ValueError as exc:
+                return _fastapi_json({"error": str(exc)}, 400)
+
+        try:
+            video_bytes = client.generate(
+                dash_key,
+                prompt,
+                mode,
+                resolution,
+                duration,
+                ratio,
+                image_path,
+                provider_id=provider_id,
+                api_base=api_base,
+                model=model,
+            )
+            video_dir = os.path.join(paths.data_dir, "videos")
+            os.makedirs(video_dir, exist_ok=True)
+            filename = f"lumi-video-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
+            save_path = os.path.join(video_dir, filename)
+            with open(save_path, "wb") as file:
+                file.write(video_bytes)
+            return _fastapi_json({
+                "video": base64.b64encode(video_bytes).decode(),
+                "mime": "video/mp4",
+                "size": len(video_bytes),
+                "path": save_path,
+                "directory": video_dir,
+                "filename": filename,
+            })
+        except VideoApiError as exc:
+            return _fastapi_json({"error": str(exc)}, 500)
+        finally:
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except OSError:
+                    pass
 
     @app.api_route("/api/theme/current", methods=["GET", "POST"])
     async def theme_current(request: FastApiRequest):

@@ -32,6 +32,8 @@ The first low-risk endpoints have been moved to native FastAPI routes:
 | `/api/license/current` | FastAPI native |
 | `/api/license/activate` | FastAPI native |
 | `/api/license/authorized` | FastAPI native |
+| `/api/image/generate` | FastAPI native |
+| `/api/video/generate` | FastAPI native |
 | `/api/theme/current` | FastAPI native |
 | `/api/theme/by_merchant` | FastAPI native |
 | `/api/theme/list` | FastAPI native |
@@ -107,6 +109,8 @@ Checked endpoints:
 | `/api/license/current` | `GET` | `license` |
 | `/api/license/activate` | `POST` | empty-code rejection |
 | `/api/license/authorized` | `POST` | `authorized` |
+| `/api/image/generate` | `POST` | protected rejection |
+| `/api/video/generate` | `POST` | protected rejection |
 | `/api/theme/current` | `GET` | `theme` |
 | `/api/theme/list` | `GET` | `themes` |
 | `/api/auth/profiles` | `GET` | `profiles` |
