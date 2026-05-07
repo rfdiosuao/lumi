@@ -408,6 +408,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._skills_install_zip(body)
             elif path == "/api/skills/enable":
                 self._skills_enable(body)
+            elif path == "/api/skills/uninstall":
+                self._skills_uninstall(body)
+            elif path == "/api/skills/readme":
+                self._skills_readme(body)
             elif path == "/api/skills/paths":
                 self._skills_paths()
             else:
@@ -810,6 +814,26 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             self._ok(_get_skill_svc().set_enabled(skill_id, bool(body.get("enabled"))))
+        except SkillError as e:
+            self._error(400, str(e))
+
+    def _skills_uninstall(self, body: dict) -> None:
+        skill_id = body.get("id", "")
+        if not skill_id:
+            self._error(400, "Skill ID 不能为空")
+            return
+        try:
+            self._ok(_get_skill_svc().uninstall(skill_id))
+        except SkillError as e:
+            self._error(400, str(e))
+
+    def _skills_readme(self, body: dict) -> None:
+        skill_id = body.get("id", "")
+        if not skill_id:
+            self._error(400, "Skill ID 不能为空")
+            return
+        try:
+            self._ok(_get_skill_svc().read_readme(skill_id))
         except SkillError as e:
             self._error(400, str(e))
 

@@ -7,14 +7,12 @@ from uploaded packages.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from core.paths import AppPaths
 from core.storage import read_json, write_json
@@ -44,10 +42,8 @@ class SkillService:
         for source in self._sources():
             if not os.path.isdir(source.path):
                 continue
-            for entry in os.scandir(source.path):
-                if not entry.is_dir():
-                    continue
-                meta = self._read_skill_metadata(entry.path)
+            for skill_dir in self._iter_skill_dirs(source.path):
+                meta = self._read_skill_metadata(skill_dir)
                 if meta is None:
                     continue
                 skill_id = meta["id"]
@@ -58,16 +54,18 @@ class SkillService:
                     **meta,
                     "source": source.key,
                     "sourceLabel": source.label,
-                    "path": entry.path,
+                    "path": skill_dir,
                     "installed": True,
                     "enabled": enabled,
                     "writable": source.writable,
                     "installedAt": installed_at,
+                    "hasReadme": self._find_readme(skill_dir) is not None,
                 }
         return {
             "skills": sorted(skills.values(), key=lambda item: (item.get("source", ""), item.get("name", ""))),
             "directories": self._directories_payload(),
             "sites": self._skill_sites(),
+            "statePath": self.paths.skills_state,
         }
 
     def install_zip(self, filename: str, data_base64: str) -> dict:
@@ -124,6 +122,41 @@ class SkillService:
         self._write_state(state)
         return {"skill": {**skill, "enabled": bool(enabled)}}
 
+    def uninstall(self, skill_id: str) -> dict:
+        self._ensure_dirs()
+        skill = self._find_skill(skill_id)
+        if skill is None:
+            raise SkillError(f"未找到 Skill: {skill_id}")
+        if skill.get("source") != "uploaded" or not skill.get("writable"):
+            raise SkillError("只能卸载通过启动器上传安装的 Skill")
+
+        target = os.path.realpath(str(skill.get("path") or ""))
+        skills_root = os.path.realpath(self.paths.skills_dir)
+        if not self._is_inside(target, skills_root) or target == skills_root:
+            raise SkillError("Skill 路径不安全，已拒绝卸载")
+
+        shutil.rmtree(target, ignore_errors=True)
+        state = self._read_state()
+        if isinstance(state.get("skills"), dict):
+            state["skills"].pop(skill_id, None)
+        self._write_state(state)
+        return {"status": "removed", "id": skill_id}
+
+    def read_readme(self, skill_id: str) -> dict:
+        skill = self._find_skill(skill_id)
+        if skill is None:
+            raise SkillError(f"未找到 Skill: {skill_id}")
+        readme = self._find_readme(str(skill.get("path") or ""))
+        if readme is None:
+            raise SkillError("这个 Skill 没有说明文件")
+        try:
+            with open(readme, "r", encoding="utf-8") as file:
+                content = file.read(20000)
+        except UnicodeDecodeError:
+            with open(readme, "r", encoding="gbk", errors="replace") as file:
+                content = file.read(20000)
+        return {"id": skill_id, "path": readme, "content": content}
+
     def paths_payload(self) -> dict:
         self._ensure_dirs()
         return {"directories": self._directories_payload(), "sites": self._skill_sites()}
@@ -163,6 +196,31 @@ class SkillService:
             if skill.get("id") == skill_id:
                 return skill
         return None
+
+    def _iter_skill_dirs(self, root: str) -> list[str]:
+        result: list[str] = []
+        if self._read_skill_metadata(root):
+            return [root]
+
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            return result
+
+        for entry in entries:
+            try:
+                if not entry.is_dir():
+                    continue
+                if self._read_skill_metadata(entry.path):
+                    result.append(entry.path)
+                    continue
+                # Support one extra layer, useful for OpenClaw/Codex style skill bundles.
+                for child in os.scandir(entry.path):
+                    if child.is_dir() and self._read_skill_metadata(child.path):
+                        result.append(child.path)
+            except OSError:
+                continue
+        return result
 
     def _read_skill_metadata(self, directory: str) -> dict | None:
         readers = [
@@ -224,6 +282,13 @@ class SkillService:
             pass
         return {"name": name, "description": description, "version": "0.0.0", "runtime": "external"}
 
+    def _find_readme(self, directory: str) -> str | None:
+        for filename in ("README.md", "README.txt", "SKILL.md", "readme.md", "readme.txt"):
+            path = os.path.join(directory, filename)
+            if os.path.exists(path):
+                return path
+        return None
+
     def _normalize_meta(self, meta: dict, directory: str) -> dict:
         raw_id = str(meta.get("id") or meta.get("name") or os.path.basename(directory))
         skill_id = self._safe_slug(raw_id)
@@ -278,11 +343,17 @@ class SkillService:
             if not name:
                 continue
             dest = os.path.realpath(os.path.join(target_dir, name))
-            if not dest.startswith(target_real):
+            if not self._is_inside(dest, target_real):
                 raise SkillError("Skill 压缩包包含不安全路径")
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with archive.open(info) as source, open(dest, "wb") as output:
                 shutil.copyfileobj(source, output)
+
+    def _is_inside(self, path: str, root: str) -> bool:
+        try:
+            return os.path.commonpath([os.path.realpath(path), os.path.realpath(root)]) == os.path.realpath(root)
+        except ValueError:
+            return False
 
     def _timestamp(self) -> str:
         import datetime

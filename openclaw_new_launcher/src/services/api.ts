@@ -228,6 +228,7 @@ export interface SkillItem {
   installed: boolean;
   enabled: boolean;
   writable: boolean;
+  hasReadme?: boolean;
   installedAt?: string;
 }
 
@@ -235,6 +236,7 @@ export interface SkillsListResponse {
   skills: SkillItem[];
   directories: SkillDirectory[];
   sites: SkillSite[];
+  statePath?: string;
 }
 
 export const skillsApi = {
@@ -243,5 +245,9 @@ export const skillsApi = {
     api('/api/skills/install_zip', 'POST', { filename, data }),
   setEnabled: (id: string, enabled: boolean): Promise<{ skill: SkillItem }> =>
     api('/api/skills/enable', 'POST', { id, enabled }),
+  uninstall: (id: string): Promise<{ status: string; id: string }> =>
+    api('/api/skills/uninstall', 'POST', { id }),
+  readme: (id: string): Promise<{ id: string; path: string; content: string }> =>
+    api('/api/skills/readme', 'POST', { id }),
   paths: (): Promise<{ directories: SkillDirectory[]; sites: SkillSite[] }> => api('/api/skills/paths'),
 };
