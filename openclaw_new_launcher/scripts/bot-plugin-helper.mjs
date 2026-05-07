@@ -17,29 +17,32 @@ function firstExisting(candidates) {
   return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
 }
 
+function packageRoot(...segments) {
+  return firstExisting([
+    path.join(rootDir, 'node_modules', ...segments),
+    path.join(rootDir, 'SystemData', '.core', 'node_modules', ...segments),
+    path.join(extensionsDir, segments[segments.length - 1]),
+  ]);
+}
+
 const openclawMjs = firstExisting([
   path.join(rootDir, 'node_modules', 'openclaw', 'openclaw.mjs'),
   path.join(rootDir, 'SystemData', '.core', 'node_modules', 'openclaw', 'openclaw.mjs'),
 ]);
+const openclawPackageDir = path.dirname(openclawMjs);
 
 const channels = {
   feishu: {
     title: '飞书机器人',
     pluginId: 'openclaw-lark',
     packageName: '@larksuite/openclaw-lark',
-    packageDir: firstExisting([
-      path.join(rootDir, 'node_modules', '@larksuite', 'openclaw-lark'),
-      path.join(rootDir, 'SystemData', '.core', 'node_modules', '@larksuite', 'openclaw-lark'),
-    ]),
+    packageDir: packageRoot('@larksuite', 'openclaw-lark'),
   },
   weixin: {
     title: '微信机器人',
     pluginId: 'openclaw-weixin',
     packageName: '@tencent-weixin/openclaw-weixin',
-    packageDir: firstExisting([
-      path.join(rootDir, 'node_modules', '@tencent-weixin', 'openclaw-weixin'),
-      path.join(rootDir, 'SystemData', '.core', 'node_modules', '@tencent-weixin', 'openclaw-weixin'),
-    ]),
+    packageDir: packageRoot('@tencent-weixin', 'openclaw-weixin'),
   },
 };
 
@@ -292,7 +295,7 @@ async function loginWeixin() {
   const loginQr = await importFile(path.join(channel.packageDir, 'dist', 'src', 'auth', 'login-qr.js'));
   const accounts = await importFile(path.join(channel.packageDir, 'dist', 'src', 'auth', 'accounts.js'));
   const inbound = await importFile(path.join(channel.packageDir, 'dist', 'src', 'messaging', 'inbound.js'));
-  const accountIdModule = await importFile(path.join(rootDir, 'node_modules', 'openclaw', 'dist', 'plugin-sdk', 'account-id.js'));
+  const accountIdModule = await importFile(path.join(openclawPackageDir, 'dist', 'plugin-sdk', 'account-id.js'));
 
   log('[launcher] 准备打开微信扫码绑定，请在下面输出中查看二维码或登录链接。');
   const startResult = await loginQr.startWeixinLoginWithQr({

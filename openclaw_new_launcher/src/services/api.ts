@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 
 let bridgeStartup: Promise<void> | null = null;
+const BRIDGE_STARTUP_RETRIES = 80;
+const BRIDGE_STARTUP_INTERVAL_MS = 250;
 
 async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) {
   const currentPort = await invoke<number>('get_bridge_port');
@@ -9,10 +11,10 @@ async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string
   if (!bridgeStartup) {
     bridgeStartup = (async () => {
       await invoke<string>('start_bridge');
-      for (let i = 0; i < 20; i += 1) {
+      for (let i = 0; i < BRIDGE_STARTUP_RETRIES; i += 1) {
         const port = await invoke<number>('get_bridge_port');
         if (port > 0) return;
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        await new Promise((resolve) => setTimeout(resolve, BRIDGE_STARTUP_INTERVAL_MS));
       }
       throw new Error('Bridge 启动超时');
     })().finally(() => {
