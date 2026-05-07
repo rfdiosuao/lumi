@@ -120,6 +120,8 @@ export function persistThemeMode(mode: BuiltinThemeMode): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(THEME_MODE_STORAGE_KEY, mode);
+    document.documentElement.dataset.themeMode = mode;
+    document.documentElement.style.colorScheme = mode;
   } catch {
     // ignore storage failures
   }
@@ -218,5 +220,8 @@ export function applyThemeToCssVars(theme: ThemeConfig): void {
 
 export function bootstrapThemeFromStorage(): void {
   if (typeof document === 'undefined') return;
-  applyThemeToCssVars(getBuiltinTheme(getStoredThemeMode()));
+  const mode = getStoredThemeMode();
+  document.documentElement.dataset.themeMode = mode;
+  document.documentElement.style.colorScheme = mode;
+  applyThemeToCssVars(getBuiltinTheme(mode));
 }

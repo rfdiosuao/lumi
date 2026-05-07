@@ -11,7 +11,7 @@ import urllib.request
 
 from PIL import Image
 
-from openclaw_launcher.constants import IMAGE_MODEL
+from core.constants import IMAGE_MODEL
 
 
 class ImageApiError(RuntimeError):

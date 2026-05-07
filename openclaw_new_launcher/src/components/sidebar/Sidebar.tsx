@@ -148,19 +148,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </nav>
 
       <div className="relative shrink-0 border-t border-border p-4">
-        <button
-          onClick={onStop}
-          disabled={!serviceRunning && serviceStatus !== 'starting'}
-          className="mb-3 w-full rounded-xl border border-status-danger/30 bg-status-danger/10 px-4 py-2.5 text-sm font-bold text-status-danger transition-all hover:bg-status-danger/20 disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          停止服务
-        </button>
-        <button
-          onClick={toggleTheme}
-          className="mb-3 w-full rounded-xl border border-border bg-surface-alt px-4 py-2.5 text-sm font-bold text-text transition-all hover:bg-hover"
-        >
-          {themeMode === 'dark' ? '切换浅色风格' : '切换暗紫风格'}
-        </button>
+        <div className="mb-3 grid grid-cols-[1fr_42px] gap-2">
+          <button
+            onClick={onStop}
+            disabled={!serviceRunning && serviceStatus !== 'starting'}
+            className="rounded-xl border border-status-danger/30 bg-status-danger/10 px-4 py-2.5 text-sm font-bold text-status-danger transition-all hover:bg-status-danger/20 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            停止服务
+          </button>
+          <button
+            onClick={toggleTheme}
+            className="flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-border bg-surface-alt text-lg font-bold text-text transition-all hover:border-border-strong hover:bg-hover"
+            title={themeMode === 'dark' ? '切换浅色风格' : '切换暗紫风格'}
+            aria-label={themeMode === 'dark' ? '切换浅色风格' : '切换暗紫风格'}
+          >
+            {themeMode === 'dark' ? '☀' : '☾'}
+          </button>
+        </div>
         <div className="rounded-xl border border-border bg-white/35 p-3">
           <div className="mb-2 flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-text-muted">系统状态</span>

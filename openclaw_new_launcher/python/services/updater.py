@@ -8,7 +8,7 @@ import subprocess
 import threading
 from collections.abc import Callable
 
-from openclaw_launcher.paths import AppPaths
+from core.paths import AppPaths
 
 UiCall = Callable[..., None]
 LogCall = Callable[[str], None]

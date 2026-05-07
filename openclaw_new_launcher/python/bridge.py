@@ -23,43 +23,6 @@ _python_dir = os.path.dirname(os.path.abspath(__file__))
 if _python_dir not in sys.path:
     sys.path.insert(0, _python_dir)
 
-# Add python dir so openclaw_launcher.* imports can resolve
-# (the copied services use `from openclaw_launcher.constants import ...`)
-if _python_dir not in sys.path:
-    sys.path.insert(0, _python_dir)
-
-# Now set up a fake `openclaw_launcher` package pointing to our core/services
-import importlib
-import importlib.util
-import types
-
-def _install_subpackage(name: str, path: str) -> None:
-    """Create a synthetic subpackage so `openclaw_launcher.xxx` resolves here."""
-    pkg = types.ModuleType(f"openclaw_launcher.{name}")
-    pkg.__path__ = [path]
-    setattr(sys.modules["openclaw_launcher"], name, pkg)
-    sys.modules[f"openclaw_launcher.{name}"] = pkg
-
-def _install_module(name: str, path: str) -> None:
-    spec = importlib.util.spec_from_file_location(f"openclaw_launcher.{name}", path)
-    mod = importlib.util.module_from_spec(spec)
-    # Register in sys.modules BEFORE exec_module so dataclass introspection works
-    sys.modules[f"openclaw_launcher.{name}"] = mod
-    spec.loader.exec_module(mod)
-    setattr(sys.modules["openclaw_launcher"], name, mod)
-
-_oc = types.ModuleType("openclaw_launcher")
-_oc.__path__ = [_python_dir]
-sys.modules["openclaw_launcher"] = _oc
-_install_subpackage("core", os.path.join(_python_dir, "core"))
-_install_subpackage("services", os.path.join(_python_dir, "services"))
-_install_module("constants", os.path.join(_python_dir, "core", "constants.py"))
-_install_module("paths", os.path.join(_python_dir, "core", "paths.py"))
-_install_module("storage", os.path.join(_python_dir, "core", "storage.py"))
-_install_module("license_manager", os.path.join(_python_dir, "core", "license_manager.py"))
-_install_module("theme_manager", os.path.join(_python_dir, "core", "theme_manager.py"))
-
-# Now import the actual modules
 from core.paths import AppPaths
 from core.storage import read_json, write_json, update_json
 from core.license_manager import LicenseManager

@@ -10,8 +10,8 @@ import threading
 import time
 from collections.abc import Callable
 
-from openclaw_launcher.constants import APP_PORT
-from openclaw_launcher.paths import AppPaths
+from core.constants import APP_PORT
+from core.paths import AppPaths
 
 UiCall = Callable[..., None]
 LogCall = Callable[[str], None]
@@ -102,23 +102,23 @@ class OpenClawProcessService:
         """Return customer-facing environment checks for the launcher."""
         checks: list[dict] = []
 
-        def file_check(check_id: str, label: str, path: str, required: bool = True) -> None:
+        def file_check(check_id: str, label: str, path: str, required: bool = True, repairable: bool = False) -> None:
             exists = os.path.exists(path)
             checks.append({
                 "id": check_id,
                 "label": label,
                 "status": "ok" if exists else ("fail" if required else "warn"),
-                "message": "已找到" if exists else ("缺失，可能导致启动失败" if required else "未找到，可在首次启动时自动生成"),
+                "message": "已找到" if exists else ("缺失，可能导致启动失败" if required else "未找到，一键修复会尝试补齐"),
                 "detail": path,
-                "repairable": False,
+                "repairable": repairable and not exists,
             })
 
         file_check("base_path", "安装目录", self.paths.base_path)
         file_check("node", "Node.js 运行时", self.paths.node_exe)
         file_check("start_js", "OpenClaw 启动脚本", self.paths.find_file("start.js", ("back", "backup", "")))
         file_check("openclaw_core", "OpenClaw 本体", self.paths.openclaw_mjs)
-        file_check("data_dir", "数据目录", self.paths.data_dir, required=False)
-        file_check("openclaw_config", "OpenClaw 配置文件", self.paths.openclaw_config, required=False)
+        file_check("data_dir", "数据目录", self.paths.data_dir, required=False, repairable=True)
+        file_check("openclaw_config", "OpenClaw 基础配置", self.paths.openclaw_config, required=False, repairable=True)
 
         port_listeners = self._port_listeners(APP_PORT)
         expected_pid = str(self.process.pid) if self.process and self.process.poll() is None else None
@@ -128,7 +128,7 @@ class OpenClawProcessService:
                 "id": "port_18790",
                 "label": "本地端口 18790",
                 "status": "ok" if expected_pid and not unexpected else "warn",
-                "message": "当前服务正在监听" if expected_pid and not unexpected else "端口已被进程占用",
+                "message": "当前服务正在监听" if expected_pid and not unexpected else "端口被其他进程占用，一键修复可释放",
                 "detail": "; ".join(self._format_process(item) for item in port_listeners),
                 "repairable": not expected_pid or bool(unexpected),
             })
@@ -137,7 +137,7 @@ class OpenClawProcessService:
                 "id": "port_18790",
                 "label": "本地端口 18790",
                 "status": "ok",
-                "message": "端口空闲，可启动服务",
+                "message": "端口空闲，可以启动服务",
                 "detail": "127.0.0.1:18790",
                 "repairable": False,
             })
@@ -170,7 +170,7 @@ class OpenClawProcessService:
             "label": "OpenClaw 版本",
             "status": "ok" if version != "unknown" else "warn",
             "message": version if version != "unknown" else "未能读取版本号",
-            "detail": os.path.join(self.paths.base_path, "node_modules", "openclaw", "package.json"),
+            "detail": os.path.join(os.path.dirname(self.paths.openclaw_mjs), "package.json"),
             "repairable": False,
         })
 
@@ -195,19 +195,14 @@ class OpenClawProcessService:
 
         stopped_current = 0
         if self.process and self.process.poll() is None:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
-                capture_output=True,
-                text=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            if self._kill_pid(str(self.process.pid)):
+                stopped_current = 1
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
             self.running = False
             self.process = None
-            stopped_current = 1
         record("停止当前 OpenClaw 服务", stopped_current)
         record("停止已注册的 OpenClaw Gateway 任务", self._stop_registered_gateway())
         record("清理 ClawPanel 残留进程", self._kill_clawpanel_processes())

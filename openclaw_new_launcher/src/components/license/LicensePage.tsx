@@ -108,6 +108,9 @@ export const LicensePage: React.FC = () => {
               <Button onClick={handleRefresh} variant="quiet">
                 刷新状态
               </Button>
+              <Button onClick={() => setCurrentPage('diagnostics')} variant="quiet">
+                环境诊断
+              </Button>
             </div>
 
             {/* Status Text */}
