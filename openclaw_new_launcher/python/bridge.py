@@ -1276,6 +1276,14 @@ def _serve_fastapi(port: int, token: str) -> None:
             return error
         return _fastapi_json(_build_diagnostics_payload())
 
+    @app.api_route("/api/diagnostics/repair", methods=["GET", "POST"])
+    async def diagnostics_repair(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        result = _get_process_svc().repair_environment()
+        result["diagnostics"] = _append_runtime_checks(result.get("diagnostics", {}))
+        return _fastapi_json(result)
+
     @app.api_route("/api/diagnostics/export", methods=["GET", "POST"])
     async def diagnostics_export(request: FastApiRequest):
         if error := _fastapi_auth_error(request):
@@ -1333,6 +1341,35 @@ def _serve_fastapi(port: int, token: str) -> None:
         if error_message:
             return _fastapi_json({"error": error_message}, 500)
         return _fastapi_json({"current": current, "latest": latest, "hasUpdate": current != latest})
+
+    @app.post("/api/update/do")
+    async def update_do(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+
+        updater = _get_updater()
+        node_exe = paths.node_exe
+        pnpm_cli = paths.pnpm_cli
+        try:
+            proc = subprocess.Popen(
+                [node_exe, pnpm_cli, "add", "openclaw@latest"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                encoding="utf-8",
+                errors="replace",
+                cwd=paths.base_path,
+            )
+            output = []
+            if proc.stdout:
+                for line in iter(proc.stdout.readline, ""):
+                    if line:
+                        output.append(line)
+                        append_log(line)
+            exit_code = proc.wait()
+            current = updater.current_version()
+            return _fastapi_json({"success": exit_code == 0, "current_version": current, "log": output})
+        except Exception as exc:
+            return _fastapi_json({"error": str(exc)}, 500)
 
     @app.api_route("/api/skills/list", methods=["GET", "POST"])
     async def skills_list(request: FastApiRequest):

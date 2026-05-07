@@ -41,8 +41,10 @@ The first low-risk endpoints have been moved to native FastAPI routes:
 | `/api/config/write` | FastAPI native |
 | `/api/auth/profiles` | FastAPI native |
 | `/api/diagnostics/run` | FastAPI native |
+| `/api/diagnostics/repair` | FastAPI native |
 | `/api/diagnostics/export` | FastAPI native |
 | `/api/update/check` | FastAPI native |
+| `/api/update/do` | FastAPI native |
 | `/api/skills/list` | FastAPI native |
 | `/api/skills/install_zip` | FastAPI native |
 | `/api/skills/enable` | FastAPI native |
@@ -50,8 +52,9 @@ The first low-risk endpoints have been moved to native FastAPI routes:
 | `/api/skills/readme` | FastAPI native |
 | `/api/skills/paths` | FastAPI native |
 
-All other endpoints still go through the legacy catch-all route until they are
-migrated and verified one group at a time.
+All known launcher API endpoints now have native FastAPI handlers. The legacy
+route class is still kept during the cleanup phase for the legacy bridge
+implementation and unknown-route fallback.
 
 Target call chain after the full migration:
 
