@@ -180,7 +180,7 @@ class SkillService:
 
     def _skill_sites(self) -> list[dict]:
         return [
-            {"name": "OpenClaw Skills", "url": "https://heang.top/skills"},
+            {"name": "SkillHub 技能中心", "url": "https://www.skillhub.cn/skills"},
             {"name": "OpenClaw 文档", "url": "https://heang.top/docs.html"},
         ]
 
