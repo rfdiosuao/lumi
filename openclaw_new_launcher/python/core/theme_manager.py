@@ -116,7 +116,15 @@ def _resolve_brand_assets(brand: dict[str, Any], base_dir: str | None) -> None:
         return
     logo_value = logo_value.strip()
     if base_dir and not os.path.isabs(logo_value) and not _is_external_asset(logo_value):
-        logo_value = os.path.abspath(os.path.join(base_dir, logo_value))
+        resolved = os.path.abspath(os.path.join(base_dir, logo_value))
+        if not os.path.exists(resolved):
+            filename = os.path.basename(logo_value)
+            fallback_candidates = [
+                os.path.join(base_dir, "themes", "default", filename),
+                os.path.join(base_dir, "themes", "yonghao_tech", filename),
+            ]
+            resolved = next((path for path in fallback_candidates if os.path.exists(path)), resolved)
+        logo_value = resolved
     brand["logoUrl"] = logo_value
 
 

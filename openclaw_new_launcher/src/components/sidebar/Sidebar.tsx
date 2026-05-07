@@ -1,5 +1,6 @@
 import React from 'react';
 import logoImg from '../../assets/logo.png';
+import { BrandLogo } from '../common';
 import { useTheme } from '../../hooks/useTheme';
 import { DEFAULT_NAV_ITEMS, normalizeNavItems } from '../../theme/default';
 import type { NavItem } from '../../types/theme';
@@ -107,7 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       <div className="relative flex shrink-0 items-center gap-3 px-5 py-6">
         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-white/55 shadow-[0_0_28px_rgba(37,99,235,0.12)]">
-          <img src={brandLogo} alt="Logo" className="h-9 w-9 rounded-lg object-contain" />
+          <BrandLogo src={brandLogo} fallbackSrc={logoImg} alt="Logo" className="h-9 w-9 rounded-lg object-contain" />
         </div>
         <div className="min-w-0">
           <div className="truncate text-base font-bold tracking-wide text-text">{brandName}</div>

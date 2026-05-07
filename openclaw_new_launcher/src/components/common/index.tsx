@@ -138,6 +138,36 @@ export function showToast(message: string, type: 'success' | 'error' | 'info' = 
   toastStore.getState().addToast(message, type);
 }
 
+// === Brand Logo ===
+export const BrandLogo: React.FC<{
+  src?: string;
+  fallbackSrc: string;
+  alt?: string;
+  className?: string;
+}> = ({ src, fallbackSrc, alt = '', className = '' }) => {
+  const [activeSrc, setActiveSrc] = React.useState(src || fallbackSrc);
+  const fallbackUsedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    fallbackUsedRef.current = false;
+    setActiveSrc(src || fallbackSrc);
+  }, [src, fallbackSrc]);
+
+  return (
+    <img
+      src={activeSrc}
+      alt={alt}
+      className={className}
+      onError={() => {
+        if (fallbackUsedRef.current) return;
+        fallbackUsedRef.current = true;
+        setActiveSrc(fallbackSrc);
+      }}
+      draggable={false}
+    />
+  );
+};
+
 // === Loading ===
 export const Loading: React.FC<{ text?: string }> = ({ text = '加载中...' }) => (
   <div className="flex flex-col items-center justify-center py-12 gap-3">
