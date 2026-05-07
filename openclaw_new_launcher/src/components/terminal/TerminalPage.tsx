@@ -9,7 +9,8 @@ export const TerminalPage: React.FC = () => {
   const clearLogs = useLogStore((s) => s.clear);
   const { theme, themeMode } = useTheme();
   const isLight = themeMode === 'light';
-  const containerRef = React.useRef<HTMLPreElement>(null);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const bottomRef = React.useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = React.useState(false);
   const [lastExportPath, setLastExportPath] = React.useState('');
   const logLines = lines.split('\n').filter(Boolean);
@@ -17,12 +18,11 @@ export const TerminalPage: React.FC = () => {
   const scrollToBottom = React.useCallback((smooth = false) => {
     const el = containerRef.current;
     if (!el) return;
-    const top = Math.max(0, el.scrollHeight - el.clientHeight);
-    if (smooth) {
-      el.scrollTo({ top, behavior: 'smooth' });
-    } else {
-      el.scrollTop = top;
-    }
+    bottomRef.current?.scrollIntoView({
+      block: 'end',
+      behavior: smooth ? 'smooth' : 'auto',
+    });
+    el.scrollTop = el.scrollHeight;
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -50,6 +50,7 @@ export const TerminalPage: React.FC = () => {
 
   const handleJumpToBottom = () => {
     requestAnimationFrame(() => scrollToBottom(true));
+    window.setTimeout(() => scrollToBottom(false), 120);
     showToast('已跳到底部', 'info');
   };
 
@@ -122,30 +123,34 @@ export const TerminalPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex-1 p-6">
-        <div className={`h-full overflow-hidden rounded-2xl border shadow-[0_18px_50px_rgba(15,23,42,0.14)] ${
+      <div className="flex min-h-0 flex-1 p-6">
+        <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border shadow-[0_18px_50px_rgba(15,23,42,0.14)] ${
           isLight ? 'border-border bg-white' : 'border-slate-700 bg-[#080C18]'
         }`}>
-          <div className={`flex h-10 items-center justify-between border-b px-4 ${
+          <div className={`flex h-10 shrink-0 items-center justify-between border-b px-4 ${
             isLight ? 'border-border bg-surface-alt' : 'border-slate-700 bg-[#111827]'
           }`}>
             <span className={`text-xs font-bold uppercase tracking-[0.18em] ${isLight ? 'text-accent' : 'text-[#93C5FD]'}`}>Live Output</span>
             <span className={`text-xs ${isLight ? 'text-text-muted' : 'text-slate-300'}`}>{logLines.length} lines</span>
           </div>
-          <pre
+          <div
             ref={containerRef}
-            className={`h-[calc(100%-40px)] overflow-y-scroll overflow-x-auto p-5 font-mono text-sm leading-relaxed ${
+            tabIndex={0}
+            className={`min-h-0 flex-1 overflow-auto overscroll-contain p-5 font-mono text-sm leading-relaxed outline-none ${
               isLight ? 'bg-white text-slate-800' : 'bg-[#080C18] text-slate-100'
             }`}
             onKeyDown={handleKeyDown}
           >
-            {logLines.map((line, i) => (
-              <div key={i}>{highlightLine(line)}</div>
-            ))}
-            {lines.length === 0 && (
-              <span className={isLight ? 'text-text-muted' : 'text-slate-400'}>等待服务启动...</span>
-            )}
-          </pre>
+            <div className="min-w-max whitespace-pre">
+              {logLines.map((line, i) => (
+                <div key={i} className="min-h-[1.5em]">{highlightLine(line)}</div>
+              ))}
+              {lines.length === 0 && (
+                <span className={isLight ? 'text-text-muted' : 'text-slate-400'}>等待服务启动...</span>
+              )}
+              <div ref={bottomRef} className="h-px" />
+            </div>
+          </div>
         </div>
       </div>
     </div>

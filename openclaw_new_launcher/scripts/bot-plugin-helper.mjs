@@ -304,7 +304,7 @@ async function loginWeixin() {
   log(`\n[launcher] 微信登录链接：${startResult.qrcodeUrl}`);
   log('[launcher] 如果二维码没有显示完整，请复制上面的链接到浏览器打开。');
   log('\n用手机微信扫描以下二维码，以继续连接：\n');
-  const rendered = await printQrCode(startResult.qrcodeUrl);
+  const rendered = await printQrCode(startResult.qrcodeUrl, { compact: true });
   if (!rendered) {
     await loginQr.displayQRCode(startResult.qrcodeUrl);
   }
@@ -336,10 +336,10 @@ async function loginWeixin() {
   throw new Error(waitResult.message || '微信扫码绑定未完成');
 }
 
-async function printQrCode(url) {
+async function printQrCode(url, options = {}) {
   try {
     const qrcode = await import('qrcode-terminal');
-    qrcode.default.generate(url, { small: false });
+    qrcode.default.generate(url, { small: Boolean(options.compact) });
   } catch {
     log('[launcher] 二维码渲染组件不可用，请复制下面链接打开：');
     log(url);
