@@ -105,7 +105,34 @@ def _normalize_nav_items(items: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _validate_theme(theme: dict[str, Any]) -> dict[str, Any]:
+def _is_external_asset(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith(("data:", "blob:", "http://", "https://", "asset:", "tauri:"))
+
+
+def _resolve_brand_assets(brand: dict[str, Any], base_dir: str | None) -> None:
+    logo_value = brand.get("logoUrl") or brand.get("logo")
+    if not isinstance(logo_value, str) or not logo_value.strip():
+        return
+    logo_value = logo_value.strip()
+    if base_dir and not os.path.isabs(logo_value) and not _is_external_asset(logo_value):
+        logo_value = os.path.abspath(os.path.join(base_dir, logo_value))
+    brand["logoUrl"] = logo_value
+
+
+def _normalize_mode_colors(theme: dict[str, Any], default_colors: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    modes: dict[str, dict[str, Any]] = {}
+    raw_modes = theme.get("modes")
+    if not isinstance(raw_modes, dict):
+        return modes
+    for mode in ("light", "dark"):
+        raw_colors = raw_modes.get(mode)
+        if isinstance(raw_colors, dict):
+            modes[mode] = {k: v for k, v in raw_colors.items() if k in default_colors}
+    return modes
+
+
+def _validate_theme(theme: dict[str, Any], base_dir: str | None = None) -> dict[str, Any]:
     default = DEFAULT_THEME
     if not isinstance(theme, dict):
         return dict(default)
@@ -114,6 +141,7 @@ def _validate_theme(theme: dict[str, Any]) -> dict[str, Any]:
     result["colors"] = dict(default["colors"])
     if isinstance(theme.get("colors"), dict):
         result["colors"].update(theme["colors"])
+    result["modes"] = _normalize_mode_colors(theme, default["colors"])
     result["fonts"] = dict(default["fonts"])
     if isinstance(theme.get("fonts"), dict):
         for k, v in theme["fonts"].items():
@@ -122,6 +150,7 @@ def _validate_theme(theme: dict[str, Any]) -> dict[str, Any]:
     result["brand"] = dict(default["brand"])
     if isinstance(theme.get("brand"), dict):
         result["brand"].update(theme["brand"])
+    _resolve_brand_assets(result["brand"], base_dir)
     result["navItems"] = _normalize_nav_items(theme.get("navItems"))
     result["window"] = dict(default["window"])
     if isinstance(theme.get("window"), dict):
@@ -156,7 +185,12 @@ class ThemeManager:
                     self._current_cache = theme
                     return theme
 
-        self._current_cache = dict(DEFAULT_THEME)
+        theme = self._load_from_local_package("default")
+        if theme is not None:
+            self._current_cache = theme
+            return theme
+
+        self._current_cache = _validate_theme(DEFAULT_THEME)
         return self._current_cache
 
     def get_by_merchant(self, merchant_id: str) -> dict[str, Any] | None:
@@ -172,14 +206,13 @@ class ThemeManager:
         for entry in sorted(os.listdir(themes_dir)):
             theme_path = os.path.join(themes_dir, entry, "theme.json")
             if os.path.isfile(theme_path):
-                theme_data = read_json(theme_path, None)
+                theme_data = self._load_from_theme_file(theme_path, entry)
                 if isinstance(theme_data, dict):
-                    theme_data["merchantId"] = entry
                     themes.append(theme_data)
         return themes
 
     def save_theme(self, theme_data: dict[str, Any]) -> None:
-        validated = _validate_theme(theme_data)
+        validated = _validate_theme(theme_data, self.paths.data_dir)
         write_json(self.paths.theme_json, validated)
         self._current_cache = validated
 
@@ -188,13 +221,13 @@ class ThemeManager:
 
     def _load_from_cache(self) -> dict[str, Any] | None:
         theme_data = read_json(self.paths.theme_json, None)
-        if isinstance(theme_data, dict) and theme_data.get("colors"):
-            return _validate_theme(theme_data)
+        if self._looks_like_theme(theme_data):
+            return _validate_theme(theme_data, self.paths.data_dir)
         return None
 
     def _load_from_license(self, license_data: dict[str, Any]) -> dict[str, Any] | None:
         brand_config = license_data.get("brandConfig") or license_data.get("theme")
-        if isinstance(brand_config, dict) and brand_config.get("colors"):
+        if self._looks_like_theme(brand_config):
             return _validate_theme(brand_config)
         return None
 
@@ -202,8 +235,24 @@ class ThemeManager:
         theme_path = self.paths.theme_file(merchant_id)
         if not os.path.isfile(theme_path):
             return None
+        return self._load_from_theme_file(theme_path, merchant_id)
+
+    def _load_from_theme_file(self, theme_path: str, merchant_id: str | None = None) -> dict[str, Any] | None:
         theme_data = read_json(theme_path, None)
-        if isinstance(theme_data, dict) and theme_data.get("colors"):
-            theme_data["merchantId"] = merchant_id
-            return _validate_theme(theme_data)
+        if self._looks_like_theme(theme_data):
+            if merchant_id:
+                theme_data["merchantId"] = merchant_id
+            return _validate_theme(theme_data, os.path.dirname(theme_path))
         return None
+
+    @staticmethod
+    def _looks_like_theme(theme_data: Any) -> bool:
+        return (
+            isinstance(theme_data, dict)
+            and (
+                isinstance(theme_data.get("colors"), dict)
+                or isinstance(theme_data.get("modes"), dict)
+                or isinstance(theme_data.get("brand"), dict)
+                or isinstance(theme_data.get("window"), dict)
+            )
+        )

@@ -25,6 +25,8 @@ export interface ThemeColors {
   terminal_text: string;
 }
 
+export type ThemeColorOverrides = Partial<ThemeColors>;
+
 export interface ThemeFonts {
   display: [string, number, string];
   title: [string, number, string];
@@ -40,6 +42,7 @@ export interface ThemeBrand {
   app_user_model_id: string;
   terminal_header: string;
   logoUrl?: string;
+  logo?: string;
 }
 
 export interface ThemeWindow {
@@ -51,6 +54,10 @@ export interface ThemeWindow {
 export interface ThemeConfig {
   name: string;
   colors: ThemeColors;
+  modes?: {
+    light?: ThemeColorOverrides;
+    dark?: ThemeColorOverrides;
+  };
   fonts: ThemeFonts;
   brand: ThemeBrand;
   navItems?: NavItem[];

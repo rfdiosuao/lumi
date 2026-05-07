@@ -156,10 +156,17 @@ export function buildRuntimeTheme(baseTheme: ThemeConfig | null | undefined, mod
   const palette = getBuiltinTheme(mode);
   const brand = baseTheme?.brand ? { ...palette.brand, ...baseTheme.brand } : palette.brand;
   const windowConfig = baseTheme?.window ? { ...palette.window, ...baseTheme.window } : palette.window;
+  const modeColors = baseTheme?.modes?.[mode];
+  const colors = {
+    ...palette.colors,
+    ...(modeColors ?? baseTheme?.colors ?? {}),
+  };
 
   return {
     ...palette,
-    name: palette.name,
+    name: baseTheme?.name ?? palette.name,
+    colors,
+    modes: baseTheme?.modes,
     brand,
     window: windowConfig,
     fonts: { ...palette.fonts, ...(baseTheme?.fonts ?? {}) },

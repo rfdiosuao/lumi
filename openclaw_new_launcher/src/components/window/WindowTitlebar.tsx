@@ -30,7 +30,8 @@ const WindowButton: React.FC<{
 );
 
 export const WindowTitlebar: React.FC = () => {
-  const { brandName, brandSubtitle } = useTheme();
+  const { brandName, brandSubtitle, logoUrl } = useTheme();
+  const brandLogo = logoUrl || logoImg;
 
   const toggleMaximize = () => {
     appWindow.toggleMaximize().catch(() => {});
@@ -44,7 +45,7 @@ export const WindowTitlebar: React.FC = () => {
     >
       <div data-tauri-drag-region className="flex w-[286px] shrink-0 items-center gap-2 bg-app-sidebar px-3">
         <div className="flex h-6 w-6 items-center justify-center rounded-md border border-border bg-surface-alt">
-          <img src={logoImg} alt="" className="h-4 w-4 object-contain" />
+          <img src={brandLogo} alt="" className="h-4 w-4 object-contain" />
         </div>
         <div data-tauri-drag-region className="truncate text-xs font-semibold">
           {brandName}

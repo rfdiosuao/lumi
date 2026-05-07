@@ -74,7 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onStart,
   onStop,
 }) => {
-  const { theme, navItems, themeMode, toggleTheme } = useTheme();
+  const { theme, navItems, themeMode, toggleTheme, logoUrl } = useTheme();
   const items = React.useMemo(() => {
     const source = normalizeNavItems(navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS);
     let next = [...source];
@@ -94,6 +94,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [navItems]);
   const brandName = theme.brand.name;
   const brandSubtitle = theme.brand.subtitle;
+  const brandLogo = logoUrl || logoImg;
 
   const groups = React.useMemo(() => {
     const groupSet = new Set(items.map((item) => item.group));
@@ -106,7 +107,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       <div className="relative flex shrink-0 items-center gap-3 px-5 py-6">
         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-white/55 shadow-[0_0_28px_rgba(37,99,235,0.12)]">
-          <img src={logoImg} alt="Logo" className="h-9 w-9 rounded-lg object-contain" />
+          <img src={brandLogo} alt="Logo" className="h-9 w-9 rounded-lg object-contain" />
         </div>
         <div className="min-w-0">
           <div className="truncate text-base font-bold tracking-wide text-text">{brandName}</div>

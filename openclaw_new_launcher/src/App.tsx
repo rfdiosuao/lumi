@@ -11,6 +11,7 @@ import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
 import { processApi, logApi, updateApi, configApi } from './services/api';
 import { open } from '@tauri-apps/plugin-shell';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ThemeProvider } from './providers/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 
@@ -19,11 +20,12 @@ import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/A
 import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
 
 function DynamicTitle() {
-  const { brandName, brandSubtitle } = useTheme();
+  const { windowTitle } = useTheme();
 
   useEffect(() => {
-    document.title = `${brandName} - ${brandSubtitle}`;
-  }, [brandName, brandSubtitle]);
+    document.title = windowTitle;
+    getCurrentWindow().setTitle(windowTitle).catch(() => {});
+  }, [windowTitle]);
 
   return null;
 }

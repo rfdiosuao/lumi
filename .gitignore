@@ -52,6 +52,7 @@ release/
 *.png
 !openclaw_new_launcher/logo_256.png
 !openclaw_new_launcher/src/assets/*.png
+!openclaw_new_launcher/data/themes/**/*.png
 !openclaw_new_launcher/src-tauri/icons/**/*.png
 
 # OS

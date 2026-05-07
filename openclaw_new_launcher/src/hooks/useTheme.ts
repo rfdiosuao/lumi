@@ -8,6 +8,17 @@ import {
   type BuiltinThemeMode,
 } from '../theme/default';
 import type { ThemeConfig } from '../types/theme';
+import { convertFileSrc } from '@tauri-apps/api/core';
+
+function resolveLogoUrl(value?: string): string | undefined {
+  if (!value) return undefined;
+  if (/^(data:|blob:|https?:|asset:|tauri:)/i.test(value)) return value;
+  try {
+    return convertFileSrc(value);
+  } catch {
+    return value;
+  }
+}
 
 export function useTheme() {
   const {
@@ -53,6 +64,8 @@ export function useTheme() {
     isCustom: false,
     brandName: current.brand.name,
     brandSubtitle: current.brand.subtitle,
+    logoUrl: resolveLogoUrl(current.brand.logoUrl || current.brand.logo),
+    windowTitle: current.window?.title || `${current.brand.name} - ${current.brand.subtitle}`,
     applyTheme,
     resetTheme,
     switchThemeMode,
