@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Windows checks
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: openclaw_new_launcher/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust
+        run: |
+          rustup default stable
+          rustup show
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            openclaw_new_launcher/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('openclaw_new_launcher/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Guard tracked artifacts
+        run: |
+          $tracked = git ls-files release openclaw_new_launcher/node_modules openclaw_new_launcher/src-tauri/target license_server/private_key.b64 license_server/license.db license_server/admin_token.txt
+          if ($tracked) {
+            Write-Host "Forbidden tracked artifacts:"
+            $tracked | ForEach-Object { Write-Host "  - $_" }
+            exit 1
+          }
+
+      - name: Run project checks
+        run: powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1
