@@ -16,8 +16,9 @@ Current call chain after phase 1:
 React UI -> Tauri invoke(proxy_request) -> Rust -> HTTP -> FastAPI Bridge
 ```
 
-The FastAPI service currently delegates endpoint behavior to the legacy route
-logic so the response contract stays stable during the migration.
+The FastAPI service now owns the known launcher API endpoints directly. The
+legacy route logic is still present only for the forced legacy implementation
+and unknown-route fallback while cleanup proceeds.
 
 The first low-risk endpoints have been moved to native FastAPI routes:
 
