@@ -46,12 +46,45 @@ export function getSavedChannelConfig(config: any, channel: BotChannel) {
   );
 }
 
+function normalizePathToken(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .toLowerCase()
+    .trim();
+}
+
+function pathMatchesPluginToken(value: unknown, channel: BotChannel): boolean {
+  const normalized = normalizePathToken(value);
+  if (!normalized) return false;
+
+  const tokens = [
+    channel.pluginName,
+    channel.packageName,
+    channel.configKey,
+    channel.legacyConfigKey,
+    channel.key,
+  ]
+    .filter((item): item is string => Boolean(item))
+    .map((item) => item.toLowerCase());
+
+  return tokens.some((token) => (
+    normalized === token
+    || normalized.endsWith(`/${token}`)
+    || normalized.includes(`/${token}/`)
+    || normalized.includes(`/${token}@`)
+  ));
+}
+
 export function configHasPlugin(config: any, channel: BotChannel): boolean {
   const entries = config?.plugins?.entries || {};
   const paths = config?.plugins?.load?.paths || [];
-  if (entries?.[channel.pluginName]?.enabled) return true;
+
+  const entryKeys = [channel.pluginName, channel.configKey, channel.legacyConfigKey].filter(Boolean) as string[];
+  if (entryKeys.some((key) => Boolean(entries?.[key]?.enabled))) return true;
+
   if (Array.isArray(paths)) {
-    return paths.some((item) => String(item).toLowerCase().includes(channel.pluginName.toLowerCase()));
+    return paths.some((item) => pathMatchesPluginToken(item, channel));
   }
   return false;
 }

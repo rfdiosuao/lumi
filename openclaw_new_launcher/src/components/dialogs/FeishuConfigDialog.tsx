@@ -24,6 +24,62 @@ interface PluginCheckCommandResult {
   savedId?: string;
 }
 
+type PluginDetectionState = {
+  status: PluginStatus;
+  message: string;
+  detected: boolean;
+};
+
+function summarizePluginDetection(
+  channel: BotChannel,
+  packageInstalled: boolean,
+  extensionInstalled: boolean,
+  configured: boolean,
+  error?: unknown,
+): PluginDetectionState {
+  const hasPackage = packageInstalled || extensionInstalled;
+  const hasConfig = configured;
+  const errorMessage = error instanceof Error ? error.message : String((error as any)?.message || error || '');
+
+  if (!hasPackage && !hasConfig && errorMessage) {
+    return {
+      status: 'error',
+      message: `插件检测失败：${errorMessage}`,
+      detected: false,
+    };
+  }
+
+  if (hasPackage && hasConfig) {
+    return {
+      status: 'installed',
+      message: `${channel.title}插件已安装并写入配置`,
+      detected: true,
+    };
+  }
+
+  if (hasPackage) {
+    return {
+      status: 'installed',
+      message: `${channel.title}插件包已预置，点击安装写入配置`,
+      detected: true,
+    };
+  }
+
+  if (hasConfig) {
+    return {
+      status: 'installed',
+      message: `${channel.title}配置已存在，等待插件包补齐`,
+      detected: true,
+    };
+  }
+
+  return {
+    status: 'missing',
+    message: `未检测到${channel.title}插件包，请重新打包`,
+    detected: false,
+  };
+}
+
 function parsePluginCheckOutput(output: string): PluginCheckCommandResult {
   const line = output
     .split(/\r?\n/)
@@ -103,18 +159,20 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
     setChecking(true);
     setStatusMessage(`正在检测${channel.title}插件...`);
 
-    let bundledPackage = false;
+    let packageInstalled = false;
+    let extensionInstalled = false;
     let configured = false;
-    let detected = false;
+    let detectionError: unknown = null;
 
     try {
       const status = await runLocalPluginCheck();
-      bundledPackage = Boolean(status.packageInstalled || status.extensionInstalled);
+      packageInstalled = Boolean(status.packageInstalled);
+      extensionInstalled = Boolean(status.extensionInstalled);
       configured = Boolean(status.configured);
-      detected = Boolean(status.installed || bundledPackage || configured);
       if (status.savedId) setIdValue(status.savedId);
     } catch (localError) {
       appendMainLog(`[${channel.title}] 本地检测命令失败，改用 Bridge 配置读取：${localError}\n`);
+      detectionError = localError;
 
       const configResp = await configApi.read(OPENCLAW_CONFIG_PATH, {}).catch((error) => {
         appendMainLog(`[${channel.title}] 配置读取失败，继续检测本地插件包：${error}\n`);
@@ -131,22 +189,19 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
         setIdValue(String(savedChannel.appId || savedChannel.robotId));
       }
 
-      bundledPackage = packageResponses.some((resp) => isInstalledPackage(resp.data, channel.packageName));
+      packageInstalled = packageResponses.some((resp) => isInstalledPackage(resp.data, channel.packageName));
       configured = configHasPlugin(config, channel);
-      detected = bundledPackage || configured;
+      if (packageInstalled || extensionInstalled || configured) {
+        detectionError = null;
+      }
     }
 
-    setPluginStatus(detected ? 'installed' : 'missing');
-    setStatusMessage(
-      detected
-        ? configured
-          ? `${channel.title}插件已安装`
-          : `${channel.title}插件包已预置，点击安装写入配置`
-        : `未检测到${channel.title}插件包，请重新打包`,
-    );
-    appendMainLog(`[${channel.title}] 插件检测：${detected ? '已预置/已安装' : '未检测到'}\n`);
+    const summary = summarizePluginDetection(channel, packageInstalled, extensionInstalled, configured, detectionError || undefined);
+    setPluginStatus(summary.status);
+    setStatusMessage(summary.message);
+    appendMainLog(`[${channel.title}] 插件检测：${summary.detected ? summary.message : '未检测到'}\n`);
     setChecking(false);
-    return detected;
+    return summary.detected;
   }, [appendMainLog, channel, runLocalPluginCheck]);
 
   useEffect(() => {
