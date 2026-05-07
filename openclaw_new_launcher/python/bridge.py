@@ -924,6 +924,35 @@ async def _fastapi_dispatch(request):
     )
 
 
+def _fastapi_json(data: dict, status_code: int = 200):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=status_code,
+        content=data,
+        headers=_legacy_headers(),
+    )
+
+
+def _fastapi_auth_error(request):
+    if Handler.bridge_token:
+        req_token = request.headers.get("X-Bridge-Token")
+        if req_token != Handler.bridge_token:
+            return _fastapi_json({"error": "未授权的请求"}, 401)
+    return None
+
+
+async def _fastapi_body(request) -> dict:
+    raw = await request.body()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _serve_fastapi(port: int, token: str) -> None:
     from fastapi import FastAPI
     import uvicorn
@@ -934,6 +963,70 @@ def _serve_fastapi(port: int, token: str) -> None:
         redoc_url=None,
         openapi_url=None,
     )
+
+    @app.api_route("/api/system/info", methods=["GET", "POST"])
+    async def system_info(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        updater = _get_updater()
+        return _fastapi_json({
+            "node_path": paths.node_exe,
+            "base_path": paths.base_path,
+            "openclaw_version": updater.current_version(),
+        })
+
+    @app.api_route("/api/process/status", methods=["GET", "POST"])
+    async def process_status(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        svc = _get_process_svc()
+        return _fastapi_json({
+            "running": svc.running,
+            "pid": svc.process.pid if svc.process and svc.process.poll() is None else None,
+        })
+
+    @app.api_route("/api/log/get", methods=["GET", "POST"])
+    async def log_get(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        with log_lock:
+            text = "".join(log_buffer)
+        return _fastapi_json({"log": text})
+
+    @app.api_route("/api/license/current", methods=["GET", "POST"])
+    async def license_current(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        lic = _get_license_mgr().current_license()
+        return _fastapi_json({"license": lic})
+
+    @app.post("/api/license/authorized")
+    async def license_authorized(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        body = await _fastapi_body(request)
+        feature = body.get("feature")
+        return _fastapi_json({"authorized": _get_license_mgr().is_authorized(feature)})
+
+    @app.api_route("/api/theme/current", methods=["GET", "POST"])
+    async def theme_current(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        license_data = _get_license_mgr().current_license()
+        theme = _get_theme_mgr().get_current(license_data)
+        return _fastapi_json({"theme": theme})
+
+    @app.api_route("/api/skills/list", methods=["GET", "POST"])
+    async def skills_list(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        return _fastapi_json(_get_skill_svc().list_skills())
+
+    @app.api_route("/api/skills/paths", methods=["GET", "POST"])
+    async def skills_paths(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        return _fastapi_json(_get_skill_svc().paths_payload())
 
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT"])
     async def route_all(path: str, request: FastApiRequest):

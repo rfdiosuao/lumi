@@ -19,6 +19,22 @@ React UI -> Tauri invoke(proxy_request) -> Rust -> HTTP -> FastAPI Bridge
 The FastAPI service currently delegates endpoint behavior to the legacy route
 logic so the response contract stays stable during the migration.
 
+The first low-risk endpoints have been moved to native FastAPI routes:
+
+| Endpoint | Status |
+| --- | --- |
+| `/api/system/info` | FastAPI native |
+| `/api/process/status` | FastAPI native |
+| `/api/log/get` | FastAPI native |
+| `/api/license/current` | FastAPI native |
+| `/api/license/authorized` | FastAPI native |
+| `/api/theme/current` | FastAPI native |
+| `/api/skills/list` | FastAPI native |
+| `/api/skills/paths` | FastAPI native |
+
+All other endpoints still go through the legacy catch-all route until they are
+migrated and verified one group at a time.
+
 Target call chain after the full migration:
 
 ```text
