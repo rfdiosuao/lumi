@@ -14,6 +14,7 @@ source of truth when they conflict with code or the current guard documents.
 | `CUSTOMER_GUIDE.md` | Customer-facing quick guide |
 | `SUPPORT_TROUBLESHOOTING.md` | Support and troubleshooting |
 | `DELIVERY_ACCEPTANCE.md` | Delivery acceptance checklist |
+| `AD_VIDEO_WORKBENCH_GUIDE.md` | Customer-facing guide for the AI ad video workflow |
 | `MAC_BUILD_NOTES.md` | Mac build notes |
 | `MAC_MIGRATION_CHECKLIST.md` | Mac migration acceptance checklist |
 

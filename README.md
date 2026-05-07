@@ -136,6 +136,7 @@ openclaw_new_launcher/src-tauri/tauri.conf.json
 - `docs/BRANDING_AND_PACKAGING.md`：更换 Logo、名称并重新打包
 - `docs/BRAND_THEME.md`：主题 / 品牌配置说明
 - `openclaw_new_launcher/docs/UI_CUSTOMIZATION_DESIGN.md`：UI 自定义与模块化设计方案
+- `openclaw_new_launcher/docs/AD_VIDEO_WORKBENCH_GUIDE.md`：AI 广告工作台使用文档
 - `openclaw_new_launcher/docs/RUNTIME_PATHS.md`：Windows / Mac 运行时路径规范
 - `openclaw_new_launcher/docs/MAC_BUILD_NOTES.md`：Mac 编译注意事项
 - `openclaw_new_launcher/docs/MAC_MIGRATION_CHECKLIST.md`：Mac 迁移验收清单
