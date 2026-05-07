@@ -1064,6 +1064,23 @@ def _serve_fastapi(port: int, token: str) -> None:
         feature = body.get("feature")
         return _fastapi_json({"authorized": _get_license_mgr().is_authorized(feature)})
 
+    @app.post("/api/license/activate")
+    async def license_activate(request: FastApiRequest):
+        if error := _fastapi_auth_error(request):
+            return error
+        from core.license_manager import LicenseError
+
+        body = await _fastapi_body(request)
+        code = body.get("code", "")
+        if not code:
+            return _fastapi_json({"error": "授权码不能为空"}, 400)
+        try:
+            result = _get_license_mgr().activate(code)
+            theme = _get_theme_mgr().get_current(_get_license_mgr().current_license())
+            return _fastapi_json({"license": result, "theme": theme})
+        except LicenseError as exc:
+            return _fastapi_json({"error": str(exc)}, 400)
+
     @app.api_route("/api/theme/current", methods=["GET", "POST"])
     async def theme_current(request: FastApiRequest):
         if error := _fastapi_auth_error(request):

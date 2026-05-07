@@ -221,6 +221,21 @@ try {
         }
     }
 
+    Write-Host "Checking empty license activation rejection..."
+    try {
+        Invoke-RestMethod -Uri "$baseUrl/api/license/activate" -Method POST -Headers $headers -ContentType "application/json" -Body "{}" -TimeoutSec 8 | Out-Null
+        throw "Bridge accepted an empty license activation request."
+    } catch {
+        $response = $_.Exception.Response
+        if ($null -eq $response) {
+            throw
+        }
+        $statusCode = [int]$response.StatusCode
+        if ($statusCode -ne 400) {
+            throw "Expected HTTP 400 for empty license activation, got $statusCode"
+        }
+    }
+
     $checks = @(
         @{ Name = "system info"; Path = "/api/system/info"; Method = "GET"; Props = @("node_path", "base_path", "openclaw_version") },
         @{ Name = "process status"; Path = "/api/process/status"; Method = "GET"; Props = @("running", "pid") },

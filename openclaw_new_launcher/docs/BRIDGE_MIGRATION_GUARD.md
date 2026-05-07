@@ -30,6 +30,7 @@ The first low-risk endpoints have been moved to native FastAPI routes:
 | `/api/log/get` | FastAPI native |
 | `/api/log/clear` | FastAPI native |
 | `/api/license/current` | FastAPI native |
+| `/api/license/activate` | FastAPI native |
 | `/api/license/authorized` | FastAPI native |
 | `/api/theme/current` | FastAPI native |
 | `/api/theme/by_merchant` | FastAPI native |
@@ -104,6 +105,7 @@ Checked endpoints:
 | `/api/process/stop` | `POST` | `status`, `message` |
 | `/api/log/get` | `GET` | `log` |
 | `/api/license/current` | `GET` | `license` |
+| `/api/license/activate` | `POST` | empty-code rejection |
 | `/api/license/authorized` | `POST` | `authorized` |
 | `/api/theme/current` | `GET` | `theme` |
 | `/api/theme/list` | `GET` | `themes` |
