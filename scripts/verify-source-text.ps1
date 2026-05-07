@@ -10,6 +10,7 @@ $sourceRoots = @(
     "openclaw_new_launcher/src",
     "openclaw_new_launcher/python",
     "openclaw_new_launcher/scripts",
+    "openclaw_new_launcher/docs",
     "openclaw_new_launcher/src-tauri/src",
     "openclaw_new_launcher/src-tauri/capabilities",
     "scripts",

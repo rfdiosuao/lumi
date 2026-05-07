@@ -1,5 +1,10 @@
 # OpenClaw U盘便携版桌面管理器 -- 系统架构文档
 
+> **文档状态：历史参考。**
+> 当前稳定化、模块扩展、UI 自定义和 Bridge 迁移分别以
+> `PRODUCT_ROADMAP.md`、`MODULE_EXTENSION_GUIDE.md`、`UI_CUSTOMIZATION_DESIGN.md`
+> 和 `BRIDGE_MIGRATION_GUARD.md` 为准。本文保留用于理解早期整体架构。
+
 > **版本**: 2.0  
 > **日期**: 2026-05-05  
 > **状态**: 主题系统已实现（客户端），授权服务器扩展进行中  

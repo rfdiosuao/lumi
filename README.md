@@ -131,6 +131,8 @@ openclaw_new_launcher/src-tauri/tauri.conf.json
 
 ## 重要文档
 
+- `openclaw_new_launcher/docs/DOCS_INDEX.md`：当前文档入口和历史文档状态说明
+- `openclaw_new_launcher/docs/BRIDGE_MIGRATION_GUARD.md`：Bridge 冒烟检查与 FastAPI 迁移护栏
 - `docs/BRANDING_AND_PACKAGING.md`：更换 Logo、名称并重新打包
 - `docs/BRAND_THEME.md`：主题 / 品牌配置说明
 - `openclaw_new_launcher/docs/UI_CUSTOMIZATION_DESIGN.md`：UI 自定义与模块化设计方案
@@ -170,6 +172,7 @@ openclaw_new_launcher/src-tauri/tauri.conf.json
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\verify-source-text.ps1 -NoGit
+powershell -ExecutionPolicy Bypass -File scripts\smoke-bridge.ps1
 cd openclaw_new_launcher
 npm run build
 ```
