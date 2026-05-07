@@ -7,11 +7,13 @@ Lumi 是面向商家交付的 OpenClaw 便携式 AI 服务启动器。项目目�
 ## 当前状态
 
 - Windows 便携包：已支持根目录仅保留 `OpenClaw.exe` 和 `OpenClawFiles/`。
-- 授权码：支持在线激活，交付包不内置授权文件。
+- 授权码：支持在线激活，核心授权校验已迁移到 Rust 二进制，交付包不内置授权文件。
 - 环境诊断：未授权也可进入，可一键修复端口占用、残留进程和基础目录。
 - AI 生图 / AI 视频：支持 API 配置后调用。
 - 广告视频工作台：支持分镜、素材、九宫格和首尾帧工作流。
 - 飞书 / 微信机器人：支持离线插件包检测、安装和扫码/手动配置入口。
+- Skills：支持本地 Skill 包管理、启用/停用和 Skill 网站跳转。
+- 品牌换壳：支持通过主题文件替换 Logo、名称、窗口标题和主题颜色。
 - Mac 迁移：已提供源码包和迁移文档，仍需在真实 Mac 环境完成 `.app/.dmg` 验收。
 
 ## 目录结构
@@ -108,12 +110,34 @@ npm run tauri build -- --bundles app,dmg
 
 注意：Mac 不能复用 Windows 的 `node_modules`、`src-tauri/target`、Windows Node runtime 或 `.exe` 文件。
 
+## 品牌换壳与二开
+
+如果要更换 Logo、名称、窗口标题、主题颜色并重新打包，请先看：
+
+- `docs/BRANDING_AND_PACKAGING.md`：更换 Logo、名称并重新打包
+- `docs/BRAND_THEME.md`：主题文件结构说明
+
+常用品牌文件：
+
+```text
+openclaw_new_launcher/data/themes/default/theme.json
+openclaw_new_launcher/data/themes/default/logo.png
+openclaw_new_launcher/src-tauri/icons/
+openclaw_new_launcher/index.html
+openclaw_new_launcher/src-tauri/tauri.conf.json
+```
+
+注意：只改主题文件不会改变 Windows 文件图标；只改 Tauri 图标也不会改变启动器内部 Logo。
+
 ## 重要文档
 
+- `docs/BRANDING_AND_PACKAGING.md`：更换 Logo、名称并重新打包
+- `docs/BRAND_THEME.md`：主题 / 品牌配置说明
 - `openclaw_new_launcher/docs/RUNTIME_PATHS.md`：Windows / Mac 运行时路径规范
 - `openclaw_new_launcher/docs/MAC_BUILD_NOTES.md`：Mac 编译注意事项
 - `openclaw_new_launcher/docs/MAC_MIGRATION_CHECKLIST.md`：Mac 迁移验收清单
 - `openclaw_new_launcher/docs/PRODUCT_ROADMAP.md`：产品路线规划
+- `openclaw_new_launcher/docs/MODULE_EXTENSION_GUIDE.md`：模块扩展与二开说明
 - `openclaw_new_launcher/docs/GITEE_SETUP.md`：Gitee 配置说明
 - `openclaw_new_launcher/docs/GIT_CICD_PLAN.md`：CI/CD 规划
 
