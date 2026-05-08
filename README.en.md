@@ -8,13 +8,17 @@ Main version: `v2.0.1`
 
 ```text
 .
-├─ openclaw_new_launcher/      # Tauri + React + Python Bridge launcher
+├─ openclaw_new_launcher/      # Main Tauri + React + Python Bridge launcher
 ├─ license_server/             # Online license server
-├─ scripts/                    # Local verification, packaging, release scripts
-├─ docs/                       # Project-level documents
-├─ release/                    # Local build outputs, not committed
-└─ openclaw_launcher/          # Legacy Python launcher, kept for reference
+├─ scripts/                    # Repo-level verification, packaging, release scripts
+├─ docs/                       # Repo-level branding, CI/CD, packaging docs
+├─ data/                       # Local runtime state; state files are ignored
+└─ release/                    # Local build outputs, not committed
 ```
+
+Canonical repository root: `D:\Axiangmu\AUSTART`.
+
+Do not use `D:\Axiangmu\U盘启动器` as the source workspace; it is only suitable for temporary package testing or historical portable-build output. See `openclaw_new_launcher/docs/PROJECT_STRUCTURE.md` for the current directory map.
 
 ## Development
 

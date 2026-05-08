@@ -1,19 +1,66 @@
 # CI/CD Release Notes
 
-This repository uses Gitee Go for cloud CI and release artifacts.
+This repository supports GitHub Actions for CI and GitHub Releases. Gitee Go can
+still be used for domestic mirroring, but GitHub is the primary cloud CI/CD path
+for this checkout.
 
-## What Gitee Go Builds
+## GitHub Actions
 
-The Gitee Go cloud runner validates the repository, installs an isolated Node.js 20 runtime, builds the React/Tauri frontend, compiles Python files, and publishes `ci_artifacts` as Gitee artifacts.
+Workflows:
 
-The cloud artifact is not the full customer-facing Windows portable package. The full offline package contains a Windows Tauri executable, bundled Node.js, OpenClaw, and an embedded Python runtime. That package must be produced on a Windows builder or on the local packaging machine.
+- `.github/workflows/ci.yml`: runs on pushes and pull requests to `master`.
+- `.github/workflows/release.yml`: runs on tags matching `v*` or manual dispatch.
 
-## Automatic Triggers
+The release workflow validates source text, installs Node.js 20, builds the React
+frontend, checks Rust, builds Tauri bundles, uploads CI artifacts, and publishes a
+GitHub Release for the tag.
 
-The pipeline runs on:
+The cloud artifact is not the full customer-facing Windows portable package. The
+full offline package contains a Windows Tauri executable, bundled Node.js,
+OpenClaw, bundled bot plugins, and an embedded Python runtime. That package must
+be produced on a Windows builder or on the local packaging machine with an
+existing seed package.
+
+## Automatic GitHub Triggers
+
+CI runs on:
 
 - Pushes to `master`
+- Pull requests to `master`
+
+Release publishing runs on:
+
 - Tags matching `v*`
+- Manual `workflow_dispatch` with a tag name
+
+## Local Full Portable Release
+
+Build the full portable zip locally:
+
+```powershell
+cd D:\Axiangmu\AUSTART
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 `
+  -Version 2.0.1 `
+  -PackageName OpenClaw-Portable-v2.0.1-YYYY.MM.DD
+```
+
+Verify the zip:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 `
+  -Path release\OpenClaw-Portable-v2.0.1-YYYY.MM.DD.zip
+```
+
+Create or update a GitHub Release with local portable assets:
+
+```powershell
+gh release create v2.0.1-YYYY.MM.DD `
+  release\OpenClaw-Portable-v2.0.1-YYYY.MM.DD.zip `
+  release\OpenClaw-Portable-v2.0.1-YYYY.MM.DD.zip.sha256.txt `
+  --repo rfdiosuao/lumi `
+  --title "Lumi / OpenClaw v2.0.1 YYYY.MM.DD" `
+  --generate-notes
+```
 
 ## Full Gitee Release Upload
 

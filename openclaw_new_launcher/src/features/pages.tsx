@@ -1,4 +1,5 @@
 import React from 'react';
+import { DashboardPage } from '../components/dashboard/DashboardPage';
 import { TerminalPage } from '../components/terminal/TerminalPage';
 import { LicensePage } from '../components/license/LicensePage';
 import { ImagePage } from '../components/image/ImagePage';
@@ -8,6 +9,7 @@ import { DiagnosticsPage } from '../components/diagnostics/DiagnosticsPage';
 import { SkillsPage } from '../components/skills/SkillsPage';
 
 const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
+  dashboard: DashboardPage,
   terminal: TerminalPage,
   license: LicensePage,
   image: ImagePage,

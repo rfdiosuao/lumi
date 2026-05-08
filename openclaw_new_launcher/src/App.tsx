@@ -1,17 +1,16 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { open } from '@tauri-apps/plugin-shell';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { WindowTitlebar } from './components/window/WindowTitlebar';
 import { ToastContainer, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
 import { processApi, logApi, updateApi, configApi } from './services/api';
-import { open } from '@tauri-apps/plugin-shell';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ThemeProvider } from './providers/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 import { getFeatureDefinition } from './features/registry';
 import { renderFeaturePage } from './features/pages';
-
 import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
 import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
 
@@ -40,9 +39,18 @@ function hasConfiguredApiProfile(data: unknown): boolean {
   });
 }
 
-
 export default function App() {
-  const { currentPage, setCurrentPage, serviceRunning, setServiceRunning, serviceStatus, setServiceStatus, isAuthorized, isLicenseChecking, checkLicense } = useAppStore();
+  const {
+    currentPage,
+    setCurrentPage,
+    serviceRunning,
+    setServiceRunning,
+    serviceStatus,
+    setServiceStatus,
+    isAuthorized,
+    isLicenseChecking,
+    checkLicense,
+  } = useAppStore();
   const appendLog = useLogStore((s) => s.append);
   const [activeDialog, setActiveDialog] = useState<'api' | 'feishu' | 'weixin' | null>(null);
   const [apiConfigured, setApiConfigured] = useState(false);
@@ -57,7 +65,6 @@ export default function App() {
     }
   }, []);
 
-  // Poll logs periodically
   const startLogPolling = () => {
     if (logInterval.current) return;
     logInterval.current = setInterval(async () => {
@@ -66,8 +73,8 @@ export default function App() {
         if (resp.log) {
           appendLog(resp.log);
         }
-      } catch (e) {
-        appendLog('[日志轮询] 错误: ' + e + '\n');
+      } catch (error) {
+        appendLog(`[日志轮询] 错误: ${error}\n`);
       }
     }, 1000);
   };
@@ -104,12 +111,10 @@ export default function App() {
       appendLog('[服务] 启动成功\n');
       showToast('服务已启动', 'success');
       startLogPolling();
-
-      // Auto-open web after 3s
       setTimeout(() => open('http://127.0.0.1:18790'), 3000);
-    } catch (e: any) {
+    } catch (error: any) {
       setServiceStatus('idle');
-      showToast('启动失败: ' + (e?.error || e), 'error');
+      showToast(`启动失败: ${error?.error || error}`, 'error');
     }
   };
 
@@ -121,7 +126,7 @@ export default function App() {
       setServiceStatus('idle');
       stopLogPolling();
       showToast('服务已停止', 'info');
-    } catch (e: any) {
+    } catch {
       setServiceStatus('idle');
       showToast('停止失败', 'error');
     }
@@ -150,20 +155,16 @@ export default function App() {
       try {
         const resp = await updateApi.check();
         if (resp.hasUpdate) {
-          showToast(`发现新版本: ${resp.current} → ${resp.latest}`, 'info');
+          showToast(`发现新版本 ${resp.current} -> ${resp.latest}`, 'info');
           if (confirm(`当前: ${resp.current}\n最新: ${resp.latest}\n是否更新？`)) {
             appendLog('[更新] 开始更新...\n');
             const updateResp = await updateApi.do();
-            if (updateResp.success) {
-              showToast(`更新成功: ${updateResp.current_version}`, 'success');
-            } else {
-              showToast('更新失败', 'error');
-            }
+            showToast(updateResp.success ? `更新成功: ${updateResp.current_version}` : '更新失败', updateResp.success ? 'success' : 'error');
           }
         } else {
-          showToast(`已是最新版本: ${resp.current}`, 'info');
+          showToast(`已是最新版本 ${resp.current}`, 'info');
         }
-      } catch (e: any) {
+      } catch {
         showToast('检查更新失败', 'error');
       }
       return;
@@ -172,14 +173,10 @@ export default function App() {
     setCurrentPage(key);
   };
 
-  const renderPage = () => {
-    return renderFeaturePage(currentPage);
-  };
-
   return (
     <ThemeProvider>
       <DynamicTitle />
-      <div className="flex h-screen w-screen flex-col overflow-hidden bg-surface">
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-surface text-text">
         <WindowTitlebar />
         <div className="flex min-h-0 flex-1 overflow-hidden bg-surface">
           <Sidebar
@@ -193,7 +190,7 @@ export default function App() {
             onStop={handleStop}
           />
           <main className="relative flex-1 overflow-hidden bg-surface">
-            {renderPage()}
+            {renderFeaturePage(currentPage)}
           </main>
         </div>
 

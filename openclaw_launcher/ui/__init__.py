@@ -1,2 +1,0 @@
-"""Reusable tkinter UI components."""
-

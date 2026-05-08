@@ -20,13 +20,19 @@ Lumi 是面向商家交付的 OpenClaw 便携式 AI 服务启动器。项目目�
 
 ```text
 .
-├─ openclaw_new_launcher/      # 新版 Tauri + React + Python Bridge 启动器
+├─ openclaw_new_launcher/      # 主项目：Tauri + React + Python Bridge 启动器
 ├─ license_server/             # 在线授权码服务器
-├─ scripts/                    # 本地检查、打包、发布脚本
-├─ docs/                       # 项目级文档
-├─ release/                    # 本地构建产物，不提交到仓库
-└─ openclaw_launcher/          # 旧版 Python 启动器，仅作历史参考
+├─ scripts/                    # 仓库级检查、打包、发布脚本
+├─ docs/                       # 仓库级品牌、CI/CD、打包文档
+├─ data/                       # 本地运行状态目录，状态文件不提交
+└─ release/                    # 本地构建产物，不提交到仓库
 ```
+
+当前仓库根目录是 `D:\Axiangmu\AUSTART`。不要把旁边的 `D:\Axiangmu\U盘启动器` 当成源码工作区；那里只应作为临时测试包或历史打包产物位置。
+
+更完整的结构说明见：
+
+- `openclaw_new_launcher/docs/PROJECT_STRUCTURE.md`
 
 ## 快速开始
 
@@ -136,7 +142,7 @@ openclaw_new_launcher/src-tauri/tauri.conf.json
 - `docs/BRANDING_AND_PACKAGING.md`：更换 Logo、名称并重新打包
 - `docs/BRAND_THEME.md`：主题 / 品牌配置说明
 - `openclaw_new_launcher/docs/UI_CUSTOMIZATION_DESIGN.md`：UI 自定义与模块化设计方案
-- `openclaw_new_launcher/docs/AD_VIDEO_WORKBENCH_GUIDE.md`：AI 广告工作台使用文档
+- `openclaw_new_launcher/docs/广告视频使用文档.md`：AI 广告工作台使用文档
 - `openclaw_new_launcher/docs/RUNTIME_PATHS.md`：Windows / Mac 运行时路径规范
 - `openclaw_new_launcher/docs/MAC_BUILD_NOTES.md`：Mac 编译注意事项
 - `openclaw_new_launcher/docs/MAC_MIGRATION_CHECKLIST.md`：Mac 迁移验收清单

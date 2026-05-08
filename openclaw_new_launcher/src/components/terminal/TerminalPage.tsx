@@ -5,53 +5,32 @@ import { useLogStore } from '../../stores/logStore';
 import { useTheme } from '../../hooks/useTheme';
 
 export const TerminalPage: React.FC = () => {
-  const lines = useLogStore((s) => s.lines);
-  const clearLogs = useLogStore((s) => s.clear);
-  const { theme, themeMode } = useTheme();
-  const isLight = themeMode === 'light';
+  const lines = useLogStore((state) => state.lines);
+  const clearLogs = useLogStore((state) => state.clear);
+  const { theme } = useTheme();
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const bottomRef = React.useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = React.useState(false);
   const [lastExportPath, setLastExportPath] = React.useState('');
   const logLines = lines.split('\n').filter(Boolean);
 
-  const scrollToBottom = React.useCallback((smooth = false) => {
+  const scrollToBottom = React.useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    bottomRef.current?.scrollIntoView({
-      block: 'end',
-      behavior: smooth ? 'smooth' : 'auto',
-    });
-    el.scrollTop = el.scrollHeight;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, []);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.ctrlKey && (e.key === 'c' || e.key === 'C' || e.key === 'a' || e.key === 'A')) {
-      return;
-    }
-    e.preventDefault();
-  };
-
   const highlightLine = (line: string) => {
-    if (line.includes('[Error]') || line.includes('Error:') || line.includes('failed')) {
-      return <span className={isLight ? 'text-[#B91C1C]' : 'text-[#F87171]'}>{line}</span>;
+    const lowered = line.toLowerCase();
+    if (line.includes('[Error]') || lowered.includes('error') || lowered.includes('failed')) {
+      return <span className="text-[#FF6E86]">{line}</span>;
     }
-    if (line.includes('[WARN]') || line.includes('[Warning]') || line.includes('warning')) {
-      return <span className={isLight ? 'text-[#B45309]' : 'text-[#FBBF24]'}>{line}</span>;
+    if (line.includes('[WARN]') || line.includes('[Warning]') || lowered.includes('warning')) {
+      return <span className="text-[#FFB454]">{line}</span>;
     }
-    if (line.includes('[OpenClaw]')) {
-      return <span className={isLight ? 'text-[#047857]' : 'text-[#00F5D4]'}>{line}</span>;
+    if (line.includes('[OpenClaw]') || line.includes('[Bridge]')) {
+      return <span className="text-terminal-text">{line}</span>;
     }
-    if (line.includes('[Bridge]')) {
-      return <span className={isLight ? 'text-[#1D4ED8]' : 'text-[#93C5FD]'}>{line}</span>;
-    }
-    return <span className={isLight ? 'text-slate-800' : 'text-slate-100'}>{line}</span>;
-  };
-
-  const handleJumpToBottom = () => {
-    requestAnimationFrame(() => scrollToBottom(true));
-    window.setTimeout(() => scrollToBottom(false), 120);
-    showToast('已跳到底部', 'info');
+    return <span className="text-slate-100">{line}</span>;
   };
 
   const handleExport = async () => {
@@ -87,26 +66,20 @@ export const TerminalPage: React.FC = () => {
 
   return (
     <div className="flex h-full flex-col bg-transparent">
-      <div className={`flex h-[64px] shrink-0 items-center justify-between border-b px-6 ${
-        isLight ? 'border-border bg-surface' : 'border-white/10 bg-[#101328]'
-      }`}>
+      <div className="flex h-[64px] shrink-0 items-center justify-between border-b border-border bg-surface px-6">
         <div className="flex items-center">
           <div className="mr-5 flex items-center gap-2">
             <div className="h-3 w-3 rounded-full bg-status-danger shadow-[0_0_10px_rgba(255,77,109,0.65)]" />
-            <div className="h-3 w-3 rounded-full bg-status-warning shadow-[0_0_10px_rgba(245,158,11,0.55)]" />
-            <div className="h-3 w-3 rounded-full bg-status-success shadow-[0_0_10px_rgba(22,199,132,0.55)]" />
+            <div className="h-3 w-3 rounded-full bg-status-warning shadow-[0_0_10px_rgba(255,180,84,0.55)]" />
+            <div className="h-3 w-3 rounded-full bg-status-success shadow-[0_0_10px_rgba(63,224,143,0.55)]" />
           </div>
-          <span className={`text-lg font-bold tracking-wide ${isLight ? 'text-text' : 'text-slate-100'}`}>
-            {theme.brand.terminal_header}
-          </span>
-          <span className={`ml-3 rounded-full border px-3 py-1 text-xs ${
-            isLight ? 'border-border bg-surface-alt text-text-muted' : 'border-white/10 bg-white/5 text-slate-300'
-          }`}>
+          <span className="text-lg font-black tracking-wide text-text">{theme.brand.terminal_header}</span>
+          <span className="ml-3 rounded-full border border-border bg-surface-alt px-3 py-1 text-xs text-text-muted">
             127.0.0.1:18790
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="quiet" className="px-3 py-1.5 text-xs" onClick={handleJumpToBottom}>
+          <Button variant="quiet" className="px-3 py-1.5 text-xs" onClick={scrollToBottom}>
             跳到底部
           </Button>
           <Button variant="quiet" className="px-3 py-1.5 text-xs" onClick={handleExport} disabled={exporting}>
@@ -124,31 +97,23 @@ export const TerminalPage: React.FC = () => {
       </div>
 
       <div className="flex min-h-0 flex-1 p-6">
-        <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border shadow-[0_18px_50px_rgba(15,23,42,0.14)] ${
-          isLight ? 'border-border bg-white' : 'border-slate-700 bg-[#080C18]'
-        }`}>
-          <div className={`flex h-10 shrink-0 items-center justify-between border-b px-4 ${
-            isLight ? 'border-border bg-surface-alt' : 'border-slate-700 bg-[#111827]'
-          }`}>
-            <span className={`text-xs font-bold uppercase tracking-[0.18em] ${isLight ? 'text-accent' : 'text-[#93C5FD]'}`}>Live Output</span>
-            <span className={`text-xs ${isLight ? 'text-text-muted' : 'text-slate-300'}`}>{logLines.length} lines</span>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-terminal-bg shadow-[0_24px_70px_rgba(0,0,0,0.32)]">
+          <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-terminal-header px-4">
+            <span className="text-xs font-black uppercase tracking-[0.22em] text-accent">Live Output</span>
+            <span className="text-xs text-text-muted">{logLines.length} lines</span>
           </div>
           <div
             ref={containerRef}
             tabIndex={0}
-            className={`min-h-0 flex-1 overflow-auto overscroll-contain p-5 font-mono text-sm leading-relaxed outline-none ${
-              isLight ? 'bg-white text-slate-800' : 'bg-[#080C18] text-slate-100'
-            }`}
-            onKeyDown={handleKeyDown}
+            className="min-h-0 flex-1 overflow-auto overscroll-contain bg-terminal-bg p-5 font-mono text-sm leading-relaxed outline-none"
           >
             <div className="min-w-max whitespace-pre">
-              {logLines.map((line, i) => (
-                <div key={i} className="min-h-[1.5em]">{highlightLine(line)}</div>
+              {logLines.map((line, index) => (
+                <div key={`${index}-${line.slice(0, 16)}`} className="min-h-[1.5em]">{highlightLine(line)}</div>
               ))}
               {lines.length === 0 && (
-                <span className={isLight ? 'text-text-muted' : 'text-slate-400'}>等待服务启动...</span>
+                <span className="text-text-muted">等待服务启动...</span>
               )}
-              <div ref={bottomRef} className="h-px" />
             </div>
           </div>
         </div>

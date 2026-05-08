@@ -1,2 +1,0 @@
-"""OpenClaw Launcher package."""
-

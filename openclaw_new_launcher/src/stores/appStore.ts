@@ -37,7 +37,7 @@ interface AppState {
 const initialThemeMode = getStoredThemeMode();
 
 export const useAppStore = create<AppState>((set) => ({
-  currentPage: 'terminal',
+  currentPage: 'dashboard',
   serviceRunning: false,
   serviceStatus: 'idle',
   isAuthorized: false,

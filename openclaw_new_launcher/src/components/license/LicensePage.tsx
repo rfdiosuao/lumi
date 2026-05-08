@@ -9,7 +9,7 @@ export const LicensePage: React.FC = () => {
   const [activating, setActivating] = useState(false);
   const [statusText, setStatusText] = useState('');
   const { isAuthorized, licenseInfo, setAuthorized, setLicenseInfo, setCurrentPage } = useAppStore();
-  const appendLog = useLogStore((s) => s.append);
+  const appendLog = useLogStore((state) => state.append);
 
   const handleActivate = async () => {
     if (!code.trim()) {
@@ -22,7 +22,7 @@ export const LicensePage: React.FC = () => {
       const resp = await licenseApi.activate(code);
       const license = resp.license;
       if (!license || typeof license !== 'object') {
-        setStatusText('激活失败：服务器返回无效的许可证');
+        setStatusText('激活失败：服务器返回了无效许可证');
         showToast('激活失败', 'error');
         return;
       }
@@ -31,12 +31,12 @@ export const LicensePage: React.FC = () => {
       if (typeof (window as any).__reloadTheme === 'function') {
         await (window as any).__reloadTheme();
       }
-      setStatusText(`激活成功：${(license as any).licensee || '客户'}`);
-      appendLog(`[授权] 激活成功：${(license as any).licensee}\n`);
+      setStatusText(`激活成功：${(license as any).licensee || 'Lumi User'}`);
+      appendLog(`[授权] 激活成功：${(license as any).licensee || 'Lumi User'}\n`);
       showToast('激活成功，主题已更新', 'success');
-      setTimeout(() => setCurrentPage('terminal'), 1500);
-    } catch (e: any) {
-      setStatusText(e?.error || '激活失败');
+      setTimeout(() => setCurrentPage('terminal'), 1200);
+    } catch (error: any) {
+      setStatusText(error?.error || '激活失败');
       showToast('激活失败', 'error');
     } finally {
       setActivating(false);
@@ -49,85 +49,70 @@ export const LicensePage: React.FC = () => {
       if (resp.license) {
         setLicenseInfo(resp.license as any);
         setAuthorized(true);
+        showToast('授权状态已刷新', 'success');
       } else {
         setLicenseInfo(null);
         setAuthorized(false);
+        showToast('当前未授权', 'info');
       }
     } catch {
-      // ignore
+      showToast('刷新授权状态失败', 'error');
     }
   };
 
   const features = licenseInfo?.features?.join(' / ') || '';
 
   return (
-    <div className="flex flex-col h-full bg-surface overflow-y-auto">
-      <div className="flex-shrink-0 px-8 py-6 border-b border-border bg-surface">
-        <h1 className="text-xl font-semibold text-text">授权管理</h1>
-        <p className="text-sm text-text-muted mt-1">输入授权码后解锁启动服务、AI 生图、AI 视频和广告视频工作台。</p>
+    <div className="flex h-full flex-col overflow-y-auto bg-surface">
+      <div className="shrink-0 border-b border-border bg-surface px-8 py-6">
+        <h1 className="text-xl font-black text-text">授权管理</h1>
+        <p className="mt-1 text-sm text-text-muted">输入授权码后解锁启动服务、AI 生图、AI 视频和广告视频工作台。</p>
       </div>
 
       <div className="flex-1 px-8 py-6">
-        <div className="max-w-xl">
-          {/* Status Card */}
-          <div className="bg-surface-alt rounded-lg border border-border p-6 mb-6">
-            <div className={`text-sm font-medium mb-3 ${isAuthorized ? 'text-status-success' : 'text-status-danger'}`}>
-              {isAuthorized ? '已授权' : '未授权'}
-            </div>
-
-            {isAuthorized && licenseInfo && (
-              <div className="text-sm text-text-muted space-y-1 mb-4">
-                <p>客户：{licenseInfo.licensee || '未命名'}</p>
-                <p>版本：{licenseInfo.edition || 'pro'}</p>
-                <p>到期：{licenseInfo.expires || '永久'}</p>
-                <p>功能：{features}</p>
-              </div>
-            )}
-
-            {/* Code Input */}
-            <label className="text-sm text-text-muted mb-2 block">授权码</label>
-            <div className={`border-2 rounded-md transition-colors ${statusText === '' ? 'border-accent' : 'border-accent'} focus-within:border-amber-500`}>
-              <Input
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="OC-PRO-XXXX-XXXX-XXXX-XXXX"
-                className="border-0 bg-transparent focus:ring-0 text-base py-3 px-4 font-mono"
-              />
-            </div>
-            <p className="text-xs text-accent-ink mt-1 mb-4">格式示例：OC-PRO-XXXX-XXXX-XXXX-XXXX</p>
-
-            {/* Actions */}
-            <div className="flex items-center gap-3 mb-4">
-              <Button
-                onClick={handleActivate}
-                variant="primary"
-                disabled={activating}
-              >
-                {activating ? '激活中...' : isAuthorized ? '重新激活' : '在线激活'}
-              </Button>
-              <Button onClick={handleRefresh} variant="quiet">
-                刷新状态
-              </Button>
-              <Button onClick={() => setCurrentPage('diagnostics')} variant="quiet">
-                环境诊断
-              </Button>
-            </div>
-
-            {/* Status Text */}
-            {statusText && (
-              <p className={`text-sm ${
-                statusText.includes('成功') ? 'text-status-success' :
-                statusText.includes('连接') ? 'text-accent' :
-                'text-status-danger'
-              }`}>
-                {statusText}
-              </p>
-            )}
+        <div className="max-w-xl rounded-2xl border border-border bg-surface-alt/78 p-6 shadow-[0_20px_56px_rgba(0,0,0,0.18)]">
+          <div className={`mb-4 text-sm font-bold ${isAuthorized ? 'text-status-success' : 'text-status-danger'}`}>
+            {isAuthorized ? '已授权' : '未授权'}
           </div>
 
-          {/* Install ID */}
-          <p className="text-xs text-text-muted">安装 ID 将在激活时自动生成</p>
+          {isAuthorized && licenseInfo && (
+            <div className="mb-5 space-y-1 rounded-xl border border-border bg-surface/65 p-4 text-sm text-text-muted">
+              <p>客户：{licenseInfo.licensee || '未命名'}</p>
+              <p>版本：{licenseInfo.edition || 'pro'}</p>
+              <p>到期：{licenseInfo.expires || '永久'}</p>
+              <p>功能：{features || '标准功能'}</p>
+            </div>
+          )}
+
+          <label className="mb-2 block text-sm font-medium text-text-muted">授权码</label>
+          <Input
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            placeholder="OC-PRO-XXXX-XXXX-XXXX-XXXX"
+            className="border-2 border-border-strong py-3 px-4 font-mono text-base"
+          />
+          <p className="mb-4 mt-1 text-xs text-accent">格式示例：OC-PRO-XXXX-XXXX-XXXX-XXXX</p>
+
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <Button onClick={handleActivate} variant="primary" disabled={activating}>
+              {activating ? '激活中...' : isAuthorized ? '重新激活' : '在线激活'}
+            </Button>
+            <Button onClick={handleRefresh} variant="quiet">刷新状态</Button>
+            <Button onClick={() => setCurrentPage('diagnostics')} variant="quiet">环境诊断</Button>
+          </div>
+
+          {statusText && (
+            <p className={`text-sm ${
+              statusText.includes('成功') ? 'text-status-success' :
+              statusText.includes('连接') ? 'text-accent' :
+              'text-status-danger'
+            }`}>
+              {statusText}
+            </p>
+          )}
         </div>
+
+        <p className="mt-5 text-xs text-text-muted">安装 ID 会在激活时自动生成。Lumi 版仍沿用现有授权流程。</p>
       </div>
     </div>
   );

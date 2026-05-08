@@ -179,8 +179,8 @@ fn verify_device_id(base_path: &Path, payload: &Map<String, Value>) -> Result<()
     if licensed_device.trim().is_empty() {
         return Ok(());
     }
-    let current_device = device_id(base_path);
-    if licensed_device != current_device {
+    let device_candidates = device_id_candidates(base_path);
+    if !device_candidates.iter().any(|candidate| candidate == licensed_device) {
         return Err("许可证不属于当前运行磁盘".to_string());
     }
     Ok(())
@@ -218,8 +218,30 @@ fn verify_feature(payload: &Map<String, Value>, feature: Option<&str>) -> Result
 
 pub fn device_id(base_path: &Path) -> String {
     let root = drive_root(base_path);
+    let raw = match volume_serial(&root) {
+        Some(serial) => format!("volume:{}|openclaw-launcher", serial),
+        None => format!("fallback:{}|openclaw-launcher", fallback_serial()),
+    };
+    hash_device_payload(&raw)
+}
+
+fn legacy_device_id(base_path: &Path) -> String {
+    let root = drive_root(base_path);
     let serial = volume_serial(&root).unwrap_or_else(|| fallback_serial());
-    let raw = format!("{}|{}|openclaw-launcher", root, serial);
+    hash_device_payload(&format!("{}|{}|openclaw-launcher", root, serial))
+}
+
+fn device_id_candidates(base_path: &Path) -> Vec<String> {
+    let current = device_id(base_path);
+    let legacy = legacy_device_id(base_path);
+    if current == legacy {
+        vec![current]
+    } else {
+        vec![current, legacy]
+    }
+}
+
+fn hash_device_payload(raw: &str) -> String {
     let digest = Sha256::digest(raw.as_bytes());
     hex_lower(&digest)
 }

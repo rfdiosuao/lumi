@@ -1,61 +1,60 @@
 :root {
-  --color-app-bg: #F3F4F6;
-  --color-sidebar-bg: #F8FAFC;
-  --color-surface: #FFFFFF;
-  --color-surface-alt: #F8FAFC;
-  --color-surface-deep: #1E293B;
-  --color-surface-deeper: #0F172A;
-  --color-hover: #EDEFF3;
-  --color-input: #FFFFFF;
-  --color-border: #DDE3EA;
-  --color-border-strong: #B8C4D2;
-  --color-text: #102033;
-  --color-text-muted: #64748B;
-  --color-text-subtle: #94A3B8;
-  --color-accent: #2563EB;
-  --color-accent-hover: #1D4ED8;
-  --color-accent-soft: #E8EEFD;
-  --color-accent-ink: #1E40AF;
-  --color-success: #059669;
-  --color-warning: #D97706;
-  --color-danger: #DC2626;
-  --color-danger-hover: #B91C1C;
-  --color-terminal-bg: #0F172A;
-  --color-terminal-header: #1E293B;
-  --color-terminal-text: #34D399;
+  --color-app-bg: #07080D;
+  --color-sidebar-bg: #0A0C14;
+  --color-surface: #0D0F18;
+  --color-surface-alt: #111827;
+  --color-surface-deep: #171D2B;
+  --color-surface-deeper: #05070D;
+  --color-hover: #1A1F2E;
+  --color-input: #0B1020;
+  --color-border: rgba(214, 180, 106, 0.18);
+  --color-border-strong: rgba(214, 180, 106, 0.48);
+  --color-text: #F7F1E3;
+  --color-text-muted: #A9B2C3;
+  --color-text-subtle: #63708A;
+  --color-accent: #D6B46A;
+  --color-accent-hover: #F2D48A;
+  --color-accent-soft: rgba(214, 180, 106, 0.12);
+  --color-accent-ink: #2B1D05;
+  --color-success: #3FE08F;
+  --color-warning: #FFB454;
+  --color-danger: #FF4D6D;
+  --color-danger-hover: #FF6E86;
+  --color-terminal-bg: #05070D;
+  --color-terminal-header: #0D1320;
+  --color-terminal-text: #37E6D0;
 
   --font-display: 'Microsoft YaHei UI', system-ui, sans-serif;
-  --font-mono: Consolas, monospace;
-
-  --brand-name: '永浩科技';
-  --brand-subtitle: '智能AI服务平台';
+  --font-mono: 'Cascadia Mono', Consolas, monospace;
+  --brand-name: 'Lumi';
+  --brand-subtitle: 'AI Creative Console';
 }
 
-:root[data-theme-mode='dark'] {
-  --color-app-bg: #050510;
-  --color-sidebar-bg: #090A18;
-  --color-surface: #0B0D1A;
-  --color-surface-alt: #111426;
-  --color-surface-deep: #171B32;
-  --color-surface-deeper: #070812;
-  --color-hover: #1A1F38;
-  --color-input: #0C1020;
-  --color-border: rgba(157, 78, 221, 0.24);
-  --color-border-strong: rgba(0, 212, 255, 0.38);
-  --color-text: #F4F7FB;
-  --color-text-muted: #A8B0C3;
-  --color-text-subtle: #66708B;
-  --color-accent: #9D4EDD;
-  --color-accent-hover: #B76BFF;
-  --color-accent-soft: rgba(157, 78, 221, 0.18);
-  --color-accent-ink: #F5EAFF;
-  --color-success: #16C784;
-  --color-warning: #F59E0B;
-  --color-danger: #FF4D6D;
-  --color-danger-hover: #FF6B84;
-  --color-terminal-bg: #050510;
-  --color-terminal-header: #101328;
-  --color-terminal-text: #00F5D4;
+:root[data-theme-mode='light'] {
+  --color-app-bg: #F6F3EC;
+  --color-sidebar-bg: #FBF8F0;
+  --color-surface: #FFFCF5;
+  --color-surface-alt: #F4EFE4;
+  --color-surface-deep: #24211B;
+  --color-surface-deeper: #14110D;
+  --color-hover: #EEE5D5;
+  --color-input: #FFF9EF;
+  --color-border: rgba(151, 119, 58, 0.22);
+  --color-border-strong: rgba(187, 146, 68, 0.48);
+  --color-text: #201B12;
+  --color-text-muted: #756B5B;
+  --color-text-subtle: #A59A88;
+  --color-accent: #B98936;
+  --color-accent-hover: #D6A64A;
+  --color-accent-soft: rgba(214, 180, 106, 0.18);
+  --color-accent-ink: #6E4D12;
+  --color-success: #0F9F6E;
+  --color-warning: #D88915;
+  --color-danger: #E54764;
+  --color-danger-hover: #FF5E78;
+  --color-terminal-bg: #0A0C12;
+  --color-terminal-header: #111827;
+  --color-terminal-text: #37E6D0;
 }
 
 body {
@@ -67,9 +66,11 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background-image:
-    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.72), transparent 88%);
+  background:
+    radial-gradient(ellipse 60% 50% at 85% 5%, rgba(214, 180, 106, 0.12), transparent),
+    radial-gradient(ellipse 40% 30% at 10% 95%, rgba(55, 230, 208, 0.04), transparent),
+    linear-gradient(rgba(214, 180, 106, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(214, 180, 106, 0.025) 1px, transparent 1px);
+  background-size: auto, auto, 52px 52px, 52px 52px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.6), transparent 75%);
 }

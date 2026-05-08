@@ -47,9 +47,8 @@ class LicenseManager:
             file.write(install_id)
         return install_id
 
-    def device_id(self) -> str:
+    def _volume_serial(self) -> str | None:
         root = os.path.splitdrive(os.path.abspath(self.paths.base_path))[0] + "\\"
-        serial = None
         try:
             volume_serial = ctypes.c_ulong()
             ctypes.windll.kernel32.GetVolumeInformationW(
@@ -62,14 +61,34 @@ class LicenseManager:
                 None,
                 0,
             )
-            serial = str(volume_serial.value)
+            return str(volume_serial.value)
         except Exception:
-            pass
-        if serial is None:
-            # 卷序列号获取失败时用 MAC 地址作备选，避免所有机器返回同一 deviceId
-            serial = str(uuid.getnode())
-        raw = f"{root}|{serial}|openclaw-launcher"
+            return None
+
+    @staticmethod
+    def _hash_device_payload(raw: str) -> str:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def device_id(self) -> str:
+        serial = self._volume_serial()
+        if serial:
+            # Bind to the USB volume itself, not to the assigned drive letter.
+            # Windows may assign a different drive letter after unplug/replug.
+            raw = f"volume:{serial}|openclaw-launcher"
+        else:
+            # Fallback for non-Windows or environments where volume serial is unavailable.
+            # The persisted installId still keeps the license tied to this portable package.
+            raw = f"fallback:{uuid.getnode()}|openclaw-launcher"
+        return self._hash_device_payload(raw)
+
+    def legacy_device_id(self) -> str:
+        """Previous format kept only for already activated packages."""
+        root = os.path.splitdrive(os.path.abspath(self.paths.base_path))[0] + "\\"
+        serial = self._volume_serial() or str(uuid.getnode())
+        return self._hash_device_payload(f"{root}|{serial}|openclaw-launcher")
+
+    def device_id_candidates(self) -> set[str]:
+        return {self.device_id(), self.legacy_device_id()}
 
     def current_license(self) -> dict[str, Any] | None:
         license_data = read_json(self.paths.license_file, None)
@@ -93,9 +112,8 @@ class LicenseManager:
             self.public_key.verify(signature, self._canonical(payload))
             if payload.get("installId") != self.get_install_id():
                 return False
-            # 防止复制文件夹绕过：如果 license 包含 deviceId 则校验硬件绑定
             licensed_device = payload.get("deviceId")
-            if licensed_device and licensed_device != self.device_id():
+            if licensed_device and licensed_device not in self.device_id_candidates():
                 return False
             expires = payload.get("expires")
             if expires and date.fromisoformat(expires) < date.today():
@@ -119,7 +137,7 @@ class LicenseManager:
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "OpenClaw-Desktop/2.0",
+                "User-Agent": "Lumi-Desktop/2.0",
             },
             method="POST",
         )
@@ -157,4 +175,3 @@ class LicenseManager:
             return data.get("error", f"授权失败：HTTP {error.code}")
         except Exception:
             return f"授权失败：HTTP {error.code}"
-

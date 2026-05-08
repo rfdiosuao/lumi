@@ -19,6 +19,7 @@ export interface FeatureDefinition {
 }
 
 export const FEATURE_DEFINITIONS: FeatureDefinition[] = [
+  { key: 'dashboard', label: '控制台', desc: '系统状态总览', icon: 'HOME', group: '工作台', action: { type: 'page' } },
   { key: 'terminal', label: '服务日志', desc: '查看运行状态', icon: 'LOG', group: '工作台', action: { type: 'page' } },
   { key: 'storyboard', label: '广告视频', desc: '分镜/首尾帧/九宫格', icon: 'AD', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
   { key: 'image', label: 'AI 生图', desc: '生成/编辑图片', icon: 'IMG', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },

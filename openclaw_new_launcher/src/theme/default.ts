@@ -13,49 +13,50 @@ const BASE_FONTS: ThemeConfig['fonts'] = {
   section: ['Microsoft YaHei UI', 10, 'bold'],
   body: ['Microsoft YaHei UI', 10, 'normal'],
   small: ['Microsoft YaHei UI', 9, 'normal'],
-  mono: ['Consolas', 10, 'normal'],
+  mono: ['Cascadia Mono', 10, 'normal'],
 };
 
 export const DEFAULT_NAV_ITEMS: NavItem[] = DEFAULT_FEATURE_NAV_ITEMS;
 
 export const LIGHT_THEME: ThemeConfig = {
-  name: '永浩科技浅色主题',
+  name: 'Lumi Porcelain Theme',
   colors: {
-    app_bg: '#F3F4F6',
-    sidebar_bg: '#F8FAFC',
-    surface: '#FFFFFF',
-    surface_alt: '#F8FAFC',
-    surface_deep: '#1E293B',
-    surface_deeper: '#0F172A',
-    hover: '#EDEFF3',
-    input: '#FFFFFF',
-    border: '#DDE3EA',
-    border_strong: '#B8C4D2',
-    text: '#102033',
-    text_muted: '#64748B',
-    text_subtle: '#94A3B8',
-    accent: '#2563EB',
-    accent_hover: '#1D4ED8',
-    accent_soft: '#E8EEFD',
-    accent_ink: '#1E40AF',
-    success: '#059669',
-    warning: '#D97706',
-    danger: '#DC2626',
-    danger_hover: '#B91C1C',
-    terminal_bg: '#0F172A',
-    terminal_header: '#1E293B',
-    terminal_text: '#34D399',
+    app_bg: '#F6F3EC',
+    sidebar_bg: '#FBF8F0',
+    surface: '#FFFCF5',
+    surface_alt: '#F4EFE4',
+    surface_deep: '#24211B',
+    surface_deeper: '#14110D',
+    hover: '#EEE5D5',
+    input: '#FFF9EF',
+    border: 'rgba(151, 119, 58, 0.22)',
+    border_strong: 'rgba(187, 146, 68, 0.48)',
+    text: '#201B12',
+    text_muted: '#756B5B',
+    text_subtle: '#A59A88',
+    accent: '#B98936',
+    accent_hover: '#D6A64A',
+    accent_soft: 'rgba(214, 180, 106, 0.18)',
+    accent_ink: '#6E4D12',
+    success: '#0F9F6E',
+    warning: '#D88915',
+    danger: '#E54764',
+    danger_hover: '#FF5E78',
+    terminal_bg: '#0A0C12',
+    terminal_header: '#111827',
+    terminal_text: '#37E6D0',
   },
   fonts: BASE_FONTS,
   brand: {
-    name: '永浩科技',
-    subtitle: '智能AI服务平台',
-    app_user_model_id: 'YonghaoTech.Launcher',
-    terminal_header: 'Service Console',
+    name: 'Lumi',
+    subtitle: 'AI Creative Console',
+    app_user_model_id: 'Lumi.Launcher',
+    terminal_header: 'Lumi Console',
+    logoUrl: 'logo.png',
   },
   navItems: DEFAULT_NAV_ITEMS,
   window: {
-    title: '永浩科技 - 智能AI服务平台',
+    title: 'Lumi - AI Creative Console',
     width: 1200,
     height: 800,
   },
@@ -63,43 +64,43 @@ export const LIGHT_THEME: ThemeConfig = {
 
 export const DARK_THEME: ThemeConfig = {
   ...LIGHT_THEME,
-  name: '永浩科技暗紫主题',
+  name: 'Lumi Obsidian Gold',
   colors: {
-    app_bg: '#050510',
-    sidebar_bg: '#090A18',
-    surface: '#0B0D1A',
-    surface_alt: '#111426',
-    surface_deep: '#171B32',
-    surface_deeper: '#070812',
-    hover: '#1A1F38',
-    input: '#0C1020',
-    border: 'rgba(157, 78, 221, 0.24)',
-    border_strong: 'rgba(0, 212, 255, 0.38)',
-    text: '#F4F7FB',
-    text_muted: '#A8B0C3',
-    text_subtle: '#66708B',
-    accent: '#9D4EDD',
-    accent_hover: '#B76BFF',
-    accent_soft: 'rgba(157, 78, 221, 0.18)',
-    accent_ink: '#F5EAFF',
-    success: '#16C784',
-    warning: '#F59E0B',
+    app_bg: '#07080D',
+    sidebar_bg: '#0A0C14',
+    surface: '#0D0F18',
+    surface_alt: '#111827',
+    surface_deep: '#171D2B',
+    surface_deeper: '#05070D',
+    hover: '#1A1F2E',
+    input: '#0B1020',
+    border: 'rgba(214, 180, 106, 0.18)',
+    border_strong: 'rgba(214, 180, 106, 0.48)',
+    text: '#F7F1E3',
+    text_muted: '#A9B2C3',
+    text_subtle: '#63708A',
+    accent: '#D6B46A',
+    accent_hover: '#F2D48A',
+    accent_soft: 'rgba(214, 180, 106, 0.12)',
+    accent_ink: '#2B1D05',
+    success: '#3FE08F',
+    warning: '#FFB454',
     danger: '#FF4D6D',
-    danger_hover: '#FF6B84',
-    terminal_bg: '#050510',
-    terminal_header: '#101328',
-    terminal_text: '#00F5D4',
+    danger_hover: '#FF6E86',
+    terminal_bg: '#05070D',
+    terminal_header: '#0D1320',
+    terminal_text: '#37E6D0',
   },
 };
 
-export const DEFAULT_THEME = LIGHT_THEME;
+export const DEFAULT_THEME = DARK_THEME;
 
 export function getStoredThemeMode(): BuiltinThemeMode {
-  if (typeof window === 'undefined') return 'light';
+  if (typeof window === 'undefined') return 'dark';
   try {
-    return window.localStorage.getItem(THEME_MODE_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+    return window.localStorage.getItem(THEME_MODE_STORAGE_KEY) === 'light' ? 'light' : 'dark';
   } catch {
-    return 'light';
+    return 'dark';
   }
 }
 
@@ -115,7 +116,7 @@ export function persistThemeMode(mode: BuiltinThemeMode): void {
 }
 
 export function getBuiltinTheme(mode: BuiltinThemeMode): ThemeConfig {
-  return mode === 'dark' ? DARK_THEME : LIGHT_THEME;
+  return mode === 'light' ? LIGHT_THEME : DARK_THEME;
 }
 
 export function normalizeNavItems(items?: NavItem[]): NavItem[] {
