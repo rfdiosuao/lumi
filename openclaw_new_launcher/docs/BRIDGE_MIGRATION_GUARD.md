@@ -16,9 +16,12 @@ Current call chain after phase 1:
 React UI -> Tauri invoke(proxy_request) -> Rust -> HTTP -> FastAPI Bridge
 ```
 
-The FastAPI service now owns the known launcher API endpoints directly. The
-legacy route logic is still present only for the forced legacy implementation
-and unknown-route fallback while cleanup proceeds.
+The FastAPI service now owns the known launcher API endpoints directly. The old
+`http.server` route implementation has been removed. If FastAPI dependencies
+are missing, the bridge starts a small dependency-error service that returns
+Bridge JSON 503 responses instead of silently running stale route logic.
+FastAPI no longer delegates unknown routes back to the old handler; unknown
+routes return the standard Bridge JSON 404 shape.
 
 Known launcher endpoints are now registered as native FastAPI routes:
 
@@ -53,16 +56,16 @@ Known launcher endpoints are now registered as native FastAPI routes:
 | `/api/skills/readme` | FastAPI native |
 | `/api/skills/paths` | FastAPI native |
 
-All known launcher API endpoints now have native FastAPI handlers. The legacy
-route class is still kept during the cleanup phase for the legacy bridge
-implementation and unknown-route fallback.
+All known launcher API endpoints now have native FastAPI handlers. The remaining
+`http.server` handler is not an API implementation; it only reports missing
+FastAPI dependencies.
 
 Cleanup has started:
 
 | Module | Responsibility |
 | --- | --- |
-| `python/bridge.py` | bridge process entrypoint, legacy fallback, shared service context |
-| `python/api/fastapi_routes.py` | route aggregator, exception handler, unknown-route fallback |
+| `python/bridge.py` | bridge process entrypoint, dependency-error fallback, shared service context |
+| `python/api/fastapi_routes.py` | route aggregator, exception handler, native 404 fallback |
 | `python/api/routes_process.py` | OpenClaw process start/stop/status |
 | `python/api/routes_license.py` | license status, activation, feature authorization |
 | `python/api/routes_media.py` | AI image and video generation |
@@ -82,6 +85,37 @@ React UI -> Tauri/Rust security gate -> FastAPI routers
 Do not change the public response shape of an endpoint during the framework
 migration. If a response shape needs to change, do it in a separate product
 change after the FastAPI migration is already stable.
+
+Additive compatibility fields are allowed when they do not replace legacy
+payload fields. Every Bridge JSON response now includes `_meta`:
+
+```json
+{
+  "_meta": {
+    "ok": true,
+    "status": 200
+  }
+}
+```
+
+Error responses still keep the legacy top-level `error` string and additionally
+include structured error metadata:
+
+```json
+{
+  "error": "message",
+  "_meta": {
+    "ok": false,
+    "status": 400,
+    "error": {
+      "code": 400,
+      "message": "message"
+    }
+  }
+}
+```
+
+Do not use `_meta` for endpoint business data.
 
 ## Current Protected Endpoints
 
@@ -105,13 +139,14 @@ rejects missing tokens, and returns valid JSON from low-risk read-only endpoints
 Run it from the repository root:
 
 ```powershell
+python -m pip install -r openclaw_new_launcher\python\requirements.txt
 powershell -ExecutionPolicy Bypass -File scripts\smoke-bridge.ps1
 ```
 
-To force the FastAPI implementation during local migration testing, run:
+To assert the FastAPI implementation explicitly during local migration testing,
+run:
 
 ```powershell
-python -m pip install -r openclaw_new_launcher\python\requirements.txt
 powershell -ExecutionPolicy Bypass -File scripts\smoke-bridge.ps1 -RequireFastApi
 ```
 
@@ -153,7 +188,8 @@ Checked endpoints:
 2. Skeleton phase
    - Add FastAPI dependencies.
    - Switch the HTTP service layer to FastAPI.
-   - Keep endpoint behavior delegated to the legacy route logic.
+   - Keep endpoint behavior delegated to the legacy route logic. Done; this
+     compatibility layer has now been removed after native routes passed smoke.
 
 3. Shadow phase
    - Add `python/api/` routers and Pydantic models.

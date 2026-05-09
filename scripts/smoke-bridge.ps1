@@ -66,6 +66,30 @@ function Assert-Property {
     }
 }
 
+function Assert-BridgeMeta {
+    param(
+        [Parameter(Mandatory = $true)][object]$Object,
+        [Parameter(Mandatory = $true)][string]$Context,
+        [int]$ExpectedStatus = 200,
+        [bool]$ExpectedOk = $true
+    )
+
+    Assert-Property -Object $Object -Name "_meta" -Context $Context
+    Assert-Property -Object $Object._meta -Name "ok" -Context "$Context _meta"
+    Assert-Property -Object $Object._meta -Name "status" -Context "$Context _meta"
+    if ([bool]$Object._meta.ok -ne $ExpectedOk) {
+        throw "$Context _meta.ok expected $ExpectedOk, got $($Object._meta.ok)"
+    }
+    if ([int]$Object._meta.status -ne $ExpectedStatus) {
+        throw "$Context _meta.status expected $ExpectedStatus, got $($Object._meta.status)"
+    }
+    if (-not $ExpectedOk) {
+        Assert-Property -Object $Object._meta -Name "error" -Context "$Context _meta"
+        Assert-Property -Object $Object._meta.error -Name "code" -Context "$Context _meta.error"
+        Assert-Property -Object $Object._meta.error -Name "message" -Context "$Context _meta.error"
+    }
+}
+
 function Get-FileText {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -279,6 +303,7 @@ try {
     foreach ($check in $checks) {
         Write-Host "Checking $($check.Name)..."
         $response = Invoke-BridgeJson -Url "$baseUrl$($check.Path)" -Headers $headers -Method $check.Method -Body $check.Body
+        Assert-BridgeMeta -Object $response -Context $check.Name
         foreach ($prop in $check.Props) {
             Assert-Property -Object $response -Name $prop -Context $check.Name
         }
@@ -286,6 +311,7 @@ try {
 
     Write-Host "Checking diagnostics export..."
     $exportResponse = Invoke-BridgeJson -Url "$baseUrl/api/diagnostics/export" -Headers $headers -Method "POST"
+    Assert-BridgeMeta -Object $exportResponse -Context "diagnostics export"
     foreach ($prop in @("path", "directory", "filename", "size")) {
         Assert-Property -Object $exportResponse -Name $prop -Context "diagnostics export"
     }

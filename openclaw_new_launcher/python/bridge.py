@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import base64
-import datetime
 import json
 import os
 import re
 import secrets
 import socket
-import subprocess
 import sys
 import tempfile
 import threading
-import traceback
-import zipfile
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
@@ -29,10 +25,10 @@ from core.storage import read_json, write_json, update_json
 from core.license_manager import LicenseManager
 from core.theme_manager import ThemeManager
 from services.process import OpenClawProcessService
-from services.image_api import ImageApiClient, ImageApiError
-from services.video_api import DashScopeVideoClient, VideoApiError
+from services.image_api import ImageApiClient
+from services.video_api import DashScopeVideoClient
 from services.updater import OpenClawUpdater
-from services.skills import SkillService, SkillError
+from services.skills import SkillService
 
 paths = AppPaths.discover()
 log_buffer: list[str] = []
@@ -314,558 +310,40 @@ _reset_transient_video_config()
 
 
 class Handler(BaseHTTPRequestHandler):
-    """HTTP request handler for the API bridge."""
+    """Compatibility service used only when FastAPI is unavailable."""
 
     bridge_token: str | None = None
 
     def do_GET(self) -> None:
-        self._route("GET", None)
+        self._unavailable()
 
     def do_POST(self) -> None:
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = None
-        if content_length > 0:
-            raw = self.rfile.read(content_length)
-            try:
-                body = json.loads(raw.decode("utf-8"))
-            except Exception:
-                body = {}
-        self._route("POST", body)
+        self._unavailable()
 
     def do_PUT(self) -> None:
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = None
-        if content_length > 0:
-            raw = self.rfile.read(content_length)
-            try:
-                body = json.loads(raw.decode("utf-8"))
-            except Exception:
-                body = {}
-        self._route("PUT", body)
+        self._unavailable()
 
-    def _route(self, method: str, body: dict | None) -> None:
-        path = self.path.split("?")[0]
-        body = body or {}
-        try:
-            if Handler.bridge_token:
-                req_token = self.headers.get("X-Bridge-Token")
-                if req_token != Handler.bridge_token:
-                    self._error(401, "未授权的请求")
-                    return
-
-            # Protected endpoints — require valid license
-            if path in PROTECTED_PATHS:
-                if not _get_license_mgr().is_authorized():
-                    self._error(403, "需要有效的许可证才能使用此功能")
-                    return
-
-            if path == "/api/process/start":
-                self._process_start(body)
-            elif path == "/api/process/stop":
-                self._process_stop()
-            elif path == "/api/process/status":
-                self._process_status()
-            elif path == "/api/log/get":
-                self._log_get()
-            elif path == "/api/log/clear":
-                self._log_clear()
-            elif path == "/api/license/current":
-                self._license_current()
-            elif path == "/api/license/activate":
-                self._license_activate(body)
-            elif path == "/api/license/authorized":
-                self._license_authorized(body)
-            elif path == "/api/image/generate":
-                self._image_generate(body)
-            elif path == "/api/video/generate":
-                self._video_generate(body)
-            elif path == "/api/update/check":
-                self._update_check()
-            elif path == "/api/update/do":
-                self._update_do()
-            elif path == "/api/config/read":
-                self._config_read(body)
-            elif path == "/api/config/write":
-                self._config_write(body)
-            elif path == "/api/auth/profiles":
-                self._auth_profiles(method, body)
-            elif path == "/api/system/info":
-                self._system_info()
-            elif path == "/api/diagnostics/run":
-                self._diagnostics_run()
-            elif path == "/api/diagnostics/repair":
-                self._diagnostics_repair()
-            elif path == "/api/diagnostics/export":
-                self._diagnostics_export()
-            elif path == "/api/theme/current":
-                self._theme_current()
-            elif path == "/api/theme/by_merchant":
-                self._theme_by_merchant(body)
-            elif path == "/api/theme/list":
-                self._theme_list()
-            elif path == "/api/skills/list":
-                self._skills_list()
-            elif path == "/api/skills/install_zip":
-                self._skills_install_zip(body)
-            elif path == "/api/skills/enable":
-                self._skills_enable(body)
-            elif path == "/api/skills/uninstall":
-                self._skills_uninstall(body)
-            elif path == "/api/skills/readme":
-                self._skills_readme(body)
-            elif path == "/api/skills/paths":
-                self._skills_paths()
-            else:
-                self._error(404, f"Not found: {path}")
-        except Exception as e:
-            append_log(f"[Bridge Error] {path}: {e}\n{traceback.format_exc()}\n")
-            self._error(500, str(e))
-
-    # === Process Management ===
-
-    def _process_start(self, body: dict) -> None:
-        svc = _get_process_svc()
-        if svc.running:
-            self._ok({"status": "already_running"})
-            return
-
-        def on_exit(code: int | None) -> None:
-            append_log(f"\n[OpenClaw] Process ended (exit: {code})\n")
-
-        svc.start(on_exit=on_exit)
-        self._ok({"status": "started", "pid": svc.process.pid if svc.process else None})
-
-    def _process_stop(self) -> None:
-        svc = _get_process_svc()
-        msg = svc.stop()
-        self._ok({"status": "stopped", "message": msg})
-
-    def _process_status(self) -> None:
-        svc = _get_process_svc()
-        self._ok({
-            "running": svc.running,
-            "pid": svc.process.pid if svc.process and svc.process.poll() is None else None,
-        })
-
-    # === Log ===
-
-    def _log_get(self) -> None:
-        with log_lock:
-            text = "".join(log_buffer)
-        self._ok({"log": text})
-
-    def _log_clear(self) -> None:
-        with log_lock:
-            log_buffer.clear()
-        self._ok({"status": "cleared"})
-
-    # === License ===
-
-    def _license_current(self) -> None:
-        mgr = _get_license_mgr()
-        lic = mgr.current_license()
-        self._ok({"license": lic})
-
-    def _license_activate(self, body: dict) -> None:
-        from core.license_manager import LicenseError
-        mgr = _get_license_mgr()
-        code = body.get("code", "")
-        if not code:
-            self._error(400, "授权码不能为空")
-            return
-        try:
-            result = mgr.activate(code)
-            theme = _get_theme_mgr().get_current(mgr.current_license())
-            self._ok({"license": result, "theme": theme})
-        except LicenseError as e:
-            self._error(400, str(e))
-
-    def _license_authorized(self, body: dict) -> None:
-        mgr = _get_license_mgr()
-        feature = body.get("feature")
-        self._ok({"authorized": mgr.is_authorized(feature)})
-
-    # === Image API ===
-
-    def _image_generate(self, body: dict) -> None:
-        client = _get_image_client()
-        base_url = body.get("baseUrl", "")
-        api_key = body.get("apiKey", "")
-        prompt = body.get("prompt", "")
-        size = body.get("size", "1024x1024")
-        edit_path = body.get("editImagePath")
-        count = body.get("count", 1)
-
-        if not base_url:
-            self._error(400, "中转站地址不能为空")
-            return
-        if not prompt:
-            self._error(400, "提示词不能为空")
-            return
-
-        # Handle base64 data URL from frontend: save to temp file
-        temp_file: str | None = None
-        if edit_path and edit_path.startswith("data:"):
-            try:
-                header, b64_data = edit_path.split(",", 1)
-                mime_type = header.split(":")[1].split(";")[0]
-                image_bytes = base64.b64decode(b64_data)
-                ext = mime_type.split("/")[-1].split("+")[0]
-                if ext not in ("png", "jpeg", "jpg", "webp"):
-                    ext = "png"
-                fd, temp_file = tempfile.mkstemp(suffix=f".{ext}")
-                with os.fdopen(fd, "wb") as f:
-                    f.write(image_bytes)
-                edit_path = temp_file
-            except Exception as e:
-                self._error(400, f"图片数据解码失败: {e}")
+    def _unavailable(self) -> None:
+        if Handler.bridge_token:
+            req_token = self.headers.get("X-Bridge-Token")
+            if req_token != Handler.bridge_token:
+                self._send_json(401, {"error": "未授权的请求"})
                 return
-
-        try:
-            results = client.generate_many(base_url, api_key, prompt, size, count=count, edit_image_path=edit_path)
-            images_b64 = [base64.b64encode(r).decode() for r in results]
-            self._ok({"images": images_b64, "count": len(images_b64)})
-        except ImageApiError as e:
-            self._error(500, str(e))
-        finally:
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except OSError:
-                    pass
-
-    # === Video API ===
-
-    def _video_generate(self, body: dict) -> None:
-        client = _get_video_client()
-        provider_id = body.get("providerId", "dashscope")
-        api_base = body.get("apiBase", "")
-        model = body.get("model", "")
-        dash_key = body.get("dashKey", "")
-        prompt = body.get("prompt", "")
-        mode = body.get("mode", "t2v")
-        resolution = body.get("resolution", "720P")
-        duration = body.get("duration", 5)
-        ratio = body.get("ratio", "16:9")
-        image_path = body.get("imagePath")
-
-        if not dash_key:
-            self._error(400, "视频服务密钥不能为空")
-            return
-        if not prompt:
-            self._error(400, "提示词不能为空")
-            return
-
-        # Handle base64 data URL from frontend: save to temp file
-        temp_file: str | None = None
-        if image_path and image_path.startswith("data:"):
-            try:
-                header, b64_data = image_path.split(",", 1)
-                mime_type = header.split(":")[1].split(";")[0]
-                image_bytes = base64.b64decode(b64_data)
-                ext = mime_type.split("/")[-1].split("+")[0]
-                if ext not in ("png", "jpeg", "jpg", "webp"):
-                    ext = "png"
-                fd, temp_file = tempfile.mkstemp(suffix=f".{ext}")
-                with os.fdopen(fd, "wb") as f:
-                    f.write(image_bytes)
-                image_path = temp_file
-            except Exception as e:
-                self._error(400, f"图片数据解码失败: {e}")
-                return
-
-        try:
-            video_bytes = client.generate(
-                dash_key,
-                prompt,
-                mode,
-                resolution,
-                duration,
-                ratio,
-                image_path,
-                provider_id=provider_id,
-                api_base=api_base,
-                model=model,
-            )
-            video_dir = os.path.join(paths.data_dir, "videos")
-            os.makedirs(video_dir, exist_ok=True)
-            filename = f"lumi-video-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
-            save_path = os.path.join(video_dir, filename)
-            with open(save_path, "wb") as file:
-                file.write(video_bytes)
-            self._ok({
-                "video": base64.b64encode(video_bytes).decode(),
-                "mime": "video/mp4",
-                "size": len(video_bytes),
-                "path": save_path,
-                "directory": video_dir,
-                "filename": filename,
-            })
-        except VideoApiError as e:
-            self._error(500, str(e))
-        finally:
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except OSError:
-                    pass
-
-    # === Updater ===
-
-    def _update_check(self) -> None:
-        updater = _get_updater()
-        current = updater.current_version()
-        latest, error = updater.latest_version()
-        if error:
-            self._error(500, error)
-        else:
-            self._ok({"current": current, "latest": latest, "hasUpdate": current != latest})
-
-    def _update_do(self) -> None:
-        updater = _get_updater()
-        results: list[str] = []
-        def log(text: str) -> None:
-            results.append(text)
-            append_log(text)
-        def done(success: bool, message: str) -> None:
-            pass  # response sent below
-
-        import subprocess
-        node_exe = paths.node_exe
-        pnpm_cli = paths.pnpm_cli
-        try:
-            proc = subprocess.Popen(
-                [node_exe, pnpm_cli, "add", "openclaw@latest"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                encoding="utf-8", errors="replace",
-                cwd=paths.base_path,
-            )
-            output = []
-            if proc.stdout:
-                for line in iter(proc.stdout.readline, ""):
-                    if line:
-                        output.append(line)
-                        append_log(line)
-            exit_code = proc.wait()
-            current = updater.current_version()
-            self._ok({"success": exit_code == 0, "current_version": current, "log": output})
-        except Exception as e:
-            self._error(500, str(e))
-
-    # === Config ===
-
-    def _safe_path(self, file_path: str) -> str | None:
-        """Validate that the resolved path stays within allowed directories."""
-        if not file_path:
-            return None
-        if not os.path.isabs(file_path):
-            file_path = os.path.join(paths.base_path, file_path)
-        # Resolve to absolute path (handles relative paths and symlinks)
-        real_path = os.path.realpath(file_path)
-        # Allow paths within base_path or data_dir
-        allowed_prefixes = (os.path.realpath(paths.base_path), os.path.realpath(paths.data_dir))
-        if real_path.startswith(allowed_prefixes):
-            return real_path
-        return None
-
-    def _config_read(self, body: dict) -> None:
-        file_path = body.get("path", "")
-        default = body.get("default", {})
-        safe = self._safe_path(file_path)
-        if safe is None:
-            self._error(403, "路径不在允许的范围内")
-            return
-        self._ok({"data": read_json(safe, default)})
-
-    def _config_write(self, body: dict) -> None:
-        file_path = body.get("path", "")
-        safe = self._safe_path(file_path)
-        if safe is None:
-            self._error(403, "路径不在允许的范围内")
-            return
-        write_json(safe, body["data"])
-        if file_path.replace("\\", "/").endswith(("auth-profiles.json", "openclaw.json")):
-            _sync_openclaw_models_from_api_profiles()
-        self._ok({"status": "ok"})
-
-    # === Auth Profiles ===
-
-    def _auth_profiles(self, method: str, body: dict) -> None:
-        if method == "PUT":
-            # Read existing profiles
-            profiles = read_json(paths.auth_profiles, {"models": {"providers": {}}})
-            # Merge new data
-            profiles.update(body)
-            write_json(paths.auth_profiles, profiles)
-            _sync_openclaw_models_from_api_profiles()
-            self._ok({"status": "ok"})
-        else:
-            self._ok({"profiles": read_json(paths.auth_profiles, {})})
-
-    # === System ===
-
-    def _system_info(self) -> None:
-        updater = _get_updater()
-        self._ok({
-            "node_path": paths.node_exe,
-            "base_path": paths.base_path,
-            "openclaw_version": updater.current_version(),
-        })
-
-    # === Diagnostics ===
-
-    def _diagnostics_run(self) -> None:
-        self._ok(_build_diagnostics_payload())
-
-    def _diagnostics_repair(self) -> None:
-        svc = _get_process_svc()
-        result = svc.repair_environment()
-        result["diagnostics"] = _append_runtime_checks(result.get("diagnostics", {}))
-        self._ok(result)
-
-    def _diagnostics_export(self) -> None:
-        diagnostics = _build_diagnostics_payload()
-        now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        export_dir = os.path.join(paths.data_dir, "diagnostics")
-        os.makedirs(export_dir, exist_ok=True)
-        filename = f"openclaw-diagnostics-{now}.zip"
-        zip_path = os.path.join(export_dir, filename)
-
-        system_info = {
-            "generatedAt": datetime.datetime.now().isoformat(timespec="seconds"),
-            "basePath": paths.base_path,
-            "nodePath": paths.node_exe,
-            "openclawMjs": paths.openclaw_mjs,
-            "stateDir": paths.state_dir,
-            "diagnosticSummary": diagnostics.get("summary", {}),
-        }
-
-        with log_lock:
-            service_log = _sanitize_text("".join(log_buffer))
-
-        readme = (
-            "OpenClaw diagnostics package\n\n"
-            "This package is generated by the launcher for troubleshooting.\n"
-            "Secrets such as API keys, tokens, passwords, signatures and app secrets are masked.\n"
+        self._send_json(
+            503,
+            {"error": "FastAPI bridge dependencies are required. Run pip install -r python/requirements.txt."},
         )
 
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("README.txt", readme)
-            archive.writestr("diagnostics.json", json.dumps(diagnostics, ensure_ascii=False, indent=2))
-            archive.writestr("system.json", json.dumps(system_info, ensure_ascii=False, indent=2))
-            archive.writestr("service.log", service_log)
-            archive.writestr("configs/openclaw.json", json.dumps(_read_sanitized_json(paths.openclaw_config, {}), ensure_ascii=False, indent=2))
-            archive.writestr("configs/auth-profiles.json", json.dumps(_read_sanitized_json(paths.auth_profiles, {}), ensure_ascii=False, indent=2))
-            archive.writestr("configs/imgapi_config.json", json.dumps(_read_sanitized_json(paths.image_config, {}), ensure_ascii=False, indent=2))
-            archive.writestr("configs/video_config.json", json.dumps(_read_sanitized_json(paths.video_config, {}), ensure_ascii=False, indent=2))
-
-        self._ok({
-            "path": zip_path,
-            "directory": export_dir,
-            "filename": filename,
-            "size": os.path.getsize(zip_path),
-        })
-
-    # === Theme ===
-
-    def _theme_current(self) -> None:
-        mgr = _get_theme_mgr()
-        license_mgr = _get_license_mgr()
-        license_data = license_mgr.current_license()
-        theme = mgr.get_current(license_data)
-        self._ok({"theme": theme})
-
-    def _theme_by_merchant(self, body: dict) -> None:
-        mgr = _get_theme_mgr()
-        merchant_id = body.get("merchantId", "")
-        if not merchant_id:
-            self._error(400, "merchantId 不能为空")
-            return
-        theme = mgr.get_by_merchant(merchant_id)
-        if theme is None:
-            self._error(404, f"未找到商户 {merchant_id} 的主题")
-            return
-        self._ok({"theme": theme})
-
-    def _theme_list(self) -> None:
-        mgr = _get_theme_mgr()
-        themes = mgr.list_themes()
-        self._ok({"themes": themes})
-
-    # === Skills ===
-
-    def _skills_list(self) -> None:
-        self._ok(_get_skill_svc().list_skills())
-
-    def _skills_install_zip(self, body: dict) -> None:
-        filename = body.get("filename", "skill.zip")
-        data = body.get("data", "")
-        if not data:
-            self._error(400, "Skill 包数据为空")
-            return
-        try:
-            self._ok(_get_skill_svc().install_zip(filename, data))
-        except SkillError as e:
-            self._error(400, str(e))
-
-    def _skills_enable(self, body: dict) -> None:
-        skill_id = body.get("id", "")
-        if not skill_id:
-            self._error(400, "Skill ID 不能为空")
-            return
-        try:
-            self._ok(_get_skill_svc().set_enabled(skill_id, bool(body.get("enabled"))))
-        except SkillError as e:
-            self._error(400, str(e))
-
-    def _skills_uninstall(self, body: dict) -> None:
-        skill_id = body.get("id", "")
-        if not skill_id:
-            self._error(400, "Skill ID 不能为空")
-            return
-        try:
-            self._ok(_get_skill_svc().uninstall(skill_id))
-        except SkillError as e:
-            self._error(400, str(e))
-
-    def _skills_readme(self, body: dict) -> None:
-        skill_id = body.get("id", "")
-        if not skill_id:
-            self._error(400, "Skill ID 不能为空")
-            return
-        try:
-            self._ok(_get_skill_svc().read_readme(skill_id))
-        except SkillError as e:
-            self._error(400, str(e))
-
-    def _skills_paths(self) -> None:
-        self._ok(_get_skill_svc().paths_payload())
-
-    # === Helpers ===
-
-    def _ok(self, data: dict) -> None:
-        self._send_json(200, data)
-
-    def _error(self, code: int, message: str) -> None:
-        self._send_json(code, {"error": message})
-
     def _send_json(self, code: int, data: dict) -> None:
+        payload = _bridge_response_payload(data, code)
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "http://tauri.localhost")
         self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
     def log_message(self, format: str, *args) -> None:
         pass  # Suppress default HTTP logging
-
-
-class _FastApiCaptureHandler(Handler):
-    """Run the existing route logic under FastAPI without socket I/O."""
-
-    def _send_json(self, code: int, data: dict) -> None:
-        self._captured_code = code
-        self._captured_data = data
 
 
 def find_port(start: int = 18791, end: int = 18950) -> int:
@@ -884,14 +362,26 @@ def _legacy_headers() -> dict[str, str]:
     return {"Access-Control-Allow-Origin": "http://tauri.localhost"}
 
 
-def _capture_legacy_route(path: str, method: str, headers, body: dict | None) -> tuple[int, dict]:
-    handler = object.__new__(_FastApiCaptureHandler)
-    handler.path = path
-    handler.headers = headers
-    handler._captured_code = 500
-    handler._captured_data = {"error": "Bridge route did not produce a response"}
-    handler._route(method, body or {})
-    return int(handler._captured_code), dict(handler._captured_data)
+def _bridge_response_payload(data: dict, status_code: int) -> dict:
+    """Add a stable response metadata block without changing legacy fields."""
+    payload = dict(data) if isinstance(data, dict) else {"data": data}
+    is_ok = 200 <= status_code < 400 and "error" not in payload
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    meta = {
+        **meta,
+        "ok": is_ok,
+        "status": status_code,
+    }
+    if not is_ok:
+        message = str(payload.get("error") or "")
+        meta["error"] = {
+            "code": status_code,
+            "message": message,
+        }
+    else:
+        meta.pop("error", None)
+    payload["_meta"] = meta
+    return payload
 
 
 def _safe_config_path(file_path: str) -> str | None:
@@ -907,37 +397,12 @@ def _safe_config_path(file_path: str) -> str | None:
     return None
 
 
-async def _fastapi_dispatch(request):
-    body: dict | None = None
-    if request.method in {"POST", "PUT"}:
-        raw = await request.body()
-        if raw:
-            try:
-                body = json.loads(raw.decode("utf-8"))
-            except Exception:
-                body = {}
-
-    path = request.url.path
-    if request.url.query:
-        path = f"{path}?{request.url.query}"
-
-    code, payload = _capture_legacy_route(path, request.method, request.headers, body)
-
-    from fastapi.responses import JSONResponse
-
-    return JSONResponse(
-        status_code=code,
-        content=payload,
-        headers=_legacy_headers(),
-    )
-
-
 def _fastapi_json(data: dict, status_code: int = 200):
     from fastapi.responses import JSONResponse
 
     return JSONResponse(
         status_code=status_code,
-        content=data,
+        content=_bridge_response_payload(data, status_code),
         headers=_legacy_headers(),
     )
 
@@ -993,7 +458,6 @@ def _build_fastapi_context():
         body=_fastapi_body,
         build_diagnostics_payload=_build_diagnostics_payload,
         data_url_to_temp_file=_data_url_to_temp_file,
-        dispatch=_fastapi_dispatch,
         fastapi_json=_fastapi_json,
         get_image_client=_get_image_client,
         get_license_mgr=_get_license_mgr,
@@ -1044,14 +508,14 @@ def _serve_fastapi(port: int, token: str) -> None:
     server = uvicorn.Server(config)
     server.run()
 
-def _serve_legacy(port: int, token: str) -> None:
+def _serve_dependency_error(port: int, token: str) -> None:
     Handler.bridge_token = token
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     actual_port = int(server.server_address[1])
     print(f"BRIDGE_PORT={actual_port}", flush=True)
     print(f"BRIDGE_TOKEN={token}", flush=True)
-    print("BRIDGE_IMPL=legacy", flush=True)
-    append_log(f"[Bridge] Started on port {actual_port} (legacy)\n")
+    print("BRIDGE_IMPL=dependency-error", flush=True)
+    append_log(f"[Bridge] Started dependency error service on port {actual_port}\n")
     server.serve_forever()
 
 
@@ -1060,19 +524,17 @@ def main() -> None:
     token = secrets.token_hex(32)
     Handler.bridge_token = token
 
-    preferred_impl = os.environ.get("OPENCLAW_BRIDGE_IMPL", "fastapi").strip().lower()
     require_fastapi = os.environ.get("OPENCLAW_BRIDGE_REQUIRE_FASTAPI") == "1"
 
-    if preferred_impl != "legacy":
-        try:
-            _serve_fastapi(port, token)
-            return
-        except ModuleNotFoundError as error:
-            if require_fastapi:
-                raise
-            append_log(f"[Bridge] FastAPI unavailable, falling back to legacy bridge: {error}\n")
+    try:
+        _serve_fastapi(port, token)
+        return
+    except ModuleNotFoundError as error:
+        if require_fastapi:
+            raise
+        append_log(f"[Bridge] FastAPI unavailable: {error}\n")
 
-    _serve_legacy(port, token)
+    _serve_dependency_error(port, token)
 
 
 if __name__ == "__main__":

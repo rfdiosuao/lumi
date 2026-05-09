@@ -38,5 +38,5 @@ def register_fastapi_routes(app, ctx) -> None:
     register_skills_routes(app, ctx)
 
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT"])
-    async def route_all(path: str, request: Request):
-        return await ctx.dispatch(request)
+    async def route_all(path: str, _request: Request):
+        return ctx.fastapi_json({"error": f"Not found: /{path}"}, 404)
