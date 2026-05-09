@@ -438,7 +438,10 @@ U盘/
 ### 高优先级
 
 - 授权核心迁移到 Rust。
-- Bridge API 返回结构统一。
+- [x] Bridge API 返回结构统一，已落地 `_meta` 契约。
+- [x] legacy Bridge route 退场，FastAPI native routes 成为主实现。
+- [x] 品牌 profile 打包和 release 校验接入。
+- [x] Vite / npm audit / Node 22 CI 收束。
 - 视频 provider 抽象继续完善，支持 DashScope、可灵、Seedance。
 - 打包脚本强制清理授权文件和本地隐私配置。
 - 主要 UI 文案消除乱码。

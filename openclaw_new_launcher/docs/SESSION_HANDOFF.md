@@ -1,6 +1,6 @@
 # 新会话对接文档
 
-> 更新时间：2026-05-08  
+> 更新时间：2026-05-09
 > 目的：给新的 Codex/GPT 会话快速接手当前项目，避免重复踩旧坑。  
 > 注意：本文不包含服务器密码、API Key、授权码等敏感信息。
 
@@ -114,29 +114,30 @@ powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1 -SkipRust
 - 复制到另一块 U盘，不能直接继承授权。
 - 交付包内不包含 `data/license.json` 和 `data/install_id.txt`。
 
-## 5. 当前仍有大量未提交改动
+## 5. 2026-05-09 已同步状态
 
-当前工作区是 dirty 状态，里面混合了几类改动：
+当前主线已收束并推送到 GitHub `master`。本地继续开发前仍要先看 `git status --short`，但上一轮混在一起的 P1 改动已经拆分提交。
 
-1. Lumi 个人版 UI / Logo / 主题改动。
-2. 删除旧启动器和旧文档。
-3. U盘授权 Rust 校验修复。
-4. 新文档：
-   - `openclaw_new_launcher/docs/LUMI_AGENT_PLATFORM_ROADMAP.md`
-   - `openclaw_new_launcher/docs/LUMI_PERSONAL_UI_DESIGN.md`
-   - `openclaw_new_launcher/docs/广告视频使用文档.md`
-5. 新组件目录：
-   - `openclaw_new_launcher/src/components/dashboard/`
+最新 GitHub Release:
 
-不要随便 `git reset --hard`。  
-不要随便恢复被删除的旧文件。  
-如果要提交，建议按批次拆 commit：
+```text
+https://github.com/rfdiosuao/lumi/releases/tag/v2.0.2-github-2026.05.09
+```
 
-1. 删除旧启动器和旧文档。
-2. README / 文档索引更新。
-3. Rust 授权一致性修复。
-4. Lumi UI/Logo/主题改动。
-5. Dashboard / Agent 平台相关改动。
+最近关键提交：
+
+1. `238345e chore: sync vite optional runtime deps`
+2. `9f25376 chore: upgrade frontend build dependencies`
+3. `de5f3c9 refactor: retire legacy bridge routing`
+4. `2d9def0 chore: add brand profile release checks`
+5. `17d4149 feat: add launcher storage diagnostics`
+
+已验证：
+
+- 本地完整 `scripts\ci-check.ps1` 通过。
+- 本地 `scripts\smoke-bridge.ps1` 和 `scripts\smoke-bridge.ps1 -RequireFastApi` 通过。
+- GitHub CI run `25601441504` 通过。
+- GitHub Release run `25601531758` 通过，并生成 exe/msi 安装产物。
 
 ## 6. 当前有效文档入口
 
@@ -194,7 +195,7 @@ openclaw_new_launcher/python/core/*.py
 openclaw_new_launcher/python/services/*.py
 ```
 
-FastAPI 已接入，但 `bridge.py` 仍保留 legacy Handler 和 fallback 逻辑。这是当前主要技术债之一。
+FastAPI 已成为主实现，旧 Handler 的完整 API 路由实现已移除。`bridge.py` 现在只保留启动入口、共享上下文和 FastAPI 缺依赖时的 dependency-error 503 服务。
 
 ### Rust / Tauri
 
@@ -217,22 +218,27 @@ Rust 负责：
 
 ### P0：交付前必须处理或确认
 
-1. 工作区 dirty，改动混在一起，提交前必须拆批。
-2. U盘授权修复需要真实拔插测试。
-3. 打包前必须确认不带授权文件、安装 ID、API Key、用户机器人缓存。
-4. Lumi 个人版 UI 和客户交付版品牌还混在一套默认配置里，后续打包前要确认目标版本。
+1. `v2.0.2-github-2026.05.09` 的 exe/msi 需要在真实机器上安装、启动、卸载验收。
+2. U盘授权修复仍需要真实拔插测试。
+3. 客户交付前必须确认不带授权文件、安装 ID、API Key、用户机器人缓存。
+4. 客户版 portable zip 仍需按目标 `BrandProfile` 跑 `verify-release.ps1`。
 
 ### P1：当前架构债
 
-1. `python/bridge.py` 仍然 1000 多行，FastAPI 已拆路由，但旧 Handler 还没完全移除。
-2. 授权激活仍在 Python，Rust 只负责启动前校验。以后可以把激活也搬到 Rust。
-3. 主题系统有多份来源：
-   - `src/theme/default.ts`
-   - `data/themes/default/theme.json`
-   - `data/themes/lumi/theme.json`
-   需要做品牌 profile，避免客户版和 Lumi 版互相污染。
-4. Feishu / WeChat 插件绑定逻辑偏脚本驱动，需要状态机化。
-5. Skills 有基础功能，但 manifest、版本兼容、签名校验还没产品化。
+已完成：
+
+1. Bridge `_meta` 返回契约已落地。
+2. `bridge.py` 旧 Handler API 路由已退场，主路由走 FastAPI native routes。
+3. 品牌 profile 已接入打包脚本和 release 校验。
+4. Vite / npm audit / GitHub Node 22 CI 已收束。
+5. 存储诊断已覆盖运行磁盘/U盘读写和 `openclaw.json` 基础修复。
+
+仍待处理：
+
+1. 授权激活仍在 Python，Rust 只负责启动前校验。以后可以把激活也搬到 Rust，或至少统一安全边界。
+2. Feishu / WeChat 插件绑定逻辑偏脚本驱动，需要状态机化。
+3. Skills 有基础功能，但 manifest、版本兼容、签名校验还没产品化。
+4. GitHub Release 已能出 Tauri installer/msi；本地 portable zip 仍需针对客户 profile 做交付验收。
 
 ### P2：增强债
 
@@ -297,7 +303,7 @@ cargo check
 
 ```powershell
 cd D:\Axiangmu\AUSTART
-powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -Version 2.0.1 -PackageName OpenClaw-Portable-v2.0.1-YYYY.MM.DD
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -Version 2.0.2 -PackageName OpenClaw-Portable-v2.0.2-YYYY.MM.DD -BrandProfile customer
 ```
 
 ## 10. Git 注意事项
@@ -351,4 +357,4 @@ git diff --stat
    - 推送 Gitee/GitHub；
    - 继续做 Agent / Skills / CLI。
 
-不要一上来就重构 FastAPI、授权或主题系统。当前项目已经能跑，下一步应按交付目标小步推进。
+不要一上来就重构授权或主题系统。当前项目已经能跑，Bridge 和品牌 profile 的 P1 已基本收束，下一步优先做 Release 产物验收、真实 U盘测试或剩余 P1 小步推进。

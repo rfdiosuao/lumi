@@ -7,6 +7,16 @@
 
 ---
 
+## 0. 2026-05-09 当前状态快照
+
+- GitHub `master` 已同步到 `238345e`。
+- 最新 Release: `v2.0.2-github-2026.05.09`。
+- GitHub CI 和 Release workflow 均已通过。
+- P1 已完成：存储诊断、品牌 profile 打包、Bridge legacy route 退场、`_meta` API 契约、Vite 8 / npm audit 清理、Node 22 CI。
+- 下一步优先：Release 安装包真实安装/启动验收、U盘授权拔插测试、客户 profile portable zip 验收、交付说明补齐。
+
+---
+
 ## 1. 项目定位
 
 OpenClaw U盘启动器不是单纯的“启动脚本套壳”，而是一个面向商家和终端客户的便携式 AI 服务工作台。
@@ -38,14 +48,19 @@ OpenClaw U盘启动器不是单纯的“启动脚本套壳”，而是一个面�
 - 授权码入口。
 - AI 生图、AI 视频、广告视频分镜等业务入口。
 - 初步的在线授权服务器和管理后台思路。
+- 运行磁盘/U盘读写诊断和 `openclaw.json` 基础自动修复。
+- FastAPI native routes 作为 Bridge 主实现，旧 http.server API 路由已退场。
+- GitHub Actions 可生成 Release installer/msi。
+- 品牌 profile 可在打包时选择 `lumi`、`customer` 或自定义 profile。
 
 主要短板:
 
 - 架构经历过多次抢救式修改，需要整理成稳定版本。
 - 授权服务器还需要正式产品化。
-- 安装包、离线包、更新包流程还没有完全自动化。
-- UI 虽然可用，但还需要形成可替换主题体系和统一设计规范。
-- 缺少标准测试清单，容易“这台电脑能跑，客户电脑不一定能跑”。
+- GitHub installer/msi 已自动化，但客户 portable zip 仍需交付前验收。
+- 真实 U盘授权拔插、不同 Windows 机器安装启动还需要硬件和环境验证。
+- 授权后台、机器人绑定、Skills 产品化仍待推进。
+- UI 虽然可用，但还需要继续沉淀统一设计规范和客户交付说明。
 
 ---
 
@@ -424,10 +439,10 @@ UI 模块必须设计成可替换。
 
 ### 本周
 
-- 固定当前可交付包。
-- 写清楚交付包使用说明。
-- 把授权服务器 Web UI 整理成可部署版本。
-- 制定发包前检查脚本。
+- 验收 `v2.0.2-github-2026.05.09` GitHub Release 安装包。
+- 用真实 U盘完成授权拔插测试。
+- 用 `verify-release.ps1` 验证客户 profile portable zip。
+- 补齐客户交付说明和 Release notes。
 
 ### 接下来两周
 
