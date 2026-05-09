@@ -153,7 +153,7 @@ export const DiagnosticsPage: React.FC = () => {
       <div className="flex h-[76px] shrink-0 items-center justify-between border-b border-border bg-surface px-8">
         <div>
           <h1 className="text-xl font-bold text-text">环境诊断</h1>
-          <p className="mt-1 text-sm text-text-muted">无需授权即可检查并修复端口占用、残留进程和启动目录</p>
+          <p className="mt-1 text-sm text-text-muted">无需授权即可检查并修复端口占用、残留进程、U盘读写和启动目录</p>
         </div>
         <div className="flex items-center gap-3">
           <Button variant="quiet" onClick={runDiagnostics} disabled={loading || repairing}>

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import json
+import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -35,12 +37,32 @@ class OpenClawProcessService:
         if not os.path.exists(start_js):
             raise FileNotFoundError(f"找不到启动脚本：\n{start_js}")
 
+        storage_check = self._storage_health_check(write_test=True)
+        if storage_check["status"] == "fail":
+            raise RuntimeError(
+                "运行磁盘/U盘检测失败："
+                f"{storage_check['message']}\n{storage_check.get('detail', '')}\n"
+                "请先重新插拔U盘、备份数据，或把安装包复制到健康磁盘后再启动。"
+            )
+        if storage_check["status"] == "warn":
+            self.append_log(
+                "[OpenClaw] Storage warning: "
+                f"{storage_check['message']} | {storage_check.get('detail', '')}\n"
+            )
+
         killed = self._stop_registered_gateway()
         killed += self._kill_clawpanel_processes()
         killed += self._kill_openclaw_gateway_processes()
         killed += self._kill_port_processes(APP_PORT)
         if killed:
             self.append_log(f"[OpenClaw] Cleared {killed} stale gateway/listener process(es).\n")
+
+        config_changed, config_backup = self._ensure_openclaw_config()
+        if config_changed:
+            if config_backup:
+                self.append_log(f"[OpenClaw] Rebuilt invalid openclaw.json, backup: {config_backup}\n")
+            else:
+                self.append_log("[OpenClaw] Rebuilt or normalized openclaw.json.\n")
 
         env = self.paths.process_env()
         self.append_log("[OpenClaw] Starting service...\n")
@@ -114,11 +136,12 @@ class OpenClawProcessService:
             })
 
         file_check("base_path", "安装目录", self.paths.base_path)
+        checks.append(self._storage_health_check(write_test=True))
         file_check("node", "Node.js 运行时", self.paths.node_exe)
         file_check("start_js", "OpenClaw 启动脚本", self.paths.find_file("start.js", ("back", "backup", "")))
         file_check("openclaw_core", "OpenClaw 本体", self.paths.openclaw_mjs)
         file_check("data_dir", "数据目录", self.paths.data_dir, required=False, repairable=True)
-        file_check("openclaw_config", "OpenClaw 基础配置", self.paths.openclaw_config, required=False, repairable=True)
+        checks.append(self._openclaw_config_check())
 
         port_listeners = self._port_listeners(APP_PORT)
         expected_pid = str(self.process.pid) if self.process and self.process.poll() is None else None
@@ -221,25 +244,245 @@ class OpenClawProcessService:
                 created += 1
         record("补齐基础数据目录", created)
 
-        if not os.path.exists(self.paths.openclaw_config):
-            with open(self.paths.openclaw_config, "w", encoding="utf-8") as handle:
-                json.dump({
-                    "gateway": {
-                        "auth": {"mode": "none"},
-                        "bind": "loopback",
-                    }
-                }, handle, ensure_ascii=False, indent=2)
-            actions.append({
-                "label": "重建 OpenClaw 基础配置",
-                "status": "ok",
-                "message": "已创建 data/.openclaw/openclaw.json",
-                "count": 1,
-            })
+        config_changed, config_backup = self._ensure_openclaw_config()
+        actions.append({
+            "label": "修复 OpenClaw 基础配置",
+            "status": "ok",
+            "message": (
+                f"已备份损坏配置并重建：{config_backup}"
+                if config_backup else
+                ("已补齐/重建 openclaw.json" if config_changed else "无需处理")
+            ),
+            "count": 1 if config_changed else 0,
+        })
+
+        storage_check = self._storage_health_check(write_test=True)
+        actions.append({
+            "label": "检测运行磁盘 / U盘健康",
+            "status": storage_check["status"],
+            "message": storage_check["message"],
+            "count": 0,
+        })
 
         return {
             "actions": actions,
             "diagnostics": self.diagnose_environment(),
         }
+
+    @staticmethod
+    def _default_openclaw_config() -> dict:
+        return {
+            "gateway": {
+                "auth": {"mode": "none"},
+                "bind": "loopback",
+            }
+        }
+
+    def _openclaw_config_check(self) -> dict:
+        path = self.paths.openclaw_config
+        if not os.path.exists(path):
+            return {
+                "id": "openclaw_config",
+                "label": "OpenClaw 基础配置",
+                "status": "warn",
+                "message": "配置文件缺失，一键修复或启动服务时会自动重建",
+                "detail": path,
+                "repairable": True,
+            }
+        try:
+            config = self._read_openclaw_config()
+            if self._normalize_openclaw_config(config):
+                return {
+                    "id": "openclaw_config",
+                    "label": "OpenClaw 基础配置",
+                    "status": "warn",
+                    "message": "配置文件可读取，但缺少基础 gateway 配置",
+                    "detail": path,
+                    "repairable": True,
+                }
+            return {
+                "id": "openclaw_config",
+                "label": "OpenClaw 基础配置",
+                "status": "ok",
+                "message": "配置文件格式正常",
+                "detail": path,
+                "repairable": False,
+            }
+        except Exception as error:
+            return {
+                "id": "openclaw_config",
+                "label": "OpenClaw 基础配置",
+                "status": "fail",
+                "message": "配置文件格式损坏，一键修复会备份后重建",
+                "detail": f"{path} ({error})",
+                "repairable": True,
+            }
+
+    def _read_openclaw_config(self) -> dict:
+        with open(self.paths.openclaw_config, "r", encoding="utf-8") as handle:
+            config = json.load(handle)
+        if not isinstance(config, dict):
+            raise ValueError("root value is not an object")
+        return config
+
+    def _normalize_openclaw_config(self, config: dict) -> bool:
+        changed = False
+        gateway = config.get("gateway")
+        if not isinstance(gateway, dict):
+            gateway = {}
+            config["gateway"] = gateway
+            changed = True
+        auth = gateway.get("auth")
+        if not isinstance(auth, dict):
+            auth = {}
+            gateway["auth"] = auth
+            changed = True
+        if not auth.get("mode"):
+            auth["mode"] = "none"
+            changed = True
+        if not gateway.get("bind"):
+            gateway["bind"] = "loopback"
+            changed = True
+        return changed
+
+    def _write_openclaw_config(self, config: dict) -> None:
+        os.makedirs(os.path.dirname(self.paths.openclaw_config), exist_ok=True)
+        with open(self.paths.openclaw_config, "w", encoding="utf-8") as handle:
+            json.dump(config, handle, ensure_ascii=False, indent=2)
+
+    def _backup_invalid_openclaw_config(self) -> str | None:
+        path = self.paths.openclaw_config
+        if not os.path.exists(path):
+            return None
+        backup = f"{path}.bad-{time.strftime('%Y%m%d-%H%M%S')}"
+        try:
+            os.replace(path, backup)
+            return backup
+        except OSError:
+            return None
+
+    def _ensure_openclaw_config(self) -> tuple[bool, str | None]:
+        if not os.path.exists(self.paths.openclaw_config):
+            self._write_openclaw_config(self._default_openclaw_config())
+            return True, None
+        try:
+            config = self._read_openclaw_config()
+        except Exception:
+            backup = self._backup_invalid_openclaw_config()
+            self._write_openclaw_config(self._default_openclaw_config())
+            return True, backup
+        if self._normalize_openclaw_config(config):
+            self._write_openclaw_config(config)
+            return True, None
+        return False, None
+
+    def _storage_health_check(self, write_test: bool = False) -> dict:
+        root = self._drive_root()
+        detail_parts = [
+            f"运行目录: {self.paths.base_path}",
+            f"磁盘: {root}",
+        ]
+        problems: list[str] = []
+        warnings: list[str] = []
+
+        if not os.path.isdir(self.paths.base_path):
+            return {
+                "id": "storage_health",
+                "label": "运行磁盘 / U盘健康",
+                "status": "fail",
+                "message": "安装目录不可访问",
+                "detail": self.paths.base_path,
+                "repairable": False,
+            }
+
+        drive_type = self._drive_type_label(root)
+        if drive_type:
+            detail_parts.append(f"类型: {drive_type}")
+            if drive_type == "不可访问":
+                problems.append("磁盘不可访问")
+
+        try:
+            usage = shutil.disk_usage(root if root and os.path.exists(root) else self.paths.base_path)
+            free_mb = usage.free / (1024 * 1024)
+            detail_parts.append(f"可用空间: {free_mb:.0f} MB")
+            if free_mb < 256:
+                problems.append("可用空间低于 256MB")
+            elif free_mb < 1024:
+                warnings.append("可用空间低于 1GB")
+        except Exception as error:
+            warnings.append(f"无法读取剩余空间: {error}")
+
+        if write_test:
+            probe_path = ""
+            try:
+                probe_dir = self.paths.launcher_dir
+                os.makedirs(probe_dir, exist_ok=True)
+                fd, probe_path = tempfile.mkstemp(prefix=".lumi-disk-check-", suffix=".tmp", dir=probe_dir)
+                payload = f"lumi-disk-check:{time.time()}".encode("utf-8")
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                with open(probe_path, "rb") as handle:
+                    if handle.read() != payload:
+                        raise OSError("写入后读回内容不一致")
+                os.remove(probe_path)
+                detail_parts.append("读写测试: 通过")
+            except Exception as error:
+                problems.append(f"读写测试失败: {error}")
+                detail_parts.append("读写测试: 失败")
+            finally:
+                if probe_path and os.path.exists(probe_path):
+                    try:
+                        os.remove(probe_path)
+                    except OSError:
+                        pass
+
+        if problems:
+            status = "fail"
+            message = "；".join(problems)
+        elif warnings:
+            status = "warn"
+            message = "；".join(warnings)
+        else:
+            status = "ok"
+            message = "运行磁盘可访问，读写测试正常" if write_test else "运行磁盘可访问"
+
+        return {
+            "id": "storage_health",
+            "label": "运行磁盘 / U盘健康",
+            "status": status,
+            "message": message,
+            "detail": "；".join(detail_parts),
+            "repairable": False,
+        }
+
+    def _drive_root(self) -> str:
+        absolute = os.path.abspath(self.paths.base_path)
+        drive, _ = os.path.splitdrive(absolute)
+        if drive:
+            return f"{drive}\\"
+        return absolute
+
+    @staticmethod
+    def _drive_type_label(root: str) -> str:
+        if os.name != "nt":
+            return "当前系统磁盘"
+        try:
+            import ctypes
+
+            drive_type = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
+        except Exception:
+            return "未知"
+        return {
+            0: "未知",
+            1: "不可访问",
+            2: "可移动磁盘",
+            3: "本地磁盘",
+            4: "网络磁盘",
+            5: "光盘",
+            6: "内存盘",
+        }.get(drive_type, f"类型 {drive_type}")
 
     def _read_output(self, process: subprocess.Popen, on_exit: Callable[[int | None], None] | None) -> None:
         try:
