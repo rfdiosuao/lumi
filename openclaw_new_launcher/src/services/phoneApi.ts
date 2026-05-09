@@ -39,6 +39,7 @@ export interface PhoneTapRequest {
 
 const STORAGE_KEY = 'lumi_phone_connector_config';
 const TOKEN_HEADER = 'X-AGENT-PHONE-TOKEN';
+const LEGACY_TOKEN_HEADER = 'X-APKCLAW-TOKEN';
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '');
@@ -77,6 +78,7 @@ async function request<T>(
       headers: {
         Accept: 'application/json',
         [TOKEN_HEADER]: config.token,
+        [LEGACY_TOKEN_HEADER]: config.token,
         ...(options.body ? { 'Content-Type': 'application/json' } : {}),
         ...(options.headers || {}),
       },
