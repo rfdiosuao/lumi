@@ -182,11 +182,12 @@
 
 ### P0：最小闭环
 
-- [ ] 定义 Phone Connector API Contract。
-- [ ] 约定 Token Header 名称。
-- [ ] 约定 `/api/device/status` 返回格式。
-- [ ] 约定 `/api/tool/screenshot` 返回格式。
-- [ ] 约定 `/api/tool/tap` 请求和返回格式。
+- [x] 定义 Phone Connector API Contract。
+- [x] 约定 Token Header 名称。
+- [x] 约定 `/api/agent/status` MVP 状态接口返回格式。
+- [x] 约定 `/api/device/status` 后续建议返回格式。
+- [x] 约定 `/api/tool/screenshot` 返回格式。
+- [x] 约定 `/api/tool/tap` 请求和返回格式。
 - [ ] 在 Lumi 新增 `phoneApi` 服务层。
 - [ ] 在 Lumi 新增“手机控制”页面入口。
 - [ ] 页面支持输入 APKClaw 地址。

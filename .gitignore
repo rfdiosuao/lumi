@@ -15,6 +15,7 @@ src-tauri/target*/
 **/src-tauri/target/
 **/src-tauri/target*/
 .trae/
+apkclaw/
 
 # Data directory contents (keep directory but not state files)
 data/install_id.txt
