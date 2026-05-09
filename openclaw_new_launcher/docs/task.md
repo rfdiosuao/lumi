@@ -175,3 +175,57 @@
 - 不建议马上重做主题系统，品牌 profile 已经能支撑交付。
 - 不建议同时开太多 Agent / CLI / Skills 新功能，先把交付链路闭环。
 - 不建议在真实 U盘测试前继续叠加授权复杂度。
+
+## APKClaw 集成开工任务
+
+> 当前策略：先做最小闭环，不先做完整投屏、不先做模板市场、不先做复杂多设备。第一块砖是“Lumi 能连接 APKClaw，并显示一张手机截图”。
+
+### P0：最小闭环
+
+- [ ] 定义 Phone Connector API Contract。
+- [ ] 约定 Token Header 名称。
+- [ ] 约定 `/api/device/status` 返回格式。
+- [ ] 约定 `/api/tool/screenshot` 返回格式。
+- [ ] 约定 `/api/tool/tap` 请求和返回格式。
+- [ ] 在 Lumi 新增 `phoneApi` 服务层。
+- [ ] 在 Lumi 新增“手机控制”页面入口。
+- [ ] 页面支持输入 APKClaw 地址。
+- [ ] 页面支持输入 Token。
+- [ ] 页面支持点击“连接测试”。
+- [ ] 页面能展示设备在线/离线状态。
+- [ ] 页面能展示手机截图占位。
+- [ ] 页面能请求并显示真实手机截图。
+- [ ] 连接失败时显示可理解错误。
+
+### P0.5：截图点击
+
+- [ ] 记录截图原始宽高。
+- [ ] 记录预览区域显示宽高。
+- [ ] 实现预览坐标到手机真实坐标的比例换算。
+- [ ] 点击截图预览时调用 `/api/tool/tap`。
+- [ ] 点击后自动刷新截图。
+- [ ] 动作日志记录 tap 坐标、时间、结果。
+
+### P1：AI 指针层协议预留
+
+- [ ] 在 Phone Connector Contract 中预留 `visualize` 字段。
+- [ ] 在 tap/swipe 请求中预留 `trace_id`。
+- [ ] 在动作结果中预留 `before_screenshot` 和 `after_screenshot`。
+- [ ] 文档中约定 AI Cursor Overlay 的开关 API。
+- [ ] Lumi 页面预留“显示 AI 指针”开关。
+
+### 暂时不做
+
+- [ ] 不做 WebRTC 真投屏。
+- [ ] 不做多手机并发。
+- [ ] 不做 workflow template 市场。
+- [ ] 不做完整自动手机 Agent。
+- [ ] 不做 USB/ADB 通道。
+
+### 本轮开工顺序
+
+1. 先写 Phone Connector API Contract 文档。
+2. 再在 Lumi 里加 `phoneApi`。
+3. 再加“手机控制”页面骨架。
+4. 再做连接测试和截图显示。
+5. 最后做点击截图转 tap。
