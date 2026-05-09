@@ -29,6 +29,7 @@ source-of-truth documents; prefer the current code and the docs listed here.
 | `LUMI_AGENT_PLATFORM_ROADMAP.md` | Long-term Agent platform roadmap |
 | `APKCLAW_PHONE_CONTROL_ROADMAP.md` | Phone-side APKClaw integration, AI cursor, and multimodal control roadmap |
 | `PHONE_CONNECTOR_API_CONTRACT.md` | MVP API contract for Lumi to connect APKClaw |
+| `APKCLAW_LUMI_INTEGRATION_HANDOFF.md` | Handoff contract for implementing the APKClaw side of the Lumi phone connector |
 | `MODULE_EXTENSION_GUIDE.md` | Adding launcher modules and pages |
 | `UI_CUSTOMIZATION_DESIGN.md` | Brand and UI customization design |
 | `LUMI_PERSONAL_UI_DESIGN.md` | Personal Lumi edition UI direction and acceptance notes |
