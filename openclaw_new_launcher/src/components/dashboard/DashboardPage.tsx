@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
 import { useTheme } from '../../hooks/useTheme';
-import { processApi, configApi, skillsApi, systemApi } from '../../services/api';
+import { configApi, processApi, skillsApi, systemApi } from '../../services/api';
 import { showToast } from '../common';
 
 interface StatusCard {
@@ -9,7 +9,6 @@ interface StatusCard {
   label: string;
   status: 'ok' | 'warn' | 'off' | 'loading';
   detail: string;
-  icon: string;
 }
 
 interface QuickAction {
@@ -17,25 +16,29 @@ interface QuickAction {
   label: string;
   desc: string;
   icon: string;
-  accent?: boolean;
+  featured?: boolean;
 }
 
-const STATUS_STYLES: Record<string, { dot: string; glow: string }> = {
+const STATUS_STYLES: Record<StatusCard['status'], { dot: string; rail: string; text: string }> = {
   ok: {
-    dot: 'bg-status-success',
-    glow: 'shadow-[0_0_12px_rgba(63,224,143,0.6)]',
+    dot: 'bg-status-success shadow-[0_0_10px_rgba(63,224,143,0.55)]',
+    rail: 'bg-status-success/50',
+    text: 'text-status-success',
   },
   warn: {
-    dot: 'bg-status-warning',
-    glow: 'shadow-[0_0_12px_rgba(255,180,84,0.5)]',
+    dot: 'bg-status-warning shadow-[0_0_10px_rgba(255,180,84,0.38)]',
+    rail: 'bg-status-warning/50',
+    text: 'text-status-warning',
   },
   off: {
     dot: 'bg-text-subtle',
-    glow: '',
+    rail: 'bg-border',
+    text: 'text-text-muted',
   },
   loading: {
-    dot: 'bg-accent',
-    glow: 'shadow-[0_0_12px_rgba(214,180,106,0.5)]',
+    dot: 'bg-accent shadow-[0_0_10px_rgba(216,184,102,0.42)]',
+    rail: 'bg-accent/50',
+    text: 'text-accent',
   },
 };
 
@@ -53,14 +56,17 @@ function hasConfiguredApiProfile(data: unknown): boolean {
   });
 }
 
-export const DashboardPage: React.FC = () => {
-  const {
-    serviceRunning,
-    serviceStatus,
-    isAuthorized,
-    setCurrentPage,
-  } = useAppStore();
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 6) return '夜深好';
+  if (hour < 12) return '早上好';
+  if (hour < 14) return '中午好';
+  if (hour < 18) return '下午好';
+  return '晚上好';
+}
 
+export const DashboardPage: React.FC = () => {
+  const { serviceRunning, serviceStatus, isAuthorized, setCurrentPage } = useAppStore();
   const { theme } = useTheme();
   const [apiConfigured, setApiConfigured] = useState<boolean | null>(null);
   const [larkInstalled, setLarkInstalled] = useState<boolean | null>(null);
@@ -109,12 +115,7 @@ export const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     refreshStatus();
-    const hour = new Date().getHours();
-    if (hour < 6) setGreetingTime('夜深了');
-    else if (hour < 12) setGreetingTime('早上好');
-    else if (hour < 14) setGreetingTime('中午好');
-    else if (hour < 18) setGreetingTime('下午好');
-    else setGreetingTime('晚上好');
+    setGreetingTime(getGreeting());
   }, [refreshStatus]);
 
   const statusCards: StatusCard[] = [
@@ -123,59 +124,52 @@ export const DashboardPage: React.FC = () => {
       label: 'OpenClaw 服务',
       status: serviceRunning ? 'ok' : serviceStatus === 'starting' ? 'loading' : 'off',
       detail: serviceRunning ? '运行中' : serviceStatus === 'starting' ? '启动中' : '未启动',
-      icon: '⬡',
     },
     {
       key: 'bridge',
       label: 'Bridge 引擎',
       status: serviceRunning ? 'ok' : 'off',
       detail: bridgeMode,
-      icon: '◈',
     },
     {
       key: 'license',
       label: '授权状态',
       status: isAuthorized ? 'ok' : 'warn',
       detail: isAuthorized ? '已授权' : '未授权',
-      icon: '◇',
     },
     {
       key: 'api',
       label: 'API 配置',
       status: apiConfigured === null ? 'loading' : apiConfigured ? 'ok' : 'warn',
       detail: apiConfigured === null ? '检测中' : apiConfigured ? '已配置' : '未配置',
-      icon: '⬢',
     },
     {
       key: 'lark',
       label: '飞书机器人',
       status: larkInstalled === null ? 'loading' : larkInstalled ? 'ok' : 'off',
       detail: larkInstalled === null ? '检测中' : larkInstalled ? '已安装' : '未安装',
-      icon: '▣',
     },
     {
       key: 'weixin',
       label: '微信机器人',
       status: weixinInstalled === null ? 'loading' : weixinInstalled ? 'ok' : 'off',
       detail: weixinInstalled === null ? '检测中' : weixinInstalled ? '已安装' : '未安装',
-      icon: '▤',
     },
     {
       key: 'skills',
       label: 'Skills 扩展',
       status: skillsCount > 0 ? 'ok' : 'off',
       detail: `${skillsCount} 个已启用`,
-      icon: '⬩',
     },
   ];
 
   const quickActions: QuickAction[] = [
-    { key: 'terminal', label: '服务日志', desc: '查看控制台', icon: '▸' },
-    { key: 'storyboard', label: '广告视频', desc: '分镜工作台', icon: '▦', accent: true },
-    { key: 'image', label: 'AI 生图', desc: '创作图片', icon: '◎', accent: true },
-    { key: 'video', label: 'AI 视频', desc: '生成视频', icon: '▶', accent: true },
-    { key: 'skills', label: 'Skills', desc: '扩展中心', icon: '⬩' },
-    { key: 'license', label: '授权码', desc: '激活管理', icon: '◇' },
+    { key: 'terminal', label: '服务日志', desc: '查看控制台', icon: 'LOG' },
+    { key: 'storyboard', label: '广告视频', desc: '分镜工作台', icon: 'AD', featured: true },
+    { key: 'image', label: 'AI 生图', desc: '创作图片', icon: 'IMG', featured: true },
+    { key: 'video', label: 'AI 视频', desc: '生成视频', icon: 'VID', featured: true },
+    { key: 'skills', label: 'Skills', desc: '扩展中心', icon: 'SK' },
+    { key: 'license', label: '授权码', desc: '激活管理', icon: 'LIC' },
   ];
 
   const handleQuickAction = (key: string) => {
@@ -204,70 +198,67 @@ export const DashboardPage: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-border bg-surface px-8 py-6">
-        <div className="flex items-end justify-between">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-[0.28em] text-accent">
+    <div className="flex h-full flex-col overflow-hidden bg-surface">
+      <header className="shrink-0 border-b border-border/70 bg-surface px-8 py-7">
+        <div className="flex items-end justify-between gap-8">
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase tracking-[0.42em] text-accent">
               {theme.brand.terminal_header}
             </div>
-            <h1 className="mt-1.5 text-2xl font-black tracking-wide text-text">
+            <h1 className="mt-2 text-[28px] font-black leading-tight text-text">
               {greetingTime}，欢迎回来
             </h1>
-            <p className="mt-1 text-sm text-text-subtle">
+            <p className="mt-1 text-sm text-text-muted">
               {theme.brand.name} · {theme.brand.subtitle}
             </p>
           </div>
-          {!serviceRunning && (
+
+          {!serviceRunning ? (
             <button
               onClick={handleStartService}
               disabled={serviceStatus === 'starting'}
-              className="rounded-2xl bg-accent px-6 py-3 text-sm font-black text-accent-ink shadow-[0_16px_44px_rgba(214,180,106,0.22)] transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-55"
+              className="min-w-[132px] rounded-[18px] bg-accent px-6 py-3 text-sm font-black text-accent-ink shadow-[0_16px_34px_rgba(216,184,102,0.16)] transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-55"
             >
               {serviceStatus === 'starting' ? '启动中...' : '启动核心服务'}
             </button>
-          )}
-          {serviceRunning && (
-            <div className="flex items-center gap-2 rounded-2xl border border-status-success/30 bg-status-success/10 px-5 py-3">
-              <span className="h-2.5 w-2.5 rounded-full bg-status-success shadow-[0_0_10px_rgba(63,224,143,0.6)]" />
+          ) : (
+            <div className="flex items-center gap-2 rounded-[18px] border border-status-success/25 bg-status-success/10 px-5 py-3">
+              <span className="h-2 w-2 rounded-full bg-status-success shadow-[0_0_10px_rgba(63,224,143,0.55)]" />
               <span className="text-sm font-bold text-status-success">服务运行中</span>
             </div>
           )}
         </div>
-      </div>
+      </header>
 
-      <div className="flex-1 overflow-y-auto p-8">
-        <div className="mb-8">
-          <div className="mb-4 text-xs font-bold uppercase tracking-[0.22em] text-text-subtle">
+      <div className="flex-1 overflow-y-auto px-8 py-7">
+        <section className="mb-8">
+          <div className="mb-4 text-xs font-bold uppercase tracking-[0.24em] text-text-subtle">
             系统状态
           </div>
           <div className="grid grid-cols-4 gap-3">
-            {statusCards.map((card, index) => {
+            {statusCards.map((card) => {
               const style = STATUS_STYLES[card.status];
               return (
                 <div
                   key={card.key}
-                  className="group relative overflow-hidden rounded-2xl border border-border bg-surface-alt/60 p-4 transition-all hover:border-border-strong hover:bg-surface-alt"
-                  style={{ animationDelay: `${index * 60}ms` }}
+                  className="group relative min-h-[82px] overflow-hidden rounded-[14px] border border-border/80 bg-surface-alt/30 p-4 transition-all hover:border-border-strong/70 hover:bg-surface-alt/50"
                 >
-                  <div className="pointer-events-none absolute -right-4 -top-4 text-5xl font-black text-accent/[0.06] transition-colors group-hover:text-accent/[0.12]">
-                    {card.icon}
+                  <span className={`absolute left-0 top-4 h-9 w-[2px] rounded-r ${style.rail}`} />
+                  <div className="mb-3 flex items-center gap-2.5">
+                    <span className={`h-2 w-2 rounded-full ${style.dot}`} />
+                    <span className="truncate text-xs font-medium text-text-muted">{card.label}</span>
                   </div>
-                  <div className="relative">
-                    <div className="mb-3 flex items-center gap-2">
-                      <span className={`h-2 w-2 rounded-full ${style.dot} ${style.glow} transition-all`} />
-                      <span className="text-xs font-medium text-text-muted">{card.label}</span>
-                    </div>
-                    <div className="text-sm font-bold text-text">{card.detail}</div>
+                  <div className={`text-[15px] font-black ${card.status === 'off' ? 'text-text' : style.text}`}>
+                    {card.detail}
                   </div>
                 </div>
               );
             })}
           </div>
-        </div>
+        </section>
 
-        <div className="mb-8">
-          <div className="mb-4 text-xs font-bold uppercase tracking-[0.22em] text-text-subtle">
+        <section className="mb-8">
+          <div className="mb-4 text-xs font-bold uppercase tracking-[0.24em] text-text-subtle">
             快捷入口
           </div>
           <div className="grid grid-cols-3 gap-3">
@@ -275,52 +266,52 @@ export const DashboardPage: React.FC = () => {
               <button
                 key={action.key}
                 onClick={() => handleQuickAction(action.key)}
-                className={`group relative flex items-center gap-4 overflow-hidden rounded-2xl border p-4 text-left transition-all ${
-                  action.accent
-                    ? 'border-accent/25 bg-accent/[0.06] hover:border-accent/50 hover:bg-accent/[0.12]'
-                    : 'border-border bg-surface-alt/60 hover:border-border-strong hover:bg-surface-alt'
+                className={`group relative flex min-h-[78px] items-center gap-4 overflow-hidden rounded-[14px] border p-4 text-left transition-all ${
+                  action.featured
+                    ? 'border-border-strong/50 bg-surface-alt/50 hover:border-accent/70 hover:bg-accent/[0.055]'
+                    : 'border-border/80 bg-surface-alt/30 hover:border-border-strong/70 hover:bg-surface-alt/50'
                 }`}
               >
                 <div
-                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border text-lg font-black transition-all ${
-                    action.accent
-                      ? 'border-accent/40 bg-accent/20 text-accent group-hover:border-accent/60 group-hover:bg-accent/30'
-                      : 'border-border bg-surface-deep text-text-subtle group-hover:border-border-strong group-hover:text-text'
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border text-[10px] font-black tracking-[0.08em] transition-all ${
+                    action.featured
+                      ? 'border-accent/40 bg-accent/[0.08] text-accent group-hover:bg-accent/[0.13]'
+                      : 'border-border bg-surface-deeper text-text-subtle group-hover:border-border-strong group-hover:text-text'
                   }`}
                 >
                   {action.icon}
                 </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-bold text-text">{action.label}</div>
-                  <div className="text-xs text-text-subtle">{action.desc}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-black text-text">{action.label}</div>
+                  <div className="mt-0.5 truncate text-xs text-text-subtle">{action.desc}</div>
                 </div>
-                <div className="pointer-events-none absolute -right-1 bottom-0 text-3xl font-black text-accent/[0.04] transition-colors group-hover:text-accent/[0.1]">
+                <span className="text-xl leading-none text-text-subtle transition-all group-hover:translate-x-0.5 group-hover:text-accent">
                   →
-                </div>
+                </span>
               </button>
             ))}
           </div>
-        </div>
+        </section>
 
-        <div>
-          <div className="mb-4 text-xs font-bold uppercase tracking-[0.22em] text-text-subtle">
+        <section>
+          <div className="mb-4 text-xs font-bold uppercase tracking-[0.24em] text-text-subtle">
             关于
           </div>
-          <div className="rounded-2xl border border-border bg-surface-alt/40 p-5">
+          <div className="rounded-[16px] border border-border/80 bg-surface-alt/30 p-5">
             <div className="flex items-center gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-border-strong bg-surface-alt shadow-[0_0_30px_rgba(214,180,106,0.12)]">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[16px] border border-border-strong/70 bg-surface-alt shadow-[0_0_26px_rgba(216,184,102,0.08)]">
                 <span className="text-2xl font-black text-accent">L</span>
               </div>
               <div>
                 <div className="text-base font-black tracking-wide text-text">{theme.brand.name}</div>
                 <div className="text-sm text-text-muted">{theme.brand.subtitle}</div>
                 <div className="mt-1 text-xs text-text-subtle">
-                  {theme.name} · v2.0.1
+                  {theme.name} · v2.0.2
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );

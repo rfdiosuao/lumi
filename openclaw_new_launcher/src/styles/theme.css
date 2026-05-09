@@ -2,19 +2,19 @@
   --color-app-bg: #07080D;
   --color-sidebar-bg: #0A0C14;
   --color-surface: #0D0F18;
-  --color-surface-alt: #111827;
-  --color-surface-deep: #171D2B;
+  --color-surface-alt: #10141E;
+  --color-surface-deep: #151A25;
   --color-surface-deeper: #05070D;
   --color-hover: #1A1F2E;
   --color-input: #0B1020;
-  --color-border: rgba(214, 180, 106, 0.18);
-  --color-border-strong: rgba(214, 180, 106, 0.48);
+  --color-border: rgba(216, 184, 102, 0.14);
+  --color-border-strong: rgba(216, 184, 102, 0.38);
   --color-text: #F7F1E3;
   --color-text-muted: #A9B2C3;
   --color-text-subtle: #63708A;
-  --color-accent: #D6B46A;
-  --color-accent-hover: #F2D48A;
-  --color-accent-soft: rgba(214, 180, 106, 0.12);
+  --color-accent: #D8B866;
+  --color-accent-hover: #E6C978;
+  --color-accent-soft: rgba(216, 184, 102, 0.10);
   --color-accent-ink: #2B1D05;
   --color-success: #3FE08F;
   --color-warning: #FFB454;
@@ -67,10 +67,10 @@ body::before {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse 60% 50% at 85% 5%, rgba(214, 180, 106, 0.12), transparent),
-    radial-gradient(ellipse 40% 30% at 10% 95%, rgba(55, 230, 208, 0.04), transparent),
-    linear-gradient(rgba(214, 180, 106, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(214, 180, 106, 0.025) 1px, transparent 1px);
+    radial-gradient(ellipse 55% 44% at 88% 0%, rgba(216, 184, 102, 0.065), transparent),
+    radial-gradient(ellipse 36% 28% at 8% 96%, rgba(55, 230, 208, 0.025), transparent),
+    linear-gradient(rgba(216, 184, 102, 0.014) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(216, 184, 102, 0.012) 1px, transparent 1px);
   background-size: auto, auto, 52px 52px, 52px 52px;
   mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.6), transparent 75%);
 }
