@@ -11,6 +11,7 @@ source-of-truth documents; prefer the current code and the docs listed here.
 | `PROJECT_STRUCTURE.md` | Canonical workspace, current directory map, and cleanup rules |
 | `BRIDGE_MIGRATION_GUARD.md` | Bridge smoke checks and FastAPI migration guardrails |
 | `SESSION_HANDOFF.md` | Current handoff notes for the next Codex/GPT session |
+| `task.md` | Current executable task list and remaining product gaps |
 | `RUNTIME_PATHS.md` | Windows and Mac runtime path rules |
 | `RELEASE_CHECKLIST.md` | Manual release verification |
 | `CUSTOMER_GUIDE.md` | Customer-facing quick guide |
