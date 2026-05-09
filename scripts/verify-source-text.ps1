@@ -42,7 +42,7 @@ $ignoredPatterns = @(
     "(^|/)pnpm-lock\.yaml$"
 )
 
-$mojibakePattern = "\uFFFD|\u951B|\u9428|\u93C8|\u7ED4|\u6D93|\u59AB|\u60E7|\u935A|\u59DD|\u93B5|\u7039|\u95B0|\u4FD9|\u76AF|\u7EC2|\u4EBE|\u9A9E|\u6748|\u52ED|\u53C6|\u71BB|\u52EC|\u70B0|\u51A7|\u6FC8|\u20AC"
+$mojibakePattern = "\uFFFD|\u935A|\u74D2|\u93C8|\u95BF|\u93C9|\u93C3|\u95C7|\u6D93|\u5158|\u5DFF|\u7487|\u20AC|\uE045|\uE047|\uE044|\u951B|\u9428|\u7ED4|\u59AB|\u60E7|\u59DD|\u93B5|\u7039|\u95B0|\u4FD9|\u76AF|\u7EC2|\u4EBE|\u9A9E|\u6748|\u52ED|\u53C6|\u71BB|\u52EC|\u70B0|\u51A7|\u6FC8"
 $sensitivePattern = "(?i)\b(sk-[A-Za-z0-9_\-]{24,}|(?:OPENAI|DASHSCOPE|ANTHROPIC|GOOGLE|GITHUB|AZURE|COHERE)_API_KEY\s*[:=]\s*[\x22\x27]?[A-Za-z0-9_\-]{16,})\b"
 $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
 
