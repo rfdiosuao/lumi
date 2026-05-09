@@ -170,6 +170,10 @@ class AppPaths:
         return os.path.join(self.data_dir, "theme.json")
 
     @property
+    def brand_profile(self) -> str:
+        return os.path.join(self.data_dir, "brand_profile.json")
+
+    @property
     def openclaw_mjs(self) -> str:
         candidates = [
             os.path.join(self.base_path, "node_modules", "openclaw", "openclaw.mjs"),

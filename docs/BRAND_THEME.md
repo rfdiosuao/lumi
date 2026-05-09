@@ -4,10 +4,10 @@
 
 ## 需要替换的位置
 
-默认品牌主题位于：
+品牌主题位于：
 
 ```text
-openclaw_new_launcher/data/themes/default/
+openclaw_new_launcher/data/themes/<themeId>/
   theme.json
   logo.png
 ```
@@ -15,10 +15,25 @@ openclaw_new_launcher/data/themes/default/
 打包后对应：
 
 ```text
-OpenClawFiles/data/themes/default/
+OpenClawFiles/data/themes/<themeId>/
   theme.json
   logo.png
 ```
+
+当前常用 profile：
+
+```text
+lumi     -> data/themes/lumi          # Lumi 私人版 / 内部演示版
+customer -> data/themes/yonghao_tech  # 客户交付版默认主题
+```
+
+打包脚本会把选择写入：
+
+```text
+OpenClawFiles/data/brand_profile.json
+```
+
+未授权、无服务器主题下发时，启动器会按这个 profile 选择默认主题。
 
 ## 可改内容
 
@@ -56,9 +71,23 @@ OpenClawFiles/data/themes/default/
 
 ## 打包建议
 
-1. 先替换 `data/themes/default/theme.json` 和 `data/themes/default/logo.png`。
-2. 再运行打包脚本。
+1. 先确认或新增 `data/themes/<themeId>/theme.json` 和 `logo.png`。
+2. 再运行打包脚本，并显式指定 `-BrandProfile`。
 3. 打包完成后检查根目录仍然只有 `OpenClaw.exe` 和 `OpenClawFiles`。
+4. 用 `verify-release.ps1` 检查 `brand_profile.json` 和对应主题是否存在。
+
+示例：
+
+```powershell
+# Lumi 私人版
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -BrandProfile lumi
+
+# 客户交付版
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -BrandProfile customer
+
+# 自定义主题，要求 data/themes/acme/theme.json 存在
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -BrandProfile acme
+```
 
 ## 注意
 

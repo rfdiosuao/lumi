@@ -2,6 +2,7 @@ param(
     [string]$Version = "2.0.1",
     [string]$PackageName = "",
     [string]$SeedPortableDir = "",
+    [string]$BrandProfile = "lumi",
     [switch]$SkipBuild,
     [switch]$NoZip
 )
@@ -197,7 +198,12 @@ function Find-TauriExe {
 }
 
 function Write-CleanRuntimeConfig {
-    param([string]$PackageDir)
+    param(
+        [string]$PackageDir,
+        [string]$ProfileName,
+        [string]$ThemeId,
+        [string]$Edition
+    )
 
     $dataDir = Join-Path $PackageDir "data"
     $stateDir = Join-Path $dataDir ".openclaw"
@@ -217,8 +223,32 @@ function Write-CleanRuntimeConfig {
     }
     $openclawConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $stateDir "openclaw.json") -Encoding UTF8
 
+    $brandProfile = [ordered]@{
+        profile = $ProfileName
+        themeId = $ThemeId
+        edition = $Edition
+    }
+    $brandProfile | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $dataDir "brand_profile.json") -Encoding UTF8
+
     "{}" | Set-Content -LiteralPath (Join-Path $PackageDir "imgapi_config.json") -Encoding UTF8
     "{}" | Set-Content -LiteralPath (Join-Path $PackageDir "video_config.json") -Encoding UTF8
+}
+
+function Resolve-BrandProfile {
+    param([string]$Profile)
+
+    $normalized = if ([string]::IsNullOrWhiteSpace($Profile)) { "lumi" } else { $Profile.Trim() }
+    switch -Regex ($normalized.ToLowerInvariant()) {
+        "^(lumi|personal|private)$" {
+            return [pscustomobject]@{ Profile = "lumi"; ThemeId = "lumi"; Edition = "personal" }
+        }
+        "^(customer|delivery|yonghao|yonghao_tech)$" {
+            return [pscustomobject]@{ Profile = "customer"; ThemeId = "yonghao_tech"; Edition = "delivery" }
+        }
+        default {
+            return [pscustomobject]@{ Profile = $normalized; ThemeId = $normalized; Edition = "custom" }
+        }
+    }
 }
 
 function Remove-PythonCacheFiles {
@@ -404,12 +434,18 @@ if ([string]::IsNullOrWhiteSpace($PackageName)) {
 New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null
 
 $seedDir = Find-SeedPortableDir
+$brand = Resolve-BrandProfile -Profile $BrandProfile
+$brandThemeDir = Join-Path $LauncherDir "data\themes\$($brand.ThemeId)"
+if (-not (Test-Path -LiteralPath (Join-Path $brandThemeDir "theme.json"))) {
+    throw "Brand profile theme not found: $($brand.ThemeId) ($brandThemeDir)"
+}
 $packageDir = Join-Path $ReleaseDir $PackageName
 $zipPath = Join-Path $ReleaseDir "$PackageName.zip"
 $hashPath = Join-Path $ReleaseDir "$PackageName.zip.sha256.txt"
 
 Write-Host "Package name: $PackageName"
 Write-Host "Seed portable dir: $seedDir"
+Write-Host "Brand profile: $($brand.Profile) -> theme $($brand.ThemeId) [$($brand.Edition)]"
 
 Invoke-Step "Clean source workspace" {
     & powershell -ExecutionPolicy Bypass -File $CleanScript
@@ -485,7 +521,7 @@ Invoke-Step "Create portable directory" {
 
     Install-BundledBotPlugins -PackageDir $packageDir
 
-    Write-CleanRuntimeConfig -PackageDir $packageDir
+    Write-CleanRuntimeConfig -PackageDir $packageDir -ProfileName $brand.Profile -ThemeId $brand.ThemeId -Edition $brand.Edition
 
     $nodeVersion = Get-NodeVersion -PackageDir $packageDir
     $openclawVersion = Get-OpenClawVersion -PackageDir $packageDir

@@ -14,6 +14,7 @@ $requiredFiles = @(
     "_up_/python/bridge.py",
     "_up_/python-runtime/python.exe",
     "data/.openclaw/openclaw.json",
+    "data/brand_profile.json",
     "data/themes/default/theme.json",
     "data/themes/default/logo.png",
     "imgapi_config.json",
@@ -43,6 +44,7 @@ $contentScanSuffixes = @(
     "/README-离线包.txt",
     "/_up_/python/bridge.py",
     "/data/.openclaw/openclaw.json",
+    "/data/brand_profile.json",
     "/imgapi_config.json",
     "/video_config.json",
     "/package.json",
@@ -55,6 +57,7 @@ $emptyJsonConfigSuffixes = @(
 )
 
 $openClawRuntimeConfigSuffix = "/data/.openclaw/openclaw.json"
+$brandProfileSuffix = "/data/brand_profile.json"
 
 $sensitiveContentPattern = '(?i)\b(sk-[A-Za-z0-9_\-]{24,}|(?:OPENAI|DASHSCOPE|ANTHROPIC|GOOGLE|GITHUB|AZURE|COHERE)_API_KEY\s*[:=]\s*["'']?[A-Za-z0-9_\-]{16,})\b'
 
@@ -187,6 +190,22 @@ function Add-ContentFindings {
             $Errors.Add("OpenClaw runtime config is not valid JSON: $RelativePath")
         }
     }
+
+    if ($RelativePath.EndsWith($brandProfileSuffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        try {
+            $json = $Content | ConvertFrom-Json
+            $themeId = [string]$json.themeId
+            if ([string]::IsNullOrWhiteSpace($themeId)) {
+                $Errors.Add("Brand profile must include themeId: $RelativePath")
+            }
+            elseif ($themeId -match "[/\\:]|\.\.") {
+                $Errors.Add("Brand profile themeId is unsafe: $RelativePath")
+            }
+        }
+        catch {
+            $Errors.Add("Brand profile is not valid JSON: $RelativePath")
+        }
+    }
 }
 
 if (-not (Test-Path -LiteralPath $Path)) {
@@ -274,6 +293,49 @@ foreach ($entry in $allowedTopLevelEntries) {
 foreach ($required in $requiredFiles) {
     if (-not (Test-RequiredPath -AllPaths $payloadPaths -RequiredPath $required)) {
         $errors.Add("Required file missing: $required")
+    }
+}
+
+$brandProfileEntry = @($payloadPaths | Where-Object {
+    (Convert-ToPortablePath $_).EndsWith($brandProfileSuffix.TrimStart("/"), [System.StringComparison]::OrdinalIgnoreCase)
+} | Select-Object -First 1)
+if ($brandProfileEntry.Count -gt 0) {
+    $brandProfilePath = Convert-ToPortablePath $brandProfileEntry[0]
+    $themeId = $null
+    if ($item.PSIsContainer) {
+        $profileFile = Join-Path $item.FullName ($brandProfilePath -replace "/", "\")
+        try {
+            $themeId = [string]((Get-Content -LiteralPath $profileFile -Raw | ConvertFrom-Json).themeId)
+        } catch {
+            $themeId = $null
+        }
+    }
+    else {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($item.FullName)
+        try {
+            $entry = $zip.Entries | Where-Object {
+                (Convert-ToPortablePath $_.FullName) -eq $brandProfilePath
+            } | Select-Object -First 1
+            if ($entry) {
+                $reader = New-Object System.IO.StreamReader($entry.Open())
+                try {
+                    $themeId = [string](($reader.ReadToEnd() | ConvertFrom-Json).themeId)
+                }
+                finally {
+                    $reader.Dispose()
+                }
+            }
+        }
+        finally {
+            $zip.Dispose()
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($themeId)) {
+        $requiredTheme = "data/themes/$themeId/theme.json"
+        if (-not (Test-RequiredPath -AllPaths $payloadPaths -RequiredPath $requiredTheme)) {
+            $errors.Add("Brand profile theme missing: $requiredTheme")
+        }
     }
 }
 

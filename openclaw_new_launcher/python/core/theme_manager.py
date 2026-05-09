@@ -3,7 +3,8 @@
 Fallback chain:
 1. data/theme.json -- cached from activation response (highest priority)
 2. data/themes/{merchantId}/theme.json -- local theme package (offline fallback)
-3. DEFAULT_THEME -- built-in default (fallback)
+3. data/brand_profile.json -- packaged brand profile for unlicensed/default state
+4. DEFAULT_THEME -- built-in default (fallback)
 """
 
 from __future__ import annotations
@@ -15,62 +16,65 @@ from core.paths import AppPaths
 from core.storage import read_json, write_json
 
 DEFAULT_THEME: dict[str, Any] = {
-    "name": "永浩科技主题",
+    "name": "Lumi Obsidian Gold",
     "colors": {
-        "app_bg": "#F3F4F5",
-        "sidebar_bg": "#F9F9FA",
-        "surface": "#FFFFFF",
-        "surface_alt": "#F6F7F8",
+        "app_bg": "#05060A",
+        "sidebar_bg": "#070912",
+        "surface": "#090B12",
+        "surface_alt": "#0F1420",
         "surface_deep": "#1C202A",
         "surface_deeper": "#14171E",
-        "hover": "#EDEFF1",
-        "input": "#F6F7F8",
-        "border": "#DDDFE3",
-        "border_strong": "#C1C4CC",
-        "text": "#1E2A3A",
-        "text_muted": "#64748B",
-        "text_subtle": "#94A3B8",
-        "accent": "#1A56DB",
-        "accent_hover": "#1444AD",
-        "accent_soft": "#E4E8F0",
-        "accent_ink": "#0F327F",
-        "success": "#059669",
-        "warning": "#D97706",
-        "danger": "#DC2626",
-        "danger_hover": "#B91C1C",
-        "terminal_bg": "#0F172A",
-        "terminal_header": "#1E293B",
-        "terminal_text": "#34D399",
+        "hover": "#171B28",
+        "input": "#0B1020",
+        "border": "rgba(215, 181, 109, 0.22)",
+        "border_strong": "rgba(215, 181, 109, 0.58)",
+        "text": "#F7F1E3",
+        "text_muted": "#A9B2C3",
+        "text_subtle": "#69758B",
+        "accent": "#D7B56D",
+        "accent_hover": "#F1D99A",
+        "accent_soft": "rgba(215, 181, 109, 0.16)",
+        "accent_ink": "#2B1D05",
+        "success": "#38D996",
+        "warning": "#FFB454",
+        "danger": "#FF4D6D",
+        "danger_hover": "#FF6E86",
+        "terminal_bg": "#05070D",
+        "terminal_header": "#0D1320",
+        "terminal_text": "#37E6D0",
     },
     "fonts": {
         "display": ["Microsoft YaHei UI", 21, "bold"],
         "title": ["Microsoft YaHei UI", 14, "bold"],
         "section": ["Microsoft YaHei UI", 10, "bold"],
-        "body": ["Microsoft YaHei UI", 10],
-        "small": ["Microsoft YaHei UI", 9],
-        "mono": ["Consolas", 10],
+        "body": ["Microsoft YaHei UI", 10, "normal"],
+        "small": ["Microsoft YaHei UI", 9, "normal"],
+        "mono": ["Cascadia Mono", 10, "normal"],
     },
     "brand": {
-        "name": "永浩科技",
-        "subtitle": "智能AI服务平台",
-        "app_user_model_id": "YonghaoTech.Launcher",
-        "terminal_header": "Service Console",
+        "name": "Lumi",
+        "subtitle": "AI Creative Console",
+        "app_user_model_id": "Lumi.Launcher",
+        "terminal_header": "Lumi Console",
+        "logoUrl": "logo.png",
     },
     "navItems": [
-        {"key": "terminal", "label": "服务日志", "group": "工作台"},
-        {"key": "storyboard", "label": "广告视频", "group": "工作台", "accent": True},
-        {"key": "image", "label": "AI 生图", "group": "工作台", "accent": True},
-        {"key": "video", "label": "AI 视频", "group": "工作台", "accent": True},
-        {"key": "license", "label": "授权码", "group": "配置"},
-        {"key": "api", "label": "API 配置", "group": "配置"},
-        {"key": "feishu", "label": "飞书机器人", "group": "配置"},
-        {"key": "weixin", "label": "微信机器人", "group": "配置"},
-        {"key": "web", "label": "网页界面", "group": "维护"},
-        {"key": "update", "label": "检查更新", "group": "维护"},
-        {"key": "help", "label": "帮助文档", "group": "维护"},
+        {"key": "terminal", "label": "服务日志", "desc": "查看运行状态", "icon": "LOG", "group": "工作台"},
+        {"key": "storyboard", "label": "广告视频", "desc": "分镜/首尾帧/九宫格", "icon": "AD", "group": "工作台", "accent": True},
+        {"key": "image", "label": "AI 生图", "desc": "生成/编辑图片", "icon": "IMG", "group": "工作台", "accent": True},
+        {"key": "video", "label": "AI 视频", "desc": "多模型视频生成", "icon": "VID", "group": "工作台", "accent": True},
+        {"key": "license", "label": "授权码", "desc": "在线激活解锁", "icon": "LIC", "group": "配置"},
+        {"key": "api", "label": "API 配置", "desc": "设置模型密钥", "icon": "KEY", "group": "配置"},
+        {"key": "feishu", "label": "飞书机器人", "desc": "绑定消息通道", "icon": "BOT", "group": "配置"},
+        {"key": "weixin", "label": "微信机器人", "desc": "扫码绑定微信", "icon": "WX", "group": "配置"},
+        {"key": "skills", "label": "Skills", "desc": "安装/启用能力模块", "icon": "SK", "group": "扩展"},
+        {"key": "web", "label": "网页界面", "desc": "打开本地控制台", "icon": "WEB", "group": "维护"},
+        {"key": "diagnostics", "label": "环境诊断", "desc": "检查/修复启动环境", "icon": "FIX", "group": "维护", "accent": True},
+        {"key": "update", "label": "检查更新", "desc": "更新 OpenClaw", "icon": "UP", "group": "维护"},
+        {"key": "help", "label": "帮助文档", "desc": "查看使用说明", "icon": "DOC", "group": "维护"},
     ],
     "window": {
-        "title": "永浩科技 - 智能AI服务平台",
+        "title": "Lumi - AI Creative Console",
         "width": 1200,
         "height": 800,
     },
@@ -89,6 +93,9 @@ def _normalize_nav_items(items: Any) -> list[dict[str, Any]]:
         if key == "delivery" or key not in default_by_key:
             continue
         merged = dict(default_by_key[key])
+        for field in ("label", "desc", "icon", "group"):
+            if isinstance(item.get(field), str) and item[field].strip():
+                merged[field] = item[field]
         if "accent" in item:
             merged["accent"] = bool(item["accent"])
         normalized.append(merged)
@@ -120,6 +127,7 @@ def _resolve_brand_assets(brand: dict[str, Any], base_dir: str | None) -> None:
         if not os.path.exists(resolved):
             filename = os.path.basename(logo_value)
             fallback_candidates = [
+                os.path.join(base_dir, "themes", "lumi", filename),
                 os.path.join(base_dir, "themes", "default", filename),
                 os.path.join(base_dir, "themes", "yonghao_tech", filename),
             ]
@@ -138,6 +146,17 @@ def _normalize_mode_colors(theme: dict[str, Any], default_colors: dict[str, Any]
         if isinstance(raw_colors, dict):
             modes[mode] = {k: v for k, v in raw_colors.items() if k in default_colors}
     return modes
+
+
+def _safe_theme_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    theme_id = value.strip()
+    if not theme_id:
+        return None
+    if any(ch in theme_id for ch in ("/", "\\", ":", "..")):
+        return None
+    return theme_id
 
 
 def _validate_theme(theme: dict[str, Any], base_dir: str | None = None) -> dict[str, Any]:
@@ -192,6 +211,11 @@ class ThemeManager:
                 if theme is not None:
                     self._current_cache = theme
                     return theme
+
+        theme = self._load_from_brand_profile()
+        if theme is not None:
+            self._current_cache = theme
+            return theme
 
         theme = self._load_from_local_package("default")
         if theme is not None:
@@ -252,6 +276,15 @@ class ThemeManager:
                 theme_data["merchantId"] = merchant_id
             return _validate_theme(theme_data, os.path.dirname(theme_path))
         return None
+
+    def _load_from_brand_profile(self) -> dict[str, Any] | None:
+        profile = read_json(self.paths.brand_profile, None)
+        if not isinstance(profile, dict):
+            return None
+        theme_id = _safe_theme_id(profile.get("themeId") or profile.get("profile"))
+        if not theme_id:
+            return None
+        return self._load_from_local_package(theme_id)
 
     @staticmethod
     def _looks_like_theme(theme_data: Any) -> bool:

@@ -17,10 +17,15 @@ powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\clean-works
 powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\ci-check.ps1
 ```
 
+- 确认本次目标品牌 profile：
+  - `lumi`：Lumi 私人版 / 内部演示版。
+  - `customer`：客户交付版，默认使用 `yonghao_tech` 主题。
+  - 自定义 profile：必须存在 `openclaw_new_launcher/data/themes/<profile>/theme.json`。
+
 - 生成正式离线包：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\build-portable.ps1
+powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\build-portable.ps1 -BrandProfile customer
 ```
 
 - 不要把以下文件提交进仓库：
@@ -59,6 +64,8 @@ Get-FileHash -Algorithm SHA256 $zip.FullName
   - `_up_/python-runtime/python.exe`
   - `_up_/python/bridge.py`
   - `data/.openclaw/openclaw.json`
+  - `data/brand_profile.json`
+  - `data/themes/<brand_profile.themeId>/theme.json`
 
 ## 三、手动验收
 
@@ -69,6 +76,7 @@ Get-FileHash -Algorithm SHA256 $zip.FullName
 - 打开网页界面，应该能进入 OpenClaw 控制台，不再要求额外 token。
 - 配置 API 后重启应用，API 地址和密钥仍应保持。
 - AI 生图、AI 视频页面能读取配置并开始任务。
+- 核对应用内品牌、窗口标题、Logo 是否符合本次 `BrandProfile`。
 
 ## 四、交付记录
 
