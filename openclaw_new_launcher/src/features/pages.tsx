@@ -7,6 +7,7 @@ import { VideoPage } from '../components/video/VideoPage';
 import { StoryboardPage } from '../components/storyboard/StoryboardPage';
 import { DiagnosticsPage } from '../components/diagnostics/DiagnosticsPage';
 import { SkillsPage } from '../components/skills/SkillsPage';
+import { PhoneControlPage } from '../components/phone/PhoneControlPage';
 
 const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
   dashboard: DashboardPage,
@@ -17,6 +18,7 @@ const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
   storyboard: StoryboardPage,
   diagnostics: DiagnosticsPage,
   skills: SkillsPage,
+  phone: PhoneControlPage,
 };
 
 export function getFeaturePage(key: string): React.ComponentType {

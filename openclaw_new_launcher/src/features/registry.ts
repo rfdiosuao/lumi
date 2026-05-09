@@ -24,6 +24,7 @@ export const FEATURE_DEFINITIONS: FeatureDefinition[] = [
   { key: 'storyboard', label: '广告视频', desc: '分镜/首尾帧/九宫格', icon: 'AD', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
   { key: 'image', label: 'AI 生图', desc: '生成/编辑图片', icon: 'IMG', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
   { key: 'video', label: 'AI 视频', desc: '多模型视频生成', icon: 'VID', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
+  { key: 'phone', label: '手机控制', desc: '连接 APKClaw', icon: 'PH', group: '工作台', accent: true, action: { type: 'page' } },
   { key: 'license', label: '授权码', desc: '在线激活解锁', icon: 'LIC', group: '配置', action: { type: 'page' } },
   { key: 'api', label: 'API 配置', desc: '设置模型密钥', icon: 'KEY', group: '配置', action: { type: 'dialog', dialog: 'api' } },
   { key: 'feishu', label: '飞书机器人', desc: '绑定消息通道', icon: 'BOT', group: '配置', action: { type: 'dialog', dialog: 'feishu' } },
