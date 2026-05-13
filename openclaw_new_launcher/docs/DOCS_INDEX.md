@@ -1,54 +1,74 @@
-# Launcher Documentation Index
+# OpenClaw Launcher 文档索引
 
-This page is the recommended entry point for launcher documentation. Removed
-historical rewrite drafts and obsolete API snapshots should not be recreated as
-source-of-truth documents; prefer the current code and the docs listed here.
+> 更新日期：2026-05-13  
+> 用途：作为启动器、APKClaw、交付、发布和技术债文档的唯一入口。旧的 handoff 和历史测试记录可以保留，但不要再作为当前事实源。
 
-## Current Operational Docs
+## 当前必读
 
-| Document | Use for |
+| 文档 | 用途 |
 | --- | --- |
-| `PROJECT_STRUCTURE.md` | Canonical workspace, current directory map, and cleanup rules |
-| `BRIDGE_MIGRATION_GUARD.md` | Bridge smoke checks and FastAPI migration guardrails |
-| `SESSION_HANDOFF.md` | Current handoff notes for the next Codex/GPT session |
-| `task.md` | Current executable task list and remaining product gaps |
-| `RUNTIME_PATHS.md` | Windows and Mac runtime path rules |
-| `RELEASE_CHECKLIST.md` | Manual release verification |
-| `CUSTOMER_GUIDE.md` | Customer-facing quick guide |
-| `SUPPORT_TROUBLESHOOTING.md` | Support and troubleshooting |
-| `DELIVERY_ACCEPTANCE.md` | Delivery acceptance checklist |
-| `广告视频使用文档.md` | Customer-facing guide for the AI ad video workflow |
-| `MAC_BUILD_NOTES.md` | Mac build notes |
-| `MAC_MIGRATION_CHECKLIST.md` | Mac migration acceptance checklist |
+| `task.md` | 当前任务、技术债优先级和下一步执行顺序 |
+| `TECH_DEBT_LAUNCHER_AND_APKCLAW.md` | 启动器与 APKClaw 的统一技术债台账 |
+| `PROJECT_STRUCTURE.md` | 项目结构、目录职责和清理规则 |
+| `RELEASE_CHECKLIST.md` | 人工发包检查清单 |
+| `SUPPORT_TROUBLESHOOTING.md` | 售后排障说明 |
+| `CUSTOMER_GUIDE.md` | 客户使用说明 |
+| `DELIVERY_ACCEPTANCE.md` | 客户交付验收标准 |
 
-## Product And Extension Docs
+## 手机 Agent / APKClaw
 
-| Document | Use for |
+| 文档 | 用途 |
 | --- | --- |
-| `PRODUCT_ROADMAP.md` | Product planning and priorities |
-| `LUMI_AGENT_PLATFORM_ROADMAP.md` | Long-term Agent platform roadmap |
-| `APKCLAW_PHONE_CONTROL_ROADMAP.md` | Phone-side APKClaw integration, AI cursor, and multimodal control roadmap |
-| `PHONE_CONNECTOR_API_CONTRACT.md` | MVP API contract for Lumi to connect APKClaw |
-| `APKCLAW_LUMI_INTEGRATION_HANDOFF.md` | Handoff contract for implementing the APKClaw side of the Lumi phone connector |
-| `MODULE_EXTENSION_GUIDE.md` | Adding launcher modules and pages |
-| `UI_CUSTOMIZATION_DESIGN.md` | Brand and UI customization design |
-| `LUMI_PERSONAL_UI_DESIGN.md` | Personal Lumi edition UI direction and acceptance notes |
-| `MODULE_BOUNDARIES.md` | Module responsibility boundaries |
+| `PHONE_CONNECTOR_API_CONTRACT.md` | 当前 Lumi/OpenClaw 对接 APKClaw 的接口契约 |
+| `APKCLAW_LAUNCHER_SECURE_CHANNEL.md` | APKClaw launcher-only 安全通道设计 |
+| `APKCLAW_LUMI_INTEGRATION_HANDOFF.md` | APKClaw 长期集成历史和版本演进记录 |
+| `APKCLAW_PHONE_CONTROL_ROADMAP.md` | 手机控制、AI 指针、多模态控制路线 |
+| `OPENCLAW_APKCLAW_COMBINED_CAPABILITIES.md` | OpenClaw + APKClaw 的产品能力场景 |
+| `OPENCLAW_APKCLAW_FULL_TEST_2026-05-11.md` | 2026-05-11 全链路测试记录 |
+| `APKCLAW_STRESS_TEST_2026-05-11.md` | APKClaw 真机压测记录 |
+| `OPENCLAW_AGENT_DIRECTED_TEST_2026-05-11.md` | OpenClaw 指挥 APKClaw 的测试记录 |
+| `CLI_IMAGE_TO_PHONE.md` | PC 图片/AI 生图导入手机相册 CLI |
+| `PHONE_VIDEO_CAPTURE.md` | 手机录屏、停止和 MP4 拉回 PC |
 
-## Repo And CI Notes
+## OpenClaw 工作区
 
-| Document | Status |
+| 文档 | 用途 |
 | --- | --- |
-| `GITEE_SETUP.md` | Gitee setup notes |
-| `GIT_CICD_PLAN.md` | CI/CD planning notes |
+| `OPENCLAW_PORTABLE_WORKSPACE.md` | 便携包内 OpenClaw 工作区、skills、runtime context 说明 |
+| `BRIDGE_MIGRATION_GUARD.md` | Bridge/FastAPI 迁移保护和 smoke 检查 |
+| `RUNTIME_PATHS.md` | Windows/Mac runtime 路径规则 |
+| `MODULE_BOUNDARIES.md` | 模块职责边界 |
+| `MODULE_EXTENSION_GUIDE.md` | 新增启动器模块/页面的方法 |
 
-## Bridge Migration Rule
+## 产品和 UI
 
-For FastAPI migration work, start here:
+| 文档 | 用途 |
+| --- | --- |
+| `PRODUCT_ROADMAP.md` | 产品路线和阶段目标 |
+| `LUMI_AGENT_PLATFORM_ROADMAP.md` | 长期 Agent 平台路线 |
+| `LUMI_PERSONAL_UI_DESIGN.md` | Lumi 个人版 UI 方向 |
+| `UI_CUSTOMIZATION_DESIGN.md` | 品牌/主题定制设计 |
+| `广告视频使用文档.md` | 广告视频功能客户使用文档 |
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\smoke-bridge.ps1
-```
+## 发布和仓库
 
-Then read `BRIDGE_MIGRATION_GUARD.md`. Do not replace `python/bridge.py` until
-the smoke contract is passing and the migration has a clear rollback path.
+| 文档 | 用途 |
+| --- | --- |
+| `GIT_CICD_PLAN.md` | CI/CD 设计和实施计划 |
+| `GITEE_SETUP.md` | Gitee 同步和发布说明 |
+| `2026-05-10更新日志.md` | 2026-05-10 中文更新日志 |
+| `2026-05-11更新日志.md` | 2026-05-11 中文更新日志 |
+
+## 桌面 Agent / SightFlow
+
+| 文档 | 状态 |
+| --- | --- |
+| `SIGHTFLOW_DESKTOP_AGENT_INTEGRATION.md` | 本地已有设计和实验，暂不进入本批 GitHub 推送范围 |
+
+## 文档维护规则
+
+- `task.md` 只保留当前可执行任务，不再堆历史流水账。
+- `TECH_DEBT_LAUNCHER_AND_APKCLAW.md` 记录债务来源、风险和验收口径。
+- `APKCLAW_LUMI_INTEGRATION_HANDOFF.md` 保留历史版本细节，遇到冲突时以当前代码、`PHONE_CONNECTOR_API_CONTRACT.md` 和 `task.md` 为准。
+- 新增接口必须同步更新契约文档和验收脚本。
+- 新增发布流程必须同步更新 `RELEASE_CHECKLIST.md` 和 `task.md`。
