@@ -1,11 +1,18 @@
 {
   "name": "openclaw-new-launcher",
-  "version": "2.0.0",
+  "version": "2.0.6",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "verify:phone": "powershell -ExecutionPolicy Bypass -File scripts/verify-phone-agent.ps1",
+    "phone:image": "node scripts/openclaw-image-phone.mjs",
+    "phone:agent": "node scripts/openclaw-phone-agent.mjs",
+    "phone:video": "node scripts/openclaw-phone-video.mjs",
+    "phone:vision": "node scripts/openclaw-phone-vision.mjs",
+    "phone:game": "node scripts/openclaw-phone-game.mjs",
+    "openclaw:context": "node scripts/openclaw-context.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
