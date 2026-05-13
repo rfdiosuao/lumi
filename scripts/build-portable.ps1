@@ -1,8 +1,10 @@
 param(
-    [string]$Version = "2.0.1",
+    [string]$Version = "",
     [string]$PackageName = "",
     [string]$SeedPortableDir = "",
     [string]$BrandProfile = "lumi",
+    [string]$PhoneAgentVerifiedVersion = "",
+    [int]$PhoneAgentVerifiedVersionCode = 0,
     [switch]$SkipBuild,
     [switch]$NoZip
 )
@@ -15,6 +17,7 @@ $TauriDir = Join-Path $LauncherDir "src-tauri"
 $ReleaseDir = Join-Path $Root "release"
 $CleanScript = Join-Path $PSScriptRoot "clean-workspace.ps1"
 $VerifyScript = Join-Path $PSScriptRoot "verify-release.ps1"
+$SmokeVerifyScript = Join-Path $PSScriptRoot "verify-portable-smoke.ps1"
 $VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
 
 function Invoke-Step {
@@ -37,6 +40,26 @@ function Get-ResolvedPathOrNull {
     }
 
     return (Resolve-Path -LiteralPath $Path).Path
+}
+
+function Get-LauncherVersion {
+    $packageJsonPath = Join-Path $LauncherDir "package.json"
+    if (Test-Path -LiteralPath $packageJsonPath) {
+        $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace([string]$packageJson.version)) {
+            return [string]$packageJson.version
+        }
+    }
+
+    $tauriConfigPath = Join-Path $TauriDir "tauri.conf.json"
+    if (Test-Path -LiteralPath $tauriConfigPath) {
+        $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace([string]$tauriConfig.version)) {
+            return [string]$tauriConfig.version
+        }
+    }
+
+    throw "Unable to determine launcher version from package.json or tauri.conf.json."
 }
 
 function Assert-InWorkspace {
@@ -170,6 +193,13 @@ function Find-SeedPortableDir {
 }
 
 function Find-TauriExe {
+    if ($SkipBuild -and -not [string]::IsNullOrWhiteSpace($seedDir)) {
+        $seedExe = Join-Path $seedDir "OpenClaw.exe"
+        if (Test-Path -LiteralPath $seedExe) {
+            return $seedExe
+        }
+    }
+
     $candidatePaths = @(
         (Join-Path $TauriDir "target\release\app.exe"),
         (Join-Path $TauriDir "target\release\OpenClaw.exe")
@@ -197,6 +227,57 @@ function Find-TauriExe {
     return $exe.FullName
 }
 
+function Get-PhoneAgentVersionCodeFromVersion {
+    param([string]$VersionName)
+
+    if ($VersionName -match "^(\d+)\.(\d+)$") {
+        $major = [int]$Matches[1]
+        $minor = [int]$Matches[2]
+        if ($major -eq 6) {
+            return 600 + ($minor * 10)
+        }
+    }
+
+    return 0
+}
+
+function Resolve-PhoneAgentVersionInfo {
+    $resolvedVersion = $PhoneAgentVerifiedVersion.Trim()
+    $resolvedCode = $PhoneAgentVerifiedVersionCode
+    $latestApk = Join-Path $LauncherDir "AgentPhone_latest.apk"
+
+    if ([string]::IsNullOrWhiteSpace($resolvedVersion) -and (Test-Path -LiteralPath $latestApk)) {
+        $latestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $latestApk).Hash
+        $matchingVersionedApk = Get-ChildItem -LiteralPath $LauncherDir -File -Filter "AgentPhone_v*.apk" -ErrorAction SilentlyContinue |
+            Where-Object { (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash -eq $latestHash } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+        if ($matchingVersionedApk -and $matchingVersionedApk.Name -match "AgentPhone_v(?<version>\d+\.\d+)_") {
+            $resolvedVersion = $Matches["version"]
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($resolvedVersion)) {
+        Write-Warning "Unable to infer phone agent verified version. Pass -PhoneAgentVerifiedVersion during release packaging."
+        $resolvedVersion = "unknown"
+    }
+
+    if ($resolvedCode -le 0 -and $resolvedVersion -ne "unknown") {
+        $resolvedCode = Get-PhoneAgentVersionCodeFromVersion -VersionName $resolvedVersion
+    }
+
+    if ($resolvedCode -le 0) {
+        Write-Warning "Unable to infer phone agent verified versionCode. Pass -PhoneAgentVerifiedVersionCode during release packaging."
+        $resolvedCode = $null
+    }
+
+    return [pscustomobject]@{
+        Version = $resolvedVersion
+        VersionCode = $resolvedCode
+    }
+}
+
 function Write-CleanRuntimeConfig {
     param(
         [string]$PackageDir,
@@ -208,9 +289,11 @@ function Write-CleanRuntimeConfig {
     $dataDir = Join-Path $PackageDir "data"
     $stateDir = Join-Path $dataDir ".openclaw"
     $agentDir = Join-Path $stateDir "agents\main\agent"
+    $workspaceDir = Join-Path $stateDir "workspace"
     $storyboardAssets = Join-Path $dataDir "storyboards\assets"
 
     New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $workspaceDir -Force | Out-Null
     New-Item -ItemType Directory -Path $storyboardAssets -Force | Out-Null
 
     $openclawConfig = [ordered]@{
@@ -219,6 +302,13 @@ function Write-CleanRuntimeConfig {
                 mode = "none"
             }
             bind = "loopback"
+        }
+        agents = [ordered]@{
+            defaults = [ordered]@{
+                workspace = "data/.openclaw/workspace"
+                contextInjection = "always"
+                bootstrapPromptTruncationWarning = "once"
+            }
         }
     }
     $openclawConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $stateDir "openclaw.json") -Encoding UTF8
@@ -230,8 +320,88 @@ function Write-CleanRuntimeConfig {
     }
     $brandProfile | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $dataDir "brand_profile.json") -Encoding UTF8
 
+    $launcherRuntime = [ordered]@{
+        name = "OpenClaw Portable Launcher"
+        version = $Version
+        packageName = $PackageName
+    }
+    $launcherRuntime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $dataDir "launcher_runtime.json") -Encoding UTF8
+
     "{}" | Set-Content -LiteralPath (Join-Path $PackageDir "imgapi_config.json") -Encoding UTF8
     "{}" | Set-Content -LiteralPath (Join-Path $PackageDir "video_config.json") -Encoding UTF8
+
+    $phoneAgentVersionInfo = Resolve-PhoneAgentVersionInfo
+
+    $runtimeContext = [ordered]@{
+        schema = "openclaw.launcher.runtime-context.v1"
+        updatedAt = $null
+        launcher = [ordered]@{
+            name = "OpenClaw Portable Launcher"
+            version = $Version
+            mode = "usb-portable"
+            root = "."
+        }
+        workspace = [ordered]@{
+            path = "data/.openclaw/workspace"
+            bootstrapFiles = @("AGENTS.md", "SOUL.md", "TOOLS.md", "CAPABILITIES.md")
+            skillsPath = "data/.openclaw/workspace/skills"
+        }
+        paths = [ordered]@{
+            generatedImages = "data/generated-images"
+            phoneVideos = "data/phone-videos"
+            scripts = "scripts"
+            imageToPhoneCli = "scripts/openclaw-image-phone.mjs"
+            phoneAgentCli = "scripts/openclaw-phone-agent.mjs"
+            phoneVideoCli = "scripts/openclaw-phone-video.mjs"
+            phoneVisionCli = "scripts/openclaw-phone-vision.mjs"
+            phoneGameCli = "scripts/openclaw-phone-game.mjs"
+            phoneVerifier = "scripts/verify-phone-agent.ps1"
+        }
+        capabilities = [ordered]@{
+            imageGeneration = [ordered]@{
+                available = $true
+                localOutputDir = "data/generated-images"
+                cli = "npm run phone:image"
+            }
+            phoneAgent = [ordered]@{
+                available = $true
+                controlPolicy = "wrapper-only"
+                agentCli = "npm run phone:agent"
+                imageCli = "npm run phone:image"
+                visionCli = "npm run phone:vision"
+                videoDownloadDir = "data/phone-videos"
+                videoCli = "npm run phone:video"
+                gameModeCli = "npm run phone:game"
+                defaultAlbum = "OpenClaw"
+                galleryPath = "Pictures/OpenClaw"
+                verifiedVersion = $phoneAgentVersionInfo.Version
+                verifiedVersionCode = $phoneAgentVersionInfo.VersionCode
+                maxRoundsPerTask = 60
+                tokenSource = "data/.openclaw/launcher/phone-agent.json"
+                tokenPolicy = "never expose token; use launcher CLI helpers only"
+            }
+            portableRuntime = [ordered]@{
+                available = $true
+                preferRelativePaths = $true
+            }
+        }
+        phone = [ordered]@{
+            configured = $false
+            connected = $false
+            endpoint = "launcher-cli-wrapper"
+            baseUrl = $null
+            tokenAvailable = $false
+            configPath = "data/.openclaw/launcher/phone-agent.json"
+            lastStatus = $null
+        }
+        policies = [ordered]@{
+            autoSendGeneratedImagesToPhone = "enabled_when_phone_configured"
+            autoUploadPersonalFiles = $false
+            screenRecordingRequiresExplicitIntent = $true
+            neverExposeSecrets = $true
+        }
+    }
+    $runtimeContext | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $workspaceDir "runtime-context.json") -Encoding UTF8
 }
 
 function Resolve-BrandProfile {
@@ -247,6 +417,37 @@ function Resolve-BrandProfile {
         }
         default {
             return [pscustomobject]@{ Profile = $normalized; ThemeId = $normalized; Edition = "custom" }
+        }
+    }
+}
+
+function Copy-ThemeBundle {
+    param(
+        [string]$PackageDir,
+        [string]$ThemeId
+    )
+
+    $themeRoot = Join-Path $LauncherDir "data\themes"
+    $normalizedThemeId = if ([string]::IsNullOrWhiteSpace($ThemeId)) { "default" } else { $ThemeId.Trim() }
+    $themeIds = New-Object System.Collections.Generic.List[string]
+    $themeIds.Add("default")
+    if ($normalizedThemeId -ne "default") {
+        $themeIds.Add($normalizedThemeId)
+    }
+
+    $destinations = @(
+        (Join-Path $PackageDir "data\themes"),
+        (Join-Path $PackageDir "_up_\data\themes")
+    )
+
+    foreach ($destinationRoot in $destinations) {
+        New-Item -ItemType Directory -Path $destinationRoot -Force | Out-Null
+        foreach ($themeId in $themeIds) {
+            $sourceTheme = Join-Path $themeRoot $themeId
+            if (-not (Test-Path -LiteralPath $sourceTheme)) {
+                throw "Theme not found: $sourceTheme"
+            }
+            Copy-Directory -Source $sourceTheme -Destination (Join-Path $destinationRoot $themeId)
         }
     }
 }
@@ -285,6 +486,44 @@ function Install-PythonBridgeDependencies {
     }
 }
 
+function Copy-PhoneAgentApks {
+    param([string]$PackageDir)
+
+    $latestApk = Join-Path $LauncherDir "AgentPhone_latest.apk"
+    if (-not (Test-Path -LiteralPath $latestApk)) {
+        Write-Warning "AgentPhone_latest.apk not found; portable package will not include phone agent APK."
+        return
+    }
+
+    $targetDir = Join-Path $PackageDir "releases\agent-phone"
+    Remove-SafePath $targetDir
+    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+
+    Copy-Item -LiteralPath $latestApk -Destination (Join-Path $targetDir "AgentPhone_latest.apk") -Force
+
+    $latestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $latestApk).Hash
+    Get-ChildItem -LiteralPath $LauncherDir -File -Filter "AgentPhone_v*.apk" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $candidateHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash
+            if ($candidateHash -eq $latestHash) {
+                Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $targetDir $_.Name) -Force
+            }
+        }
+}
+
+function Copy-WebView2Redist {
+    param([string]$PackageDir)
+
+    $source = Join-Path $LauncherDir "redist\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "WebView2 offline installer is missing: $source. Run scripts\download-webview2-runtime.ps1 before packaging."
+    }
+
+    $targetDir = Join-Path $PackageDir "redist"
+    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+    Copy-Item -LiteralPath $source -Destination (Join-Path $targetDir "MicrosoftEdgeWebView2RuntimeInstallerX64.exe") -Force
+}
+
 function Expand-PortablePayloadForBuild {
     param([string]$PackageDir)
 
@@ -301,6 +540,22 @@ function Expand-PortablePayloadForBuild {
             Move-Item -LiteralPath $_.FullName -Destination $PackageDir -Force
         }
     Remove-SafePath $payloadDir
+}
+
+function Remove-LegacyNestedLaunchers {
+    param([string]$PackageDir)
+
+    Get-ChildItem -LiteralPath $PackageDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -notin @("data", "_up_", "node", "node_modules", "scripts", "releases") -and
+            (Test-Path -LiteralPath (Join-Path $_.FullName "app.exe")) -and
+            (Test-Path -LiteralPath (Join-Path $_.FullName "data")) -and
+            (Test-Path -LiteralPath (Join-Path $_.FullName "_up_"))
+        } |
+        ForEach-Object {
+            Write-Host "Removing legacy nested launcher payload: $($_.FullName)" -ForegroundColor Yellow
+            Remove-SafePath $_.FullName
+        }
 }
 
 function Move-PortablePayload {
@@ -331,6 +586,7 @@ OpenClaw offline portable package
 2. Run OpenClaw.exe.
 3. Activate with a valid license code on first use.
 4. Configure API settings in the launcher before using image/video features.
+5. Install the bundled phone agent from OpenClawFiles\releases\agent-phone\AgentPhone_latest.apk when phone control is needed.
 
 Bundled Node.js: $NodeVersion
 Bundled OpenClaw: $OpenClawVersion
@@ -426,6 +682,10 @@ function Install-BundledBotPlugins {
     }
 }
 
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = Get-LauncherVersion
+}
+
 if ([string]::IsNullOrWhiteSpace($PackageName)) {
     $date = Get-Date -Format "yyyy.MM.dd"
     $PackageName = "OpenClaw-Portable-v$Version-$date"
@@ -493,6 +753,7 @@ Invoke-Step "Create portable directory" {
 
     Copy-Directory -Source $seedDir -Destination $packageDir
     Expand-PortablePayloadForBuild -PackageDir $packageDir
+    Remove-LegacyNestedLaunchers -PackageDir $packageDir
     Copy-Item -LiteralPath $tauriExe -Destination (Join-Path $packageDir "OpenClaw.exe") -Force
 
     Remove-SafePath (Join-Path $packageDir "data")
@@ -507,17 +768,18 @@ Invoke-Step "Create portable directory" {
 
     Install-PythonBridgeDependencies -PackageDir $packageDir
 
-    Copy-Directory `
-        -Source (Join-Path $LauncherDir "data\themes") `
-        -Destination (Join-Path $packageDir "data\themes")
+    Copy-ThemeBundle -PackageDir $packageDir -ThemeId $brand.ThemeId
 
     Copy-Directory `
-        -Source (Join-Path $LauncherDir "data\themes") `
-        -Destination (Join-Path $packageDir "_up_\data\themes")
+        -Source (Join-Path $LauncherDir "openclaw-workspace") `
+        -Destination (Join-Path $packageDir "data\.openclaw\workspace")
 
     Copy-Directory `
         -Source (Join-Path $LauncherDir "scripts") `
         -Destination (Join-Path $packageDir "scripts")
+
+    Copy-PhoneAgentApks -PackageDir $packageDir
+    Copy-WebView2Redist -PackageDir $packageDir
 
     Install-BundledBotPlugins -PackageDir $packageDir
 
@@ -537,6 +799,10 @@ Invoke-Step "Create portable directory" {
 
 Invoke-Step "Verify portable directory" {
     & powershell -ExecutionPolicy Bypass -File $VerifyScript -Path $packageDir
+}
+
+Invoke-Step "Smoke verify portable runtime" {
+    & powershell -ExecutionPolicy Bypass -File $SmokeVerifyScript -Path $packageDir
 }
 
 if (-not $NoZip) {

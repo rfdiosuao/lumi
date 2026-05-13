@@ -11,12 +11,31 @@ $requiredFiles = @(
     "node_modules/openclaw/openclaw.mjs",
     "start.js",
     "scripts/bot-plugin-helper.mjs",
+    "scripts/openclaw-context.mjs",
+    "scripts/openclaw-image-phone.mjs",
+    "scripts/openclaw-phone-agent.mjs",
+    "scripts/openclaw-phone-game.mjs",
+    "scripts/openclaw-phone-secure.mjs",
+    "scripts/openclaw-phone-video.mjs",
+    "scripts/openclaw-phone-vision.mjs",
+    "scripts/verify-phone-agent.ps1",
     "_up_/python/bridge.py",
     "_up_/python-runtime/python.exe",
     "data/.openclaw/openclaw.json",
+    "data/.openclaw/workspace/AGENTS.md",
+    "data/.openclaw/workspace/SOUL.md",
+    "data/.openclaw/workspace/TOOLS.md",
+    "data/.openclaw/workspace/CAPABILITIES.md",
+    "data/.openclaw/workspace/runtime-context.json",
+    "data/.openclaw/workspace/skills/openclaw-image-to-phone/SKILL.md",
+    "data/.openclaw/workspace/skills/openclaw-phone-agent/SKILL.md",
+    "data/.openclaw/workspace/skills/openclaw-portable-runtime/SKILL.md",
     "data/brand_profile.json",
+    "data/launcher_runtime.json",
     "data/themes/default/theme.json",
     "data/themes/default/logo.png",
+    "releases/agent-phone/AgentPhone_latest.apk",
+    "redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
     "imgapi_config.json",
     "video_config.json",
     "node_modules/@larksuite/openclaw-lark/package.json",
@@ -31,7 +50,9 @@ $allowedTopLevelEntries = @(
 $forbiddenPatterns = @(
     "(?i)(^|/)data/license\.json$",
     "(?i)(^|/)data/install_id\.txt$",
+    "(?i)(^|/)data/\.openclaw/launcher/phone-agent\.json$",
     "(?i)(^|/)data/theme\.json$",
+    "(?i)(^|/)OpenClawFiles/(Lumi|YongHao|yonghao_tech)(/|$)",
     "(?i)(^|/)__pycache__(/|$)",
     "(?i)\.pyc$",
     "(?i)(^|/)\.npm-cache-update(/|$)",
@@ -44,7 +65,13 @@ $contentScanSuffixes = @(
     "/README-离线包.txt",
     "/_up_/python/bridge.py",
     "/data/.openclaw/openclaw.json",
+    "/data/.openclaw/workspace/AGENTS.md",
+    "/data/.openclaw/workspace/SOUL.md",
+    "/data/.openclaw/workspace/TOOLS.md",
+    "/data/.openclaw/workspace/CAPABILITIES.md",
+    "/data/.openclaw/workspace/runtime-context.json",
     "/data/brand_profile.json",
+    "/data/launcher_runtime.json",
     "/imgapi_config.json",
     "/video_config.json",
     "/package.json",
@@ -57,6 +84,7 @@ $emptyJsonConfigSuffixes = @(
 )
 
 $openClawRuntimeConfigSuffix = "/data/.openclaw/openclaw.json"
+$openClawRuntimeContextSuffix = "/data/.openclaw/workspace/runtime-context.json"
 $brandProfileSuffix = "/data/brand_profile.json"
 
 $sensitiveContentPattern = '(?i)\b(sk-[A-Za-z0-9_\-]{24,}|(?:OPENAI|DASHSCOPE|ANTHROPIC|GOOGLE|GITHUB|AZURE|COHERE)_API_KEY\s*[:=]\s*["'']?[A-Za-z0-9_\-]{16,})\b'
@@ -185,9 +213,67 @@ function Add-ContentFindings {
             if ($bind -ne "loopback") {
                 $Errors.Add("OpenClaw gateway bind must be loopback for local delivery: $RelativePath")
             }
+            $workspace = [string]$json.agents.defaults.workspace
+            if ($workspace -ne "data/.openclaw/workspace") {
+                $Errors.Add("OpenClaw agent workspace must point to portable workspace: $RelativePath")
+            }
         }
         catch {
             $Errors.Add("OpenClaw runtime config is not valid JSON: $RelativePath")
+        }
+    }
+
+    if ($RelativePath.EndsWith($openClawRuntimeContextSuffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        try {
+            $json = $Content | ConvertFrom-Json
+            $schema = [string]$json.schema
+            $workspacePath = [string]$json.workspace.path
+            $token = [string]$json.phone.token
+
+            if ($schema -ne "openclaw.launcher.runtime-context.v1") {
+                $Errors.Add("Runtime context schema is invalid: $RelativePath")
+            }
+            if ($workspacePath -ne "data/.openclaw/workspace") {
+                $Errors.Add("Runtime context workspace path must be portable-relative: $RelativePath")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($token)) {
+                $Errors.Add("Runtime context must not contain phone token: $RelativePath")
+            }
+            $baseUrl = [string]$json.phone.baseUrl
+            $endpoint = [string]$json.phone.endpoint
+            $phoneConfigured = [bool]$json.phone.configured
+            $tokenAvailable = [bool]$json.phone.tokenAvailable
+            if (-not [string]::IsNullOrWhiteSpace($baseUrl) -or $phoneConfigured -or $tokenAvailable) {
+                $Errors.Add("Runtime context must not contain preconfigured phone connection: $RelativePath")
+            }
+            if ($endpoint -ne "launcher-cli-wrapper") {
+                $Errors.Add("Runtime context phone.endpoint must be launcher-cli-wrapper: $RelativePath")
+            }
+            $phoneAgent = $json.capabilities.phoneAgent
+            $controlPolicy = [string]$phoneAgent.controlPolicy
+            $agentCli = [string]$phoneAgent.agentCli
+            $verifiedVersion = [string]$phoneAgent.verifiedVersion
+            $verifiedVersionCode = [int]$phoneAgent.verifiedVersionCode
+            if ($controlPolicy -ne "wrapper-only") {
+                $Errors.Add("Runtime context phoneAgent.controlPolicy must be wrapper-only: $RelativePath")
+            }
+            if ($agentCli -ne "npm run phone:agent") {
+                $Errors.Add("Runtime context phoneAgent.agentCli must be npm run phone:agent: $RelativePath")
+            }
+            foreach ($forbiddenProperty in @("preferredTaskApi", "legacyTaskApi", "galleryImportEndpoint", "visionActionEndpoint", "visionFrameEndpoint")) {
+                if ($phoneAgent.PSObject.Properties.Name -contains $forbiddenProperty) {
+                    $Errors.Add("Runtime context must not expose raw phone endpoint $($forbiddenProperty): $RelativePath")
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($verifiedVersion) -or $verifiedVersion -eq "unknown") {
+                $Errors.Add("Runtime context phoneAgent.verifiedVersion must be set: $RelativePath")
+            }
+            if ($verifiedVersionCode -le 0) {
+                $Errors.Add("Runtime context phoneAgent.verifiedVersionCode must be greater than zero: $RelativePath")
+            }
+        }
+        catch {
+            $Errors.Add("Runtime context is not valid JSON: $RelativePath")
         }
     }
 
