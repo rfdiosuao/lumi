@@ -60,7 +60,17 @@ def register_diagnostics_routes(app, ctx) -> None:
             archive.writestr("diagnostics.json", json.dumps(diagnostics, ensure_ascii=False, indent=2))
             archive.writestr("system.json", json.dumps(system_info, ensure_ascii=False, indent=2))
             archive.writestr("service.log", service_log)
+            persisted_log = os.path.join(ctx.paths.data_dir, "logs", "bridge-service.log")
+            startup_snapshot = os.path.join(ctx.paths.data_dir, "logs", "openclaw-startup-snapshot.json")
+            if os.path.exists(persisted_log):
+                with open(persisted_log, "r", encoding="utf-8", errors="replace") as file:
+                    archive.writestr("logs/bridge-service.log", ctx.sanitize_text(file.read()))
+            if os.path.exists(startup_snapshot):
+                archive.writestr("logs/openclaw-startup-snapshot.json", json.dumps(ctx.read_sanitized_json(startup_snapshot, {}), ensure_ascii=False, indent=2))
             archive.writestr("configs/openclaw.json", json.dumps(ctx.read_sanitized_json(ctx.paths.openclaw_config, {}), ensure_ascii=False, indent=2))
+            archive.writestr("configs/runtime-context.json", json.dumps(ctx.read_sanitized_json(os.path.join(ctx.paths.openclaw_workspace, "runtime-context.json"), {}), ensure_ascii=False, indent=2))
+            archive.writestr("configs/launcher-runtime.json", json.dumps(ctx.read_sanitized_json(os.path.join(ctx.paths.data_dir, "launcher_runtime.json"), {}), ensure_ascii=False, indent=2))
+            archive.writestr("configs/brand-profile.json", json.dumps(ctx.read_sanitized_json(ctx.paths.brand_profile, {}), ensure_ascii=False, indent=2))
             archive.writestr("configs/auth-profiles.json", json.dumps(ctx.read_sanitized_json(ctx.paths.auth_profiles, {}), ensure_ascii=False, indent=2))
             archive.writestr("configs/imgapi_config.json", json.dumps(ctx.read_sanitized_json(ctx.paths.image_config, {}), ensure_ascii=False, indent=2))
             archive.writestr("configs/video_config.json", json.dumps(ctx.read_sanitized_json(ctx.paths.video_config, {}), ensure_ascii=False, indent=2))

@@ -11,10 +11,7 @@ def register_process_routes(app, ctx) -> None:
         if error := ctx.auth_error(request):
             return error
         svc = ctx.get_process_svc()
-        return ctx.fastapi_json({
-            "running": svc.running,
-            "pid": svc.process.pid if svc.process and svc.process.poll() is None else None,
-        })
+        return ctx.fastapi_json(svc.status())
 
     @app.post("/api/process/start")
     async def process_start(request: Request):
@@ -24,14 +21,17 @@ def register_process_routes(app, ctx) -> None:
             return error
 
         svc = ctx.get_process_svc()
-        if svc.running:
-            return ctx.fastapi_json({"status": "already_running"})
+        if svc.running or getattr(svc, "startup_state", "") == "starting":
+            status = svc.status()
+            status["status"] = "already_running" if status.get("running") else "starting"
+            return ctx.fastapi_json(status)
 
         def on_exit(code: int | None) -> None:
             ctx.append_log(f"\n[OpenClaw] Process ended (exit: {code})\n")
 
-        svc.start(on_exit=on_exit)
-        return ctx.fastapi_json({"status": "started", "pid": svc.process.pid if svc.process else None})
+        status = svc.start_background(on_exit=on_exit)
+        status["status"] = "starting"
+        return ctx.fastapi_json(status)
 
     @app.post("/api/process/stop")
     async def process_stop(request: Request):

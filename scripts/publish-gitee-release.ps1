@@ -30,11 +30,8 @@ if ([string]::IsNullOrWhiteSpace($Name)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($Body)) {
-    $Body = @"
-OpenClaw Launcher release $TagName
-
-Build commit: $(git rev-parse --short HEAD)
-"@
+    $template = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("T3BlbkNsYXcg5ZCv5Yqo5Zmo5Y+R5biDIHswfQoK5p6E5bu65o+Q5Lqk77yaezF9Cgrmm7TmlrDlhoXlrrnvvJoKLSDor7flnKjlj5HluIPliY3ooaXlhYXmnKzmrKHpnaLlkJHnlKjmiLfnmoTkuK3mlofmm7TmlrDor7TmmI7jgIIKCuagoemqjOivtOaYju+8mgotIOWPkeW4g+mZhOS7tuW6lOWMheWQq+WuieijheWMheOAgeS+v+aQuuWMheWSjCBTSEEyNTYg5qCh6aqM5paH5Lu244CC"))
+    $Body = $template -f $TagName, (git rev-parse --short HEAD)
 }
 
 function Invoke-GiteeApi {

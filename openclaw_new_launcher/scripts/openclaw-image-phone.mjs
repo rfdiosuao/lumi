@@ -21,11 +21,15 @@ OpenClaw image-to-phone CLI
 
 Usage:
   npm run phone:image -- --prompt "a clean product icon..."
+  npm run phone:image -- --mode edit --reference-image ./input.png --prompt "make it cyberpunk"
   npm run phone:image -- --image ./output.png
 
 Options:
   -p, --prompt <text>          Prompt for AI image generation
   -i, --image <path>           Upload an existing local image instead of generating
+  --mode <generate|edit>       Image mode. Default: generate
+  --reference-image <path>     Input image for image-to-image editing
+  --mask <path>                Optional mask image for image editing APIs
   --image-base-url <url>       Image API base URL. Env: OPENCLAW_IMAGE_BASE_URL
   --image-api-key <key>        Image API key. Env: OPENCLAW_IMAGE_API_KEY or OPENAI_API_KEY
   --image-model <model>        Image model. Default/env: OPENCLAW_IMAGE_MODEL or ${DEFAULT_IMAGE_MODEL}
@@ -49,6 +53,9 @@ function parseArgs(argv) {
   const args = {
     prompt: '',
     image: '',
+    mode: 'generate',
+    referenceImage: '',
+    mask: '',
     imageBaseUrl: '',
     imageApiKey: '',
     imageModel: '',
@@ -87,6 +94,17 @@ function parseArgs(argv) {
       case '-i':
       case '--image':
         args.image = next();
+        break;
+      case '--mode':
+        args.mode = next().toLowerCase();
+        break;
+      case '--reference-image':
+      case '--input-image':
+      case '--edit-image':
+        args.referenceImage = next();
+        break;
+      case '--mask':
+        args.mask = next();
         break;
       case '--image-base-url':
         args.imageBaseUrl = next();
@@ -135,6 +153,13 @@ function parseArgs(argv) {
 
   if (!Number.isFinite(args.count) || args.count < 1) args.count = 1;
   args.count = Math.min(MAX_COUNT, Math.floor(args.count));
+  if (!['generate', 'edit'].includes(args.mode)) {
+    throw new Error(`Invalid --mode: ${args.mode}. Use generate or edit.`);
+  }
+  if (args.referenceImage && args.image) {
+    throw new Error('Use either --image for direct upload or --reference-image for image editing, not both.');
+  }
+  if (args.referenceImage) args.mode = 'edit';
   return args;
 }
 
@@ -183,6 +208,11 @@ function imageGenerationEndpoint(baseUrl) {
   return clean.endsWith('/v1') ? `${clean}/images/generations` : `${clean}/v1/images/generations`;
 }
 
+function imageEditEndpoint(baseUrl) {
+  const clean = baseUrl.replace(/\/+$/, '');
+  return clean.endsWith('/v1') ? `${clean}/images/edits` : `${clean}/v1/images/edits`;
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -229,6 +259,55 @@ async function generateImages(config) {
   return buffers.slice(0, config.count);
 }
 
+async function editImages(config) {
+  if (!config.imageBaseUrl) throw new Error('Missing image API base URL. Use --image-base-url or OPENCLAW_IMAGE_BASE_URL.');
+  if (!config.prompt.trim()) throw new Error('Missing edit prompt. Use --prompt.');
+  if (!config.referenceImage) throw new Error('Missing reference image. Use --reference-image <path>.');
+
+  const referencePath = path.resolve(config.referenceImage);
+  const body = new FormData();
+  body.append('model', config.imageModel || DEFAULT_IMAGE_MODEL);
+  body.append('prompt', config.prompt);
+  body.append('n', String(config.count));
+  body.append('size', config.size || DEFAULT_SIZE);
+  body.append('image', await fileBlob(referencePath), path.basename(referencePath));
+
+  if (config.mask) {
+    const maskPath = path.resolve(config.mask);
+    body.append('mask', await fileBlob(maskPath), path.basename(maskPath));
+  }
+
+  const response = await fetchWithTimeout(imageEditEndpoint(config.imageBaseUrl), {
+    method: 'POST',
+    headers: {
+      ...(config.imageApiKey ? { Authorization: `Bearer ${config.imageApiKey}` } : {}),
+    },
+    body,
+  });
+
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`Image edit API returned non-JSON response: HTTP ${response.status}`);
+  }
+
+  if (!response.ok) {
+    const message = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
+    throw new Error(`Image edit failed: ${message}`);
+  }
+
+  const buffers = await extractImageBuffers(payload);
+  if (!buffers.length) throw new Error('Image edit API returned no image data.');
+  return buffers.slice(0, config.count);
+}
+
+async function fileBlob(filePath) {
+  const data = await fs.readFile(filePath);
+  return new Blob([data], { type: mimeForPath(filePath) });
+}
+
 async function extractImageBuffers(payload) {
   const items = Array.isArray(payload?.data)
     ? payload.data
@@ -259,10 +338,11 @@ function stripDataUrlPrefix(value) {
 async function saveGeneratedImages(buffers, config) {
   await fs.mkdir(config.outDir, { recursive: true });
   const saved = [];
+  const prefix = config.mode === 'edit' ? 'openclaw-image-edit' : 'openclaw-image';
   for (let i = 0; i < buffers.length; i += 1) {
     const filename = buffers.length === 1
-      ? `openclaw-image-${timestamp()}.png`
-      : `openclaw-image-${timestamp()}-${i + 1}.png`;
+      ? `${prefix}-${timestamp()}.png`
+      : `${prefix}-${timestamp()}-${i + 1}.png`;
     const filePath = path.join(config.outDir, filename);
     await fs.writeFile(filePath, buffers[i]);
     saved.push(filePath);
@@ -310,6 +390,12 @@ async function main() {
 
   if (config.image) {
     localImages.push(path.resolve(config.image));
+  } else if (config.mode === 'edit') {
+    log(config, `Editing ${config.count} image(s) with ${config.imageModel || DEFAULT_IMAGE_MODEL}...`);
+    const buffers = await editImages(config);
+    const saved = await saveGeneratedImages(buffers, config);
+    localImages.push(...saved);
+    for (const filePath of saved) log(config, `Saved: ${filePath}`);
   } else {
     log(config, `Generating ${config.count} image(s) with ${config.imageModel || DEFAULT_IMAGE_MODEL}...`);
     const buffers = await generateImages(config);

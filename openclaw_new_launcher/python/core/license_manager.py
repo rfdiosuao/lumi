@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import ctypes
 import hashlib
 import json
@@ -87,14 +88,132 @@ class LicenseManager:
         serial = self._volume_serial() or str(uuid.getnode())
         return self._hash_device_payload(f"{root}|{serial}|openclaw-launcher")
 
+    def legacy_device_id_candidates(self) -> set[str]:
+        """Accept old drive-letter-bound licenses after Windows remaps the USB letter."""
+        serial = self._volume_serial() or str(uuid.getnode())
+        return {
+            self._hash_device_payload(f"{letter}:\\|{serial}|openclaw-launcher")
+            for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        }
+
     def device_id_candidates(self) -> set[str]:
-        return {self.device_id(), self.legacy_device_id()}
+        return {self.device_id(), self.legacy_device_id(), *self.legacy_device_id_candidates()}
 
     def current_license(self) -> dict[str, Any] | None:
         license_data = read_json(self.paths.license_file, None)
         if isinstance(license_data, dict) and self.verify(license_data):
             return license_data
         return None
+
+    def diagnose(self) -> dict[str, Any]:
+        if not os.path.exists(self.paths.license_file):
+            return {
+                "ok": False,
+                "code": "missing",
+                "message": "未授权，尚未生成 license.json",
+                "detail": self.paths.license_file,
+                "license": None,
+            }
+        try:
+            with open(self.paths.license_file, "r", encoding="utf-8") as file:
+                license_data = json.load(file)
+        except json.JSONDecodeError as error:
+            return {
+                "ok": False,
+                "code": "corrupt",
+                "message": "授权文件损坏，无法解析 JSON",
+                "detail": f"{self.paths.license_file} ({error})",
+                "license": None,
+            }
+        except OSError as error:
+            return {
+                "ok": False,
+                "code": "unreadable",
+                "message": "授权文件无法读取",
+                "detail": f"{self.paths.license_file} ({error})",
+                "license": None,
+            }
+        if not isinstance(license_data, dict):
+            return {
+                "ok": False,
+                "code": "corrupt",
+                "message": "授权文件损坏，根节点不是对象",
+                "detail": self.paths.license_file,
+                "license": None,
+            }
+
+        try:
+            signature = base64.b64decode(license_data["signature"], validate=True)
+            payload = dict(license_data)
+            payload.pop("signature", None)
+            self.public_key.verify(signature, self._canonical(payload))
+        except KeyError:
+            return {
+                "ok": False,
+                "code": "signature_missing",
+                "message": "授权文件缺少签名字段",
+                "detail": self.paths.license_file,
+                "license": license_data,
+            }
+        except (binascii.Error, ValueError, InvalidSignature, TypeError) as error:
+            return {
+                "ok": False,
+                "code": "signature_invalid",
+                "message": "授权签名无效，文件可能被修改或不是本产品授权",
+                "detail": f"{self.paths.license_file} ({error.__class__.__name__})",
+                "license": license_data,
+            }
+
+        install_id = license_data.get("installId")
+        current_install_id = self.get_install_id()
+        if install_id != current_install_id:
+            return {
+                "ok": False,
+                "code": "install_id_mismatch",
+                "message": "installId 不匹配，授权文件不属于当前启动器数据目录",
+                "detail": f"license={install_id or '-'} current={current_install_id}",
+                "license": license_data,
+            }
+
+        licensed_device = license_data.get("deviceId")
+        device_candidates = self.device_id_candidates()
+        if licensed_device and licensed_device not in device_candidates:
+            return {
+                "ok": False,
+                "code": "device_id_mismatch",
+                "message": "deviceId 不匹配，授权文件绑定的设备/U盘不是当前运行环境",
+                "detail": f"license={licensed_device} current={', '.join(sorted(device_candidates))}",
+                "license": license_data,
+            }
+
+        expires = license_data.get("expires")
+        if expires:
+            try:
+                expires_date = date.fromisoformat(str(expires))
+            except ValueError:
+                return {
+                    "ok": False,
+                    "code": "corrupt",
+                    "message": "授权文件损坏，expires 日期格式无效",
+                    "detail": f"expires={expires}",
+                    "license": license_data,
+                }
+            if expires_date < date.today():
+                return {
+                    "ok": False,
+                    "code": "expired",
+                    "message": f"授权已过期：{expires}",
+                    "detail": self.paths.license_file,
+                    "license": license_data,
+                }
+
+        return {
+            "ok": True,
+            "code": "ok",
+            "message": f"已授权：{license_data.get('licensee', 'OpenClaw Customer')}",
+            "detail": self.paths.license_file,
+            "license": license_data,
+        }
 
     def is_authorized(self, feature: str | None = None) -> bool:
         license_data = self.current_license()
@@ -106,7 +225,7 @@ class LicenseManager:
 
     def verify(self, license_data: dict[str, Any]) -> bool:
         try:
-            signature = base64.b64decode(license_data["signature"])
+            signature = base64.b64decode(license_data["signature"], validate=True)
             payload = dict(license_data)
             payload.pop("signature", None)
             self.public_key.verify(signature, self._canonical(payload))
@@ -119,7 +238,7 @@ class LicenseManager:
             if expires and date.fromisoformat(expires) < date.today():
                 return False
             return True
-        except (KeyError, ValueError, InvalidSignature, TypeError):
+        except (KeyError, binascii.Error, ValueError, InvalidSignature, TypeError):
             return False
 
     def activate(self, code: str) -> dict[str, Any]:

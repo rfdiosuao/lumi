@@ -342,7 +342,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
       const channelConfig = buildChannelConfig(channel, idValue.trim(), secretValue.trim());
       data.channels[channel.configKey] = channelConfig;
       if (channel.legacyConfigKey && channel.legacyConfigKey !== channel.configKey) {
-        data.channels[channel.legacyConfigKey] = channelConfig;
+        delete data.channels[channel.legacyConfigKey];
       }
 
       const plugins = data.plugins || {};

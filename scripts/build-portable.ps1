@@ -362,12 +362,14 @@ function Write-CleanRuntimeConfig {
                 available = $true
                 localOutputDir = "data/generated-images"
                 cli = "npm run phone:image"
+                editCli = "npm run phone:image:edit -- --reference-image <path> --prompt `"<edit instruction>`""
             }
             phoneAgent = [ordered]@{
                 available = $true
                 controlPolicy = "wrapper-only"
                 agentCli = "npm run phone:agent"
                 imageCli = "npm run phone:image"
+                imageEditCli = "npm run phone:image:edit -- --reference-image <path> --prompt `"<edit instruction>`""
                 visionCli = "npm run phone:vision"
                 videoDownloadDir = "data/phone-videos"
                 videoCli = "npm run phone:video"
@@ -522,6 +524,30 @@ function Copy-WebView2Redist {
     $targetDir = Join-Path $PackageDir "redist"
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination (Join-Path $targetDir "MicrosoftEdgeWebView2RuntimeInstallerX64.exe") -Force
+}
+
+function Copy-DesktopAgentSidecar {
+    param([string]$PackageDir)
+
+    $sourceRoot = Join-Path $Root "sightflow-desktop-agent-main"
+    if (-not (Test-Path -LiteralPath $sourceRoot)) {
+        Write-Warning "SightFlow Desktop Agent source not found; portable package will not include desktop sidecar."
+        return
+    }
+
+    $unpackedCandidates = @(
+        (Join-Path $sourceRoot "dist\win-unpacked"),
+        (Join-Path $sourceRoot "build\win-unpacked")
+    )
+    $source = $unpackedCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $source) {
+        Write-Warning "SightFlow win-unpacked output not found. Run npm run build:unpack in sightflow-desktop-agent-main before packaging."
+        return
+    }
+
+    $target = Join-Path $PackageDir "agents\sightflow-desktop"
+    Remove-SafePath $target
+    Copy-Directory -Source $source -Destination $target
 }
 
 function Expand-PortablePayloadForBuild {
@@ -780,6 +806,7 @@ Invoke-Step "Create portable directory" {
 
     Copy-PhoneAgentApks -PackageDir $packageDir
     Copy-WebView2Redist -PackageDir $packageDir
+    Copy-DesktopAgentSidecar -PackageDir $packageDir
 
     Install-BundledBotPlugins -PackageDir $packageDir
 
@@ -803,6 +830,19 @@ Invoke-Step "Verify portable directory" {
 
 Invoke-Step "Smoke verify portable runtime" {
     & powershell -ExecutionPolicy Bypass -File $SmokeVerifyScript -Path $packageDir
+}
+
+Invoke-Step "Clean runtime cache after smoke" {
+    $payloadDir = Join-Path $packageDir "OpenClawFiles"
+    if (Test-Path -LiteralPath $payloadDir) {
+        Remove-PythonCacheFiles -PackageDir $payloadDir
+    } else {
+        Remove-PythonCacheFiles -PackageDir $packageDir
+    }
+}
+
+Invoke-Step "Verify portable directory after smoke cleanup" {
+    & powershell -ExecutionPolicy Bypass -File $VerifyScript -Path $packageDir
 }
 
 if (-not $NoZip) {

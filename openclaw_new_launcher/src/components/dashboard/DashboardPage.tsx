@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
 import { useTheme } from '../../hooks/useTheme';
-import { configApi, processApi, skillsApi, systemApi } from '../../services/api';
+import { configApi, processApi, skillsApi, systemApi, waitForProcessReady } from '../../services/api';
 import { showToast } from '../common';
+import packageJson from '../../../package.json';
 
 interface StatusCard {
   key: string;
@@ -66,7 +67,19 @@ function getGreeting(): string {
 }
 
 export const DashboardPage: React.FC = () => {
-  const { serviceRunning, serviceStatus, isAuthorized, setCurrentPage } = useAppStore();
+  const {
+    serviceRunning,
+    serviceStatus,
+    isAuthorized,
+    setCurrentPage,
+    setServiceRunning,
+    setServiceStatus,
+    phoneAgentStatus,
+    phoneAgentTaskId,
+    phoneAgentSummary,
+    phoneAgentProgress,
+    phoneAgentUpdatedAt,
+  } = useAppStore();
   const { theme } = useTheme();
   const [apiConfigured, setApiConfigured] = useState<boolean | null>(null);
   const [larkInstalled, setLarkInstalled] = useState<boolean | null>(null);
@@ -189,10 +202,23 @@ export const DashboardPage: React.FC = () => {
       setCurrentPage('license');
       return;
     }
+    setServiceRunning(false);
+    setServiceStatus('starting');
     try {
       await processApi.start();
-      showToast('服务启动中...', 'success');
+      showToast('核心服务正在后台启动，低配机器会持续等待', 'info');
+      const status = await waitForProcessReady({ timeoutMs: 10 * 60 * 1000, intervalMs: 1500 });
+      if (status.running) {
+        setServiceRunning(true);
+        setServiceStatus('running');
+        showToast('核心服务已启动', 'success');
+        return;
+      }
+      setServiceStatus('starting');
+      showToast('核心服务仍在启动中，请稍后查看状态或环境诊断', 'info');
     } catch (error: any) {
+      setServiceRunning(false);
+      setServiceStatus('idle');
       showToast(`启动失败: ${error?.error || error}`, 'error');
     }
   };
@@ -293,6 +319,58 @@ export const DashboardPage: React.FC = () => {
           </div>
         </section>
 
+        <section className="mb-8">
+          <div className="mb-4 text-xs font-bold uppercase tracking-[0.24em] text-text-subtle">
+            手机 Agent
+          </div>
+          <div className="rounded-[16px] border border-accent/25 bg-accent/[0.06] p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={`h-2.5 w-2.5 rounded-full ${
+                    phoneAgentStatus === 'running'
+                      ? 'bg-accent shadow-[0_0_10px_rgba(216,184,102,0.45)]'
+                      : phoneAgentStatus === 'success'
+                        ? 'bg-status-success'
+                        : phoneAgentStatus === 'error'
+                          ? 'bg-status-danger'
+                          : phoneAgentStatus === 'queued'
+                            ? 'bg-status-warning'
+                            : 'bg-text-subtle'
+                  }`} />
+                  <div className="text-sm font-black text-text">
+                    {phoneAgentStatus === 'running'
+                      ? '手机 Agent 正在执行'
+                      : phoneAgentStatus === 'queued'
+                        ? '手机 Agent 已接收任务'
+                        : phoneAgentStatus === 'success'
+                          ? '手机 Agent 已完成'
+                          : phoneAgentStatus === 'error'
+                            ? '手机 Agent 执行异常'
+                            : phoneAgentStatus === 'cancelled'
+                              ? '手机 Agent 已取消'
+                              : '手机 Agent 空闲'}
+                  </div>
+                </div>
+                <div className="mt-2 text-xs leading-5 text-text-muted">
+                  {phoneAgentProgress || phoneAgentSummary || '等待手机端任务进度回传。'}
+                </div>
+                <div className="mt-1 text-[11px] text-text-subtle">
+                  {phoneAgentTaskId ? `Task ${phoneAgentTaskId.slice(0, 8)}` : '暂无任务'}
+                  {phoneAgentUpdatedAt ? ` · ${new Date(phoneAgentUpdatedAt).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCurrentPage('phone')}
+                className="shrink-0 rounded-[14px] border border-border/70 bg-surface/45 px-4 py-2 text-xs font-black text-text transition hover:border-accent/60 hover:text-accent"
+              >
+                打开手机控制
+              </button>
+            </div>
+          </div>
+        </section>
+
         <section>
           <div className="mb-4 text-xs font-bold uppercase tracking-[0.24em] text-text-subtle">
             关于
@@ -306,7 +384,7 @@ export const DashboardPage: React.FC = () => {
                 <div className="text-base font-black tracking-wide text-text">{theme.brand.name}</div>
                 <div className="text-sm text-text-muted">{theme.brand.subtitle}</div>
                 <div className="mt-1 text-xs text-text-subtle">
-                  {theme.name} · v2.0.2
+                  {theme.name} · v{packageJson.version}
                 </div>
               </div>
             </div>

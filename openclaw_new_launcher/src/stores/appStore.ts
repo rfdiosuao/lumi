@@ -13,6 +13,11 @@ interface AppState {
   currentPage: string;
   serviceRunning: boolean;
   serviceStatus: 'idle' | 'starting' | 'running' | 'stopping' | 'stopped';
+  phoneAgentStatus: 'idle' | 'queued' | 'running' | 'success' | 'error' | 'cancelled' | 'offline';
+  phoneAgentTaskId: string | null;
+  phoneAgentSummary: string;
+  phoneAgentProgress: string;
+  phoneAgentUpdatedAt: string | null;
   isAuthorized: boolean;
   isLicenseChecking: boolean;
   licenseInfo: License | null;
@@ -24,6 +29,7 @@ interface AppState {
   setCurrentPage: (page: string) => void;
   setServiceRunning: (running: boolean) => void;
   setServiceStatus: (status: AppState['serviceStatus']) => void;
+  setPhoneAgentSnapshot: (snapshot: Partial<Pick<AppState, 'phoneAgentStatus' | 'phoneAgentTaskId' | 'phoneAgentSummary' | 'phoneAgentProgress' | 'phoneAgentUpdatedAt'>>) => void;
   setAuthorized: (authorized: boolean) => void;
   setLicenseInfo: (info: License | null) => void;
   setApiConfigured: (configured: boolean) => void;
@@ -40,6 +46,11 @@ export const useAppStore = create<AppState>((set) => ({
   currentPage: 'dashboard',
   serviceRunning: false,
   serviceStatus: 'idle',
+  phoneAgentStatus: 'idle',
+  phoneAgentTaskId: null,
+  phoneAgentSummary: '',
+  phoneAgentProgress: '',
+  phoneAgentUpdatedAt: null,
   isAuthorized: false,
   isLicenseChecking: true,
   licenseInfo: null,
@@ -51,6 +62,7 @@ export const useAppStore = create<AppState>((set) => ({
   setCurrentPage: (currentPage) => set({ currentPage }),
   setServiceRunning: (serviceRunning) => set({ serviceRunning }),
   setServiceStatus: (serviceStatus) => set({ serviceStatus }),
+  setPhoneAgentSnapshot: (snapshot) => set((state) => ({ ...state, ...snapshot })),
   setAuthorized: (isAuthorized) => {
     if (!isAuthorized) {
       try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }

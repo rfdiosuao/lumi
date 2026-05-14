@@ -223,6 +223,7 @@ async function buildContext(args) {
         configured: isConfiguredConfig(imageConfig),
         localOutputDir: path.join(root, 'data', 'generated-images'),
         cli: 'npm run phone:image',
+        editCli: 'npm run phone:image:edit -- --reference-image <path> --prompt "<edit instruction>"',
       },
       videoGeneration: {
         available: true,
@@ -234,6 +235,7 @@ async function buildContext(args) {
         controlPolicy: 'wrapper-only',
         agentCli: 'npm run phone:agent',
         imageCli: 'npm run phone:image',
+        imageEditCli: 'npm run phone:image:edit -- --reference-image <path> --prompt "<edit instruction>"',
         visionCli: 'npm run phone:vision',
         videoDownloadDir: path.join(root, 'data', 'phone-videos'),
         videoCli: 'npm run phone:video',

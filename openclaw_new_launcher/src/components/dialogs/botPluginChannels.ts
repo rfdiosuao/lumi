@@ -3,8 +3,8 @@ import type { BotChannel, BotChannelKey } from './botPluginTypes';
 export const CHANNELS: Record<BotChannelKey, BotChannel> = {
   feishu: {
     key: 'feishu',
-    configKey: 'openclaw-lark',
-    legacyConfigKey: 'feishu',
+    configKey: 'feishu',
+    legacyConfigKey: 'openclaw-lark',
     title: '飞书机器人',
     description: '安装 OpenClaw 飞书插件，并写入飞书开放平台应用配置。',
     pluginName: 'openclaw-lark',

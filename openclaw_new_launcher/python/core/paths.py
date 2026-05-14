@@ -93,6 +93,18 @@ class AppPaths:
         return candidates[0]
 
     @property
+    def npm_cli(self) -> str:
+        candidates = [
+            os.path.join(self.node_dir, "node_modules", "npm", "bin", "npm-cli.js"),
+            os.path.join(self.base_path, "node_modules", "npm", "bin", "npm-cli.js"),
+            os.path.join(self.base_path, "SystemData", ".core", "node_modules", "npm", "bin", "npm-cli.js"),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return candidates[0]
+
+    @property
     def data_dir(self) -> str:
         return os.path.join(self.base_path, "data")
 
@@ -139,6 +151,18 @@ class AppPaths:
     @property
     def skills_state(self) -> str:
         return os.path.join(self.launcher_dir, "skills-state.json")
+
+    @property
+    def openclaw_workspace(self) -> str:
+        return os.path.join(self.state_dir, "workspace")
+
+    @property
+    def openclaw_workspace_template(self) -> str:
+        return os.path.join(self.base_path, "openclaw-workspace")
+
+    @property
+    def generated_images_dir(self) -> str:
+        return os.path.join(self.data_dir, "generated-images")
 
     @property
     def openclaw_extensions_dir(self) -> str:

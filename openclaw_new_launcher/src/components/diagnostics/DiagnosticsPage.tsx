@@ -95,7 +95,39 @@ export const DiagnosticsPage: React.FC = () => {
       setReport(result);
       setActions([]);
     } catch (error: any) {
-      showToast(`诊断失败: ${error?.error || error}`, 'error');
+      try {
+        const fallback = await diagnosticsApi.bridgeStartupReport();
+        const message = String(error?.error || error || 'Bridge 启动失败');
+        const checks: DiagnosticCheck[] = [
+          {
+            id: 'diagnostics_bridge_unavailable',
+            label: '诊断服务不可用',
+            status: 'fail',
+            message,
+            detail: 'Python Bridge 未能启动，当前显示的是 Tauri 外层诊断结果。',
+            repairable: false,
+          },
+          ...(fallback.checks || []),
+        ];
+        const failed = checks.filter((item) => item.status === 'fail').length;
+        const warnings = checks.filter((item) => item.status === 'warn').length;
+        const ok = checks.filter((item) => item.status === 'ok').length;
+        setReport({
+          ...fallback,
+          checks,
+          summary: {
+            status: failed ? 'fail' : warnings ? 'warn' : 'ok',
+            ok,
+            warnings,
+            failed,
+            total: checks.length,
+          },
+        });
+        setActions([]);
+        showToast('Bridge 未启动，已切换到外层诊断', 'error');
+      } catch (fallbackError: any) {
+        showToast(`诊断失败: ${fallbackError?.error || fallbackError || error?.error || error}`, 'error');
+      }
     } finally {
       setLoading(false);
     }
@@ -141,6 +173,31 @@ export const DiagnosticsPage: React.FC = () => {
     }
   };
 
+  const handleCopySummary = async () => {
+    if (!report) {
+      showToast('暂无诊断结果可复制', 'info');
+      return;
+    }
+    const checks = [...(report.checks || [])].sort((a, b) => statusPriority(a.status) - statusPriority(b.status));
+    const lines = [
+      'OpenClaw 环境诊断摘要',
+      `状态: ${report.summary?.status || 'unknown'} | 正常 ${report.summary?.ok ?? 0} / 警告 ${report.summary?.warnings ?? 0} / 阻塞 ${report.summary?.failed ?? 0}`,
+      `安装目录: ${report.basePath || '-'}`,
+      `服务 PID: ${report.servicePid || '未运行'}`,
+      '',
+      ...checks.map((check) => [
+        `[${check.status.toUpperCase()}] ${check.label}: ${check.message}`,
+        check.detail ? `  ${check.detail}` : '',
+      ].filter(Boolean).join('\n')),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      showToast('诊断摘要已复制', 'success');
+    } catch (error: any) {
+      showToast(`复制失败: ${error?.message || error}`, 'error');
+    }
+  };
+
   const sortedChecks = React.useMemo(() => {
     return [...(report?.checks || [])].sort((a, b) => statusPriority(a.status) - statusPriority(b.status));
   }, [report]);
@@ -156,6 +213,9 @@ export const DiagnosticsPage: React.FC = () => {
           <p className="mt-1 text-sm text-text-muted">无需授权即可检查并修复端口占用、残留进程、U盘读写和启动目录</p>
         </div>
         <div className="flex items-center gap-3">
+          <Button variant="quiet" onClick={handleCopySummary} disabled={!report || loading || repairing}>
+            复制摘要
+          </Button>
           <Button variant="quiet" onClick={runDiagnostics} disabled={loading || repairing}>
             {loading ? '诊断中...' : '重新诊断'}
           </Button>

@@ -55,6 +55,7 @@ impl LicenseStatus {
             device_bound: false,
         }
     }
+
 }
 
 pub fn check_license(base_path: &Path) -> LicenseStatus {
@@ -68,12 +69,14 @@ pub fn ensure_authorized(base_path: &Path, feature: Option<&str>) -> Result<(), 
     verify_license_payload(base_path, feature).map(|_| ())
 }
 
-fn verify_license_payload(base_path: &Path, feature: Option<&str>) -> Result<Map<String, Value>, String> {
+fn verify_license_payload(
+    base_path: &Path,
+    feature: Option<&str>,
+) -> Result<Map<String, Value>, String> {
     let license_path = license_file(base_path);
-    let text = fs::read_to_string(&license_path)
-        .map_err(|_| "需要先完成授权激活".to_string())?;
-    let mut license_value: Value = serde_json::from_str(&text)
-        .map_err(|_| "许可证文件格式无效".to_string())?;
+    let text = fs::read_to_string(&license_path).map_err(|_| "需要先完成授权激活".to_string())?;
+    let mut license_value: Value =
+        serde_json::from_str(&text).map_err(|_| "许可证文件格式无效".to_string())?;
     let payload = license_value
         .as_object_mut()
         .ok_or_else(|| "许可证文件格式无效".to_string())?;
@@ -98,14 +101,14 @@ fn verify_signature(payload: &Value, signature_text: &str) -> Result<(), String>
     let public_key_array: [u8; 32] = public_key_bytes
         .try_into()
         .map_err(|_| "授权公钥长度无效".to_string())?;
-    let verifying_key = VerifyingKey::from_bytes(&public_key_array)
-        .map_err(|_| "授权公钥无效".to_string())?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&public_key_array).map_err(|_| "授权公钥无效".to_string())?;
 
     let signature_bytes = BASE64_STANDARD
         .decode(signature_text)
         .map_err(|_| "许可证签名格式无效".to_string())?;
-    let signature = Signature::from_slice(&signature_bytes)
-        .map_err(|_| "许可证签名长度无效".to_string())?;
+    let signature =
+        Signature::from_slice(&signature_bytes).map_err(|_| "许可证签名长度无效".to_string())?;
 
     let canonical = canonical_json(payload)?;
     verifying_key
@@ -146,8 +149,7 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, String> {
                 out.push(']');
             }
             _ => out.push_str(
-                &serde_json::to_string(value)
-                    .map_err(|_| "许可证值序列化失败".to_string())?,
+                &serde_json::to_string(value).map_err(|_| "许可证值序列化失败".to_string())?,
             ),
         }
         Ok(())
@@ -180,7 +182,10 @@ fn verify_device_id(base_path: &Path, payload: &Map<String, Value>) -> Result<()
         return Ok(());
     }
     let device_candidates = device_id_candidates(base_path);
-    if !device_candidates.iter().any(|candidate| candidate == licensed_device) {
+    if !device_candidates
+        .iter()
+        .any(|candidate| candidate == licensed_device)
+    {
         return Err("许可证不属于当前运行磁盘".to_string());
     }
     Ok(())
@@ -231,14 +236,47 @@ fn legacy_device_id(base_path: &Path) -> String {
     hash_device_payload(&format!("{}|{}|openclaw-launcher", root, serial))
 }
 
+fn legacy_device_id_candidates(base_path: &Path) -> Vec<String> {
+    let root = drive_root(base_path);
+    let serial = volume_serial(&root).unwrap_or_else(|| fallback_serial());
+    ('A'..='Z')
+        .map(|letter| hash_device_payload(&format!("{}:\\|{}|openclaw-launcher", letter, serial)))
+        .collect()
+}
+
 fn device_id_candidates(base_path: &Path) -> Vec<String> {
     let current = device_id(base_path);
     let legacy = legacy_device_id(base_path);
-    if current == legacy {
-        vec![current]
-    } else {
-        vec![current, legacy]
-    }
+    let mut candidates = vec![current, legacy];
+    candidates.extend(legacy_device_id_candidates(base_path));
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+#[cfg(test)]
+fn device_id_candidates_for_serial(serial: &str) -> Vec<String> {
+    let mut candidates = vec![hash_device_payload(&format!(
+        "volume:{}|openclaw-launcher",
+        serial
+    ))];
+    candidates.extend(
+        ('A'..='Z')
+            .map(|letter| hash_device_payload(&format!("{}:\\|{}|openclaw-launcher", letter, serial))),
+    );
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+#[cfg(test)]
+fn legacy_device_id_for_root_and_serial(root: &str, serial: &str) -> String {
+    hash_device_payload(&format!("{}|{}|openclaw-launcher", root, serial))
+}
+
+#[cfg(test)]
+fn volume_device_id_for_serial(serial: &str) -> String {
+    hash_device_payload(&format!("volume:{}|openclaw-launcher", serial))
 }
 
 fn hash_device_payload(raw: &str) -> String {
@@ -314,8 +352,22 @@ fn hex_lower(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::canonical_json;
+    use super::{
+        canonical_json, device_id_candidates_for_serial, legacy_device_id_for_root_and_serial,
+        volume_device_id_for_serial,
+    };
     use serde_json::json;
+
+    #[test]
+    fn device_id_candidates_accept_old_drive_letters_and_new_volume_id() {
+        let serial = "123456789";
+        let candidates = device_id_candidates_for_serial(serial);
+
+        assert!(candidates.contains(&volume_device_id_for_serial(serial)));
+        assert!(candidates.contains(&legacy_device_id_for_root_and_serial("D:\\", serial)));
+        assert!(candidates.contains(&legacy_device_id_for_root_and_serial("E:\\", serial)));
+        assert!(candidates.contains(&legacy_device_id_for_root_and_serial("Z:\\", serial)));
+    }
 
     #[test]
     fn canonical_json_sorts_keys_without_ascii_escaping() {

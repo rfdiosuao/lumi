@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button, showToast } from '../common';
 import { useLogStore } from '../../stores/logStore';
 import { useTheme } from '../../hooks/useTheme';
+import { logApi } from '../../services/api';
 
 export const TerminalPage: React.FC = () => {
   const lines = useLogStore((state) => state.lines);
@@ -64,6 +65,16 @@ export const TerminalPage: React.FC = () => {
     }
   };
 
+  const handleClearLogs = async () => {
+    clearLogs();
+    window.dispatchEvent(new Event('openclaw:logs-cleared'));
+    try {
+      await logApi.clear();
+    } catch (error: any) {
+      showToast(`清空后端日志失败：${error?.error || error}`, 'error');
+    }
+  };
+
   return (
     <div className="flex h-full flex-col bg-transparent">
       <div className="flex h-[64px] shrink-0 items-center justify-between border-b border-border bg-surface px-6">
@@ -90,7 +101,7 @@ export const TerminalPage: React.FC = () => {
               打开目录
             </Button>
           )}
-          <Button variant="danger" className="px-3 py-1.5 text-xs" onClick={clearLogs}>
+          <Button variant="danger" className="px-3 py-1.5 text-xs" onClick={handleClearLogs}>
             清空
           </Button>
         </div>

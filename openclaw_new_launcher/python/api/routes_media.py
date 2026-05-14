@@ -44,7 +44,24 @@ def register_media_routes(app, ctx) -> None:
         try:
             results = client.generate_many(base_url, api_key, prompt, size, count=count, edit_image_path=edit_path)
             images_b64 = [base64.b64encode(result).decode() for result in results]
-            return ctx.fastapi_json({"images": images_b64, "count": len(images_b64)})
+            image_dir = os.path.join(ctx.paths.data_dir, "generated-images")
+            os.makedirs(image_dir, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            files = []
+            for index, image_bytes in enumerate(results):
+                suffix = "" if len(results) == 1 else f"-{index + 1}"
+                filename = f"openclaw-image-{stamp}{suffix}.png"
+                save_path = os.path.join(image_dir, filename)
+                with open(save_path, "wb") as file:
+                    file.write(image_bytes)
+                files.append({
+                    "path": save_path,
+                    "directory": image_dir,
+                    "filename": filename,
+                    "size": len(image_bytes),
+                    "mime": "image/png",
+                })
+            return ctx.fastapi_json({"images": images_b64, "files": files, "count": len(images_b64)})
         except ImageApiError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 500)
         finally:

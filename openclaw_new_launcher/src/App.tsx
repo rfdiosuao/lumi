@@ -6,7 +6,7 @@ import { WindowTitlebar } from './components/window/WindowTitlebar';
 import { ToastContainer, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
-import { processApi, logApi, updateApi, configApi } from './services/api';
+import { processApi, logApi, updateApi, configApi, waitForProcessReady } from './services/api';
 import { ThemeProvider } from './providers/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 import { getFeatureDefinition } from './features/registry';
@@ -14,12 +14,20 @@ import { renderFeaturePage } from './features/pages';
 import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
 import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
 
+function safeCurrentWindow() {
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
+}
+
 function DynamicTitle() {
   const { windowTitle } = useTheme();
 
   useEffect(() => {
     document.title = windowTitle;
-    getCurrentWindow().setTitle(windowTitle).catch(() => {});
+    safeCurrentWindow()?.setTitle(windowTitle).catch(() => {});
   }, [windowTitle]);
 
   return null;
@@ -52,9 +60,11 @@ export default function App() {
     checkLicense,
   } = useAppStore();
   const appendLog = useLogStore((s) => s.append);
+  const replaceLog = useLogStore((s) => s.replace);
   const [activeDialog, setActiveDialog] = useState<'api' | 'feishu' | 'weixin' | null>(null);
   const [apiConfigured, setApiConfigured] = useState(false);
   const logInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const logOffset = useRef(0);
 
   const refreshApiConfigured = React.useCallback(async () => {
     try {
@@ -69,8 +79,11 @@ export default function App() {
     if (logInterval.current) return;
     logInterval.current = setInterval(async () => {
       try {
-        const resp = await logApi.get();
-        if (resp.log) {
+        const resp = await logApi.get(logOffset.current);
+        logOffset.current = resp.offset ?? logOffset.current;
+        if (resp.reset) {
+          replaceLog(resp.log || '');
+        } else if (resp.log) {
           appendLog(resp.log);
         }
       } catch (error) {
@@ -92,7 +105,18 @@ export default function App() {
   }, [checkLicense, refreshApiConfigured]);
 
   useEffect(() => {
-    if (!isLicenseChecking && !isAuthorized && !['license', 'diagnostics'].includes(currentPage)) {
+    const resetOffset = () => {
+      logOffset.current = 0;
+    };
+    window.addEventListener('openclaw:logs-cleared', resetOffset);
+    return () => window.removeEventListener('openclaw:logs-cleared', resetOffset);
+  }, []);
+
+  useEffect(() => {
+    const feature = getFeatureDefinition(currentPage);
+    const allowedWithoutLicense =
+      ['license', 'diagnostics'].includes(currentPage) || !feature?.requiresLicense;
+    if (!isLicenseChecking && !isAuthorized && !allowedWithoutLicense) {
       setCurrentPage('license');
     }
   }, [currentPage, isAuthorized, isLicenseChecking, setCurrentPage]);
@@ -103,16 +127,36 @@ export default function App() {
       setCurrentPage('license');
       return;
     }
+    setServiceRunning(false);
     setServiceStatus('starting');
     try {
       await processApi.start();
-      setServiceRunning(true);
-      setServiceStatus('running');
-      appendLog('[服务] 启动成功\n');
-      showToast('服务已启动', 'success');
       startLogPolling();
-      setTimeout(() => open('http://127.0.0.1:18790'), 3000);
+      let lastNotice = 0;
+      showToast('核心服务正在后台启动，低配机器会持续等待', 'info');
+      const status = await waitForProcessReady({
+        timeoutMs: 10 * 60 * 1000,
+        intervalMs: 1500,
+        onProgress: (progress) => {
+          const elapsed = progress.startupElapsedSec || 0;
+          if (elapsed - lastNotice >= 20) {
+            lastNotice = elapsed;
+            appendLog(`[启动] 核心服务仍在启动中：${elapsed}s / ${progress.startupTimeoutSec || 420}s，低配机器可能需要更久。\n`);
+          }
+        }
+      });
+      if (status.running) {
+        setServiceRunning(true);
+        setServiceStatus('running');
+        appendLog('[启动] 核心服务已就绪\n');
+        showToast('核心服务已启动', 'success');
+        setTimeout(() => open('http://127.0.0.1:18790'), 1200);
+        return;
+      }
+      setServiceStatus('starting');
+      showToast('核心服务仍在启动中，请稍后查看状态或环境诊断', 'info');
     } catch (error: any) {
+      setServiceRunning(false);
       setServiceStatus('idle');
       showToast(`启动失败: ${error?.error || error}`, 'error');
     }

@@ -78,11 +78,15 @@ export const Modal: React.FC<{
 };
 
 let toastId = 0;
+const TOAST_TTL_MS = 3200;
+const TOAST_DEDUPE_WINDOW_MS = 1800;
+const MAX_VISIBLE_TOASTS = 3;
 
 interface ToastItem {
   id: number;
   message: string;
   type: 'success' | 'error' | 'info';
+  createdAt: number;
 }
 
 const toastStore = create<{
@@ -92,13 +96,29 @@ const toastStore = create<{
 }>((set) => ({
   toasts: [],
   addToast: (message: string, type: 'success' | 'error' | 'info') => {
+    const now = Date.now();
+    let scheduledId: number | null = null;
+    let shouldSchedule = false;
+
     const id = ++toastId;
     set((state) => ({
-      toasts: [...state.toasts, { id, message, type }],
+      toasts: (() => {
+        const duplicate = state.toasts.find(
+          (toast) => toast.type === type && toast.message === message && now - toast.createdAt < TOAST_DEDUPE_WINDOW_MS
+        );
+        if (duplicate) return state.toasts;
+
+        scheduledId = id;
+        shouldSchedule = true;
+        return [...state.toasts, { id, message, type, createdAt: now }].slice(-MAX_VISIBLE_TOASTS);
+      })(),
     }));
-    window.setTimeout(() => {
-      toastStore.getState().removeToast(id);
-    }, 3000);
+
+    if (shouldSchedule && scheduledId !== null) {
+      window.setTimeout(() => {
+        toastStore.getState().removeToast(scheduledId as number);
+      }, TOAST_TTL_MS);
+    }
   },
   removeToast: (id: number) =>
     set((state) => ({
@@ -117,13 +137,13 @@ export const ToastContainer: React.FC = () => {
     info: 'bg-accent text-accent-ink',
   };
   return (
-    <div className="fixed right-5 top-5 z-[100] space-y-2">
+    <div className="pointer-events-none fixed right-5 top-5 z-[100] flex w-[min(560px,calc(100vw-2.5rem))] flex-col gap-2">
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`${colors[toast.type]} toast-enter flex items-center gap-3 rounded-xl border border-white/15 px-4 py-3 text-sm font-semibold shadow-[0_18px_44px_rgba(0,0,0,0.42)]`}
+          className={`${colors[toast.type]} toast-enter pointer-events-auto flex items-center gap-3 rounded-xl border border-white/15 px-4 py-3 text-sm font-semibold shadow-[0_18px_44px_rgba(0,0,0,0.42)]`}
         >
-          <span>{toast.message}</span>
+          <span className="min-w-0 flex-1 break-words">{toast.message}</span>
           <button onClick={() => removeToast(toast.id)} className="opacity-70 hover:opacity-100">&times;</button>
         </div>
       ))}

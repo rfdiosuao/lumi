@@ -138,13 +138,15 @@ function updateOpenClawConfig(channel) {
     enabled: true,
   };
 
+  normalizeChannelConfig(data);
   writeJson(configPath, data);
   log(`[launcher] 已写入 OpenClaw 配置：${configPath}`);
 }
 
 function readChannelConfig(channelKey, channel) {
   const data = readJson(configPath, {});
-  const saved = data?.channels?.[channel.pluginId] || (channelKey === 'feishu' ? data?.channels?.feishu : null);
+  if (normalizeChannelConfig(data)) writeJson(configPath, data);
+  const saved = channelKey === 'feishu' ? data?.channels?.feishu : data?.channels?.[channel.pluginId];
   const entries = data?.plugins?.entries || {};
   const loadPaths = data?.plugins?.load?.paths || [];
   const packageJsonPath = path.join(channel.packageDir, 'package.json');
@@ -167,6 +169,32 @@ function readChannelConfig(channelKey, channel) {
       configPath,
     },
   };
+}
+
+function normalizeChannelConfig(data) {
+  if (!data || typeof data !== 'object' || !data.channels || typeof data.channels !== 'object') {
+    return false;
+  }
+
+  let changed = false;
+  const legacyLark = data.channels['openclaw-lark'];
+  if (legacyLark && typeof legacyLark === 'object') {
+    if (!data.channels.feishu || typeof data.channels.feishu !== 'object') {
+      data.channels.feishu = legacyLark;
+    }
+    delete data.channels['openclaw-lark'];
+    changed = true;
+  }
+
+  if (data.channels.feishu && typeof data.channels.feishu === 'object') {
+    const domain = String(data.channels.feishu.domain || '').trim();
+    if (!domain || domain === 'openclaw-lark') {
+      data.channels.feishu.domain = 'feishu';
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 function openclawEnv() {
@@ -437,7 +465,7 @@ async function loginFeishu() {
         groupAllowFrom: [],
       };
       data.channels.feishu = channelConfig;
-      data.channels['openclaw-lark'] = channelConfig;
+      delete data.channels['openclaw-lark'];
       data.plugins ||= {};
       data.plugins.allow = Array.isArray(data.plugins.allow) ? data.plugins.allow : [];
       if (!data.plugins.allow.includes('openclaw-lark')) data.plugins.allow.push('openclaw-lark');

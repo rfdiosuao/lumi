@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Button, Input, TextArea, Select, Loading, showToast, FieldLabel } from '../common';
 import { imageApi, configApi } from '../../services/api';
+import { loadPhoneConfig, phoneApi } from '../../services/phoneApi';
 import { useLogStore } from '../../stores/logStore';
 
 const SIZES = ['1024x1024', '1024x1536', '1536x1024', '512x512'];
@@ -14,8 +15,11 @@ export const ImagePage: React.FC = () => {
   const [generating, setGenerating] = useState(false);
   const [tripleGenerating, setTripleGenerating] = useState(false);
   const [resultImage, setResultImage] = useState<string | null>(null);
+  const [resultFile, setResultFile] = useState<string | null>(null);
   const [tripleResults, setTripleResults] = useState<(string | null)[]>([null, null, null]);
   const [tripleStatus, setTripleStatus] = useState('');
+  const [sendToPhone, setSendToPhone] = useState(true);
+  const [phoneSyncStatus, setPhoneSyncStatus] = useState('');
 
   const appendLog = useLogStore((s) => s.append);
 
@@ -47,13 +51,19 @@ export const ImagePage: React.FC = () => {
     }
     setGenerating(true);
     setResultImage(null);
+    setResultFile(null);
+    setPhoneSyncStatus('');
     try {
       await saveConfig();
       const resp = await imageApi.generate({ baseUrl, apiKey, prompt, size, count: 1, editImagePath: editImage || undefined });
       if (resp.images?.[0]) {
-        setResultImage(`data:image/png;base64,${resp.images[0]}`);
+        const dataUrl = `data:image/png;base64,${resp.images[0]}`;
+        const file = resp.files?.[0];
+        setResultImage(dataUrl);
+        setResultFile(file?.path || null);
         showToast('图片生成成功', 'success');
-        appendLog('[生图] 单图生成成功\n');
+        appendLog(`[生图] 单图生成成功${file?.path ? `：${file.path}` : ''}\n`);
+        await maybeSendImageToPhone(dataUrl, file?.filename || `openclaw-image-${Date.now()}.png`);
       }
     } catch (e: any) {
       showToast(e?.error || '生成失败', 'error');
@@ -76,6 +86,7 @@ export const ImagePage: React.FC = () => {
     }
     setTripleGenerating(true);
     setTripleResults([null, null, null]);
+    setPhoneSyncStatus('');
     await saveConfig();
 
     for (let i = 0; i < 3; i++) {
@@ -84,7 +95,11 @@ export const ImagePage: React.FC = () => {
         const fullPrompt = `${prompt}\n${TRIPLE_PROMPTS[i].prefix}`;
         const resp = await imageApi.generate({ baseUrl, apiKey, prompt: fullPrompt, size, count: 1 });
         if (resp.images?.[0]) {
-          setTripleResults((prev) => { const n = [...prev]; n[i] = `data:image/png;base64,${resp.images[0]}`; return n; });
+          const dataUrl = `data:image/png;base64,${resp.images[0]}`;
+          const file = resp.files?.[0];
+          setTripleResults((prev) => { const n = [...prev]; n[i] = dataUrl; return n; });
+          appendLog(`[生图] ${TRIPLE_PROMPTS[i].label} 已保存${file?.path ? `：${file.path}` : ''}\n`);
+          await maybeSendImageToPhone(dataUrl, file?.filename || `openclaw-${TRIPLE_PROMPTS[i].label}-${Date.now()}.png`);
         }
       } catch (e: any) {
         setTripleResults((prev) => { const n = [...prev]; n[i] = `error:${e?.error}`; return n; });
@@ -92,6 +107,31 @@ export const ImagePage: React.FC = () => {
     }
     setTripleStatus('');
     showToast('三图生成完成', 'success');
+  };
+
+  const maybeSendImageToPhone = async (dataUrl: string, filename: string) => {
+    if (!sendToPhone) return;
+    const phoneConfig = loadPhoneConfig();
+    if (!phoneConfig.baseUrl.trim() || !phoneConfig.token.trim()) {
+      setPhoneSyncStatus('手机未配置，图片已保存在本地');
+      appendLog('[生图] 手机未配置，跳过相册同步\n');
+      return;
+    }
+
+    setPhoneSyncStatus('正在发送到手机相册...');
+    const result = await phoneApi.importImageDataUrl(phoneConfig, dataUrl, {
+      album: 'OpenClaw',
+      filename,
+    });
+    if (result.ok) {
+      const phonePath = result.data?.relativePath || result.data?.path || '手机相册';
+      setPhoneSyncStatus(`已发送到手机：${phonePath}`);
+      appendLog(`[生图] 已发送到手机：${phonePath}\n`);
+      showToast('已发送到手机相册', 'success');
+    } else {
+      setPhoneSyncStatus(`手机同步失败：${result.error || '未知错误'}`);
+      appendLog(`[生图] 手机同步失败：${result.error || '未知错误'}\n`);
+    }
   };
 
   const handlePickImage = () => {
@@ -144,6 +184,18 @@ export const ImagePage: React.FC = () => {
                 <Button onClick={() => setEditImage(null)} variant="quiet">清除</Button>
               )}
             </div>
+            <label className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-3 py-2">
+              <span>
+                <span className="block text-sm font-semibold text-text">生成后发送手机相册</span>
+                <span className="block text-xs text-text-muted">手机 Agent 已配置时自动导入相册</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={sendToPhone}
+                onChange={(event) => setSendToPhone(event.target.checked)}
+                className="h-4 w-4 accent-[var(--color-accent)]"
+              />
+            </label>
             <div>
               <FieldLabel text="提示词" required />
               <TextArea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="描述你想要生成的图片..." />
@@ -160,13 +212,20 @@ export const ImagePage: React.FC = () => {
             {tripleGenerating ? tripleStatus : '一键三图'}
           </Button>
         </div>
+        {phoneSyncStatus && <div className="mt-3 text-xs text-text-muted">{phoneSyncStatus}</div>}
 
         {/* Result Area */}
         <div className="mt-8">
           {generating && <Loading text="正在生成图片..." />}
           {resultImage && (
-            <div className="border border-border rounded-lg overflow-hidden inline-block max-w-lg">
-              <img src={resultImage} alt="Generated" className="max-w-full" />
+            <div>
+              <div className="border border-border rounded-lg overflow-hidden inline-block max-w-lg">
+                <img src={resultImage} alt="Generated" className="max-w-full" />
+              </div>
+              <div className="mt-3 space-y-1 text-xs text-text-muted">
+                {resultFile && <div>本地：{resultFile}</div>}
+                {phoneSyncStatus && <div>{phoneSyncStatus}</div>}
+              </div>
             </div>
           )}
         </div>

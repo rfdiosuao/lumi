@@ -13,6 +13,7 @@ $LauncherDir = Join-Path $Root "openclaw_new_launcher"
 $TauriDir = Join-Path $LauncherDir "src-tauri"
 $LicenseServerDir = Join-Path $Root "license_server"
 $VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
+$VerifyVersionScript = Join-Path $PSScriptRoot "verify-version-consistency.ps1"
 
 function Invoke-Step {
     param(
@@ -29,6 +30,10 @@ if (-not $SkipSourceText) {
     Invoke-Step "Source text guard" {
         & powershell -ExecutionPolicy Bypass -File $VerifySourceTextScript
     }
+}
+
+Invoke-Step "Version consistency" {
+    & powershell -ExecutionPolicy Bypass -File $VerifyVersionScript
 }
 
 if (-not $SkipFrontend) {

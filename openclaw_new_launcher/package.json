@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "verify:phone": "powershell -ExecutionPolicy Bypass -File scripts/verify-phone-agent.ps1",
     "phone:image": "node scripts/openclaw-image-phone.mjs",
+    "phone:image:edit": "node scripts/openclaw-image-phone.mjs --mode edit",
     "phone:agent": "node scripts/openclaw-phone-agent.mjs",
     "phone:video": "node scripts/openclaw-phone-video.mjs",
     "phone:vision": "node scripts/openclaw-phone-vision.mjs",

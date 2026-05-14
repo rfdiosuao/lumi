@@ -1,8 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 
 let bridgeStartup: Promise<void> | null = null;
-const BRIDGE_STARTUP_RETRIES = 80;
-const BRIDGE_STARTUP_INTERVAL_MS = 250;
+const BRIDGE_STARTUP_RETRIES = 480;
+const BRIDGE_STARTUP_INTERVAL_MS = 500;
 
 async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) {
   const currentPort = await invoke<number>('get_bridge_port');
@@ -16,7 +16,7 @@ async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string
         if (port > 0) return;
         await new Promise((resolve) => setTimeout(resolve, BRIDGE_STARTUP_INTERVAL_MS));
       }
-      throw new Error('Bridge 启动超时');
+      throw new Error('Bridge 启动超时，请到环境诊断里查看 Bridge 启动失败快照');
     })().finally(() => {
       bridgeStartup = null;
     });
@@ -72,15 +72,70 @@ export async function api<T = unknown>(path: string, method: string = 'GET', bod
 }
 
 // === Process API ===
+export interface ProcessStatus {
+  running: boolean;
+  processAlive?: boolean;
+  starting?: boolean;
+  startupState?: 'idle' | 'starting' | 'running' | 'failed' | string;
+  startupElapsedSec?: number;
+  startupTimeoutSec?: number;
+  startupError?: string;
+  pid: number | null;
+  portReady?: boolean;
+  status?: string;
+}
+
 export const processApi = {
-  start: () => api('/api/process/start', 'POST'),
+  start: (): Promise<ProcessStatus> => api('/api/process/start', 'POST'),
   stop: () => api('/api/process/stop', 'POST'),
-  status: (): Promise<{ running: boolean; pid: number | null }> => api('/api/process/status'),
+  status: (): Promise<ProcessStatus> => api('/api/process/status'),
 };
 
+export interface WaitForProcessReadyOptions {
+  timeoutMs?: number;
+  intervalMs?: number;
+  onProgress?: (status: ProcessStatus) => void;
+}
+
+export async function waitForProcessReady(options: WaitForProcessReadyOptions = {}): Promise<ProcessStatus> {
+  const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
+  const intervalMs = options.intervalMs ?? 1500;
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus: ProcessStatus | null = null;
+
+  while (Date.now() < deadline) {
+    const status = await processApi.status();
+    lastStatus = status;
+    options.onProgress?.(status);
+
+    if (status.running) {
+      return status;
+    }
+
+    if (status.startupState === 'failed' || (!status.processAlive && !status.starting && status.startupError)) {
+      throw { error: status.startupError || 'OpenClaw 启动失败' };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  if (lastStatus?.processAlive || lastStatus?.starting) {
+    return lastStatus;
+  }
+
+  throw { error: 'OpenClaw 启动超时，进程没有保持运行，请导出诊断包查看失败快照' };
+}
+
 // === Log API ===
+export interface LogResponse {
+  log: string;
+  offset: number;
+  total?: number;
+  reset?: boolean;
+}
+
 export const logApi = {
-  get: (): Promise<{ log: string }> => api('/api/log/get'),
+  get: (offset: number = 0): Promise<LogResponse> => api(`/api/log/get?offset=${Math.max(0, offset)}`),
   clear: () => api('/api/log/clear', 'POST'),
 };
 
@@ -100,7 +155,11 @@ export const imageApi = {
     size: string;
     count?: number;
     editImagePath?: string;
-  }): Promise<{ images: string[]; count: number }> =>
+  }): Promise<{
+    images: string[];
+    count: number;
+    files?: Array<{ path: string; directory: string; filename: string; size: number; mime?: string }>;
+  }> =>
     api('/api/image/generate', 'POST', params),
 };
 
@@ -199,8 +258,76 @@ export interface DiagnosticExportResult {
 
 export const diagnosticsApi = {
   run: (): Promise<DiagnosticReport> => api('/api/diagnostics/run'),
+  bridgeStartupReport: (): Promise<DiagnosticReport> => invoke<DiagnosticReport>('bridge_startup_report'),
   repair: (): Promise<DiagnosticRepairResult> => api('/api/diagnostics/repair', 'POST'),
   export: (): Promise<DiagnosticExportResult> => api('/api/diagnostics/export', 'POST'),
+};
+
+// === Desktop Agent API ===
+export interface DesktopAgentConfig {
+  enabled: boolean;
+  agentDir: string;
+  resolvedAgentDir?: string;
+  port: number;
+  tokenAvailable?: boolean;
+  tokenPreview?: string;
+  appType: 'weixin' | 'wework' | string;
+  autoStartHttpApi: boolean;
+  policy?: {
+    allowScreenshot: boolean;
+    allowClick: boolean;
+    allowType: boolean;
+    allowWechatSend: boolean;
+    requireConfirmForClick: boolean;
+    requireConfirmForType: boolean;
+    requireConfirmForSend: boolean;
+    blockedWindowKeywords: string[];
+  };
+  capture?: {
+    format: string;
+    quality: number;
+    maxWidth: number;
+  };
+  action?: {
+    clickDelayMs: number;
+    typeDelayMs: number;
+    timeoutMs: number;
+  };
+  wechat?: {
+    sendMode: string;
+    detectUnreadMode: string;
+  };
+  configPath?: string;
+}
+
+export interface DesktopAgentStatus {
+  configured: boolean;
+  present: boolean;
+  running: boolean;
+  pid: number | null;
+  apiReady: boolean;
+  health?: Record<string, unknown>;
+  command?: string[];
+  config: DesktopAgentConfig;
+}
+
+export const desktopAgentApi = {
+  status: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/status'),
+  config: (config: Partial<DesktopAgentConfig>): Promise<{ config: DesktopAgentConfig }> =>
+    api('/api/desktop-agent/config', 'POST', config as Record<string, unknown>),
+  start: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/start', 'POST'),
+  stop: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/stop', 'POST'),
+  health: (): Promise<Record<string, unknown>> => api('/api/desktop-agent/health'),
+  screenshot: (): Promise<{ success?: boolean; screenshot?: string; error?: string }> =>
+    api('/api/desktop-agent/screenshot', 'POST'),
+  click: (x: number, y: number, confirmed = false): Promise<Record<string, unknown>> =>
+    api('/api/desktop-agent/click', 'POST', { x, y, confirmed }),
+  type: (text: string, confirmed = false): Promise<Record<string, unknown>> =>
+    api('/api/desktop-agent/type', 'POST', { text, confirmed }),
+  wechatUnread: (): Promise<Record<string, unknown>> =>
+    api('/api/desktop-agent/wechat/unread', 'POST'),
+  wechatSend: (text: string, confirmed = false): Promise<Record<string, unknown>> =>
+    api('/api/desktop-agent/wechat/send', 'POST', { text, confirmed }),
 };
 
 // === Skills API ===

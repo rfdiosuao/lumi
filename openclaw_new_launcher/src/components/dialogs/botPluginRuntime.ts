@@ -27,11 +27,13 @@ export function normalizeCommandOutput(data: unknown): string {
 }
 
 export function buildChannelConfig(channel: BotChannel, idValue: string, secretValue: string) {
+  const domain = channel.key === 'feishu' ? 'feishu' : channel.configKey;
+
   return {
     enabled: true,
     appId: idValue,
     appSecret: secretValue,
-    domain: channel.configKey,
+    domain,
     connectionMode: 'websocket',
     requireMention: channel.key === 'feishu',
     dmPolicy: 'open',

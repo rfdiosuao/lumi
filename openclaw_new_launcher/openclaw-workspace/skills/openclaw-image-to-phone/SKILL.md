@@ -41,7 +41,13 @@ If any condition is false, save the image locally and provide a retry command.
 npm run phone:image -- --image <image-path> --album <album>
 ```
 
-6. Report the local path and phone path.
+6. For image-to-image editing, use:
+
+```powershell
+npm run phone:image:edit -- --reference-image <image-path> --prompt "<edit instruction>" --album <album>
+```
+
+7. Report the local path and phone path.
 
 ## Output Format
 

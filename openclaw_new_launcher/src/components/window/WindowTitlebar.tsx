@@ -4,7 +4,13 @@ import logoImg from '../../assets/logo.png';
 import { BrandLogo } from '../common';
 import { useTheme } from '../../hooks/useTheme';
 
-const appWindow = getCurrentWindow();
+const appWindow = (() => {
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
+})();
 
 const WindowButton: React.FC<{
   label: string;
@@ -35,7 +41,7 @@ export const WindowTitlebar: React.FC = () => {
   const brandLogo = logoUrl || logoImg;
 
   const toggleMaximize = () => {
-    appWindow.toggleMaximize().catch(() => {});
+    appWindow?.toggleMaximize().catch(() => {});
   };
 
   return (
@@ -58,9 +64,9 @@ export const WindowTitlebar: React.FC = () => {
 
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-end bg-surface px-3">
         <div className="flex items-center gap-1">
-          <WindowButton title="最小化" label="-" onClick={() => appWindow.minimize()} />
-          <WindowButton title="最大化/还原" label="□" onClick={toggleMaximize} />
-          <WindowButton title="关闭" label="×" danger onClick={() => appWindow.close()} />
+          <WindowButton title="Minimize" label="-" onClick={() => appWindow?.minimize()} />
+          <WindowButton title="Maximize / Restore" label="[]" onClick={toggleMaximize} />
+          <WindowButton title="Close" label="x" danger onClick={() => appWindow?.close()} />
         </div>
       </div>
     </div>

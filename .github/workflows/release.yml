@@ -10,6 +10,22 @@ on:
         description: "Release tag to create or update"
         required: true
         type: string
+      portable_seed_tag:
+        description: "Optional previous release tag used as portable seed"
+        required: false
+        type: string
+      phone_agent_apk_url:
+        description: "Optional AgentPhone_latest.apk download URL"
+        required: false
+        type: string
+      phone_agent_version:
+        description: "Optional phone agent versionName, for example 6.23"
+        required: false
+        type: string
+      phone_agent_version_code:
+        description: "Optional phone agent versionCode, for example 830"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -69,6 +85,14 @@ jobs:
       - name: Verify source text
         run: powershell -ExecutionPolicy Bypass -File scripts\verify-source-text.ps1
 
+      - name: Verify version consistency
+        env:
+          RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+        run: powershell -ExecutionPolicy Bypass -File scripts\verify-version-consistency.ps1 -TagName $env:RELEASE_TAG
+
+      - name: Prepare WebView2 runtime
+        run: powershell -ExecutionPolicy Bypass -File scripts\download-webview2-runtime.ps1
+
       - name: Build frontend
         working-directory: openclaw_new_launcher
         run: npm run build
@@ -80,6 +104,104 @@ jobs:
       - name: Build Tauri bundles
         working-directory: openclaw_new_launcher
         run: npm run tauri -- build
+
+      - name: Prepare portable seed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PORTABLE_SEED_TAG: ${{ inputs.portable_seed_tag || '' }}
+        run: |
+          $seedRoot = Join-Path $PWD "ci_seed"
+          $downloadDir = Join-Path $seedRoot "download"
+          $extractDir = Join-Path $seedRoot "extract"
+          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+
+          $downloadArgs = @("release", "download", "--repo", $env:GITHUB_REPOSITORY, "--pattern", "OpenClaw-Portable-*.zip", "--dir", $downloadDir)
+          if (-not [string]::IsNullOrWhiteSpace($env:PORTABLE_SEED_TAG)) {
+            $downloadArgs = @("release", "download", $env:PORTABLE_SEED_TAG, "--repo", $env:GITHUB_REPOSITORY, "--pattern", "OpenClaw-Portable-*.zip", "--dir", $downloadDir)
+          }
+
+          gh @downloadArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to download previous portable seed. Set workflow input portable_seed_tag or publish one OpenClaw-Portable-*.zip first."
+          }
+
+          $seedZip = Get-ChildItem -LiteralPath $downloadDir -File -Filter "OpenClaw-Portable-*.zip" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $seedZip) {
+            throw "No OpenClaw-Portable-*.zip seed was downloaded."
+          }
+
+          Expand-Archive -LiteralPath $seedZip.FullName -DestinationPath $extractDir -Force
+
+          $seedCandidates = @()
+          $seedCandidates += Get-ChildItem -LiteralPath $extractDir -Directory -ErrorAction SilentlyContinue
+          $seedCandidates += Get-Item -LiteralPath $extractDir
+          $seedDir = $seedCandidates |
+            Where-Object {
+              (Test-Path -LiteralPath (Join-Path $_.FullName "OpenClaw.exe")) -or
+              (Test-Path -LiteralPath (Join-Path $_.FullName "OpenClawFiles")) -or
+              (Test-Path -LiteralPath (Join-Path $_.FullName "node\node.exe"))
+            } |
+            Select-Object -First 1
+
+          if (-not $seedDir) {
+            throw "Downloaded seed zip does not look like an OpenClaw portable package: $($seedZip.FullName)"
+          }
+
+          "PORTABLE_SEED_DIR=$($seedDir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Portable seed: $($seedZip.Name) -> $($seedDir.FullName)"
+
+      - name: Prepare phone agent APK
+        env:
+          PHONE_AGENT_APK_URL: ${{ inputs.phone_agent_apk_url || vars.PHONE_AGENT_APK_URL || '' }}
+          PHONE_AGENT_APK_SHA256: ${{ vars.PHONE_AGENT_APK_SHA256 || '' }}
+        run: |
+          $apkPath = Join-Path $PWD "openclaw_new_launcher\AgentPhone_latest.apk"
+          if (-not [string]::IsNullOrWhiteSpace($env:PHONE_AGENT_APK_URL)) {
+            Write-Host "Downloading AgentPhone_latest.apk from configured URL..."
+            Invoke-WebRequest -Uri $env:PHONE_AGENT_APK_URL -OutFile $apkPath
+          }
+
+          if (-not (Test-Path -LiteralPath $apkPath)) {
+            throw "AgentPhone_latest.apk is missing. Commit the APK artifact or provide workflow input phone_agent_apk_url / repository variable PHONE_AGENT_APK_URL."
+          }
+
+          $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $apkPath
+          Write-Host "AgentPhone_latest.apk SHA256: $($hash.Hash)"
+          if (-not [string]::IsNullOrWhiteSpace($env:PHONE_AGENT_APK_SHA256) -and $hash.Hash -ne $env:PHONE_AGENT_APK_SHA256) {
+            throw "AgentPhone_latest.apk SHA256 mismatch. Expected $env:PHONE_AGENT_APK_SHA256, got $($hash.Hash)."
+          }
+
+      - name: Build portable package
+        env:
+          RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+          PHONE_AGENT_VERSION: ${{ inputs.phone_agent_version || vars.PHONE_AGENT_VERSION || '' }}
+          PHONE_AGENT_VERSION_CODE: ${{ inputs.phone_agent_version_code || vars.PHONE_AGENT_VERSION_CODE || '0' }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          $version = $tag -replace '^v', ''
+          $date = Get-Date -Format "yyyy.MM.dd"
+          $packageName = "OpenClaw-Portable-$tag-$date"
+
+          $args = @(
+            "-ExecutionPolicy", "Bypass",
+            "-File", "scripts\build-portable.ps1",
+            "-Version", $version,
+            "-PackageName", $packageName,
+            "-SeedPortableDir", $env:PORTABLE_SEED_DIR,
+            "-BrandProfile", "lumi",
+            "-SkipBuild"
+          )
+          if (-not [string]::IsNullOrWhiteSpace($env:PHONE_AGENT_VERSION)) {
+            $args += @("-PhoneAgentVerifiedVersion", $env:PHONE_AGENT_VERSION)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:PHONE_AGENT_VERSION_CODE) -and $env:PHONE_AGENT_VERSION_CODE -ne "0") {
+            $args += @("-PhoneAgentVerifiedVersionCode", $env:PHONE_AGENT_VERSION_CODE)
+          }
+
+          & powershell @args
 
       - name: Collect release assets
         run: |
@@ -97,15 +219,58 @@ jobs:
               Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $artifactDir $_.Name) -Force
             }
 
+          Get-ChildItem -LiteralPath (Join-Path $PWD "release") -File -Filter "OpenClaw-Portable-*.zip*" |
+            ForEach-Object {
+              Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $artifactDir $_.Name) -Force
+            }
+
           $files = @(Get-ChildItem -LiteralPath $artifactDir -File)
           if ($files.Count -eq 0) {
             throw "No release assets were collected from $bundleDir"
           }
 
-          foreach ($file in $files) {
+          foreach ($file in ($files | Where-Object { $_.Name -notlike "*.sha256.txt" })) {
             $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName
             "$($hash.Hash)  $($file.Name)" | Set-Content -LiteralPath "$($file.FullName).sha256.txt" -Encoding ASCII
           }
+
+      - name: Generate Chinese release notes
+        env:
+          RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          $artifactDir = Join-Path $PWD "ci_artifacts"
+          $releaseDir = Join-Path $PWD "ci_release"
+          New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+          $bodyPath = Join-Path $releaseDir "RELEASE_BODY.md"
+          $commit = git rev-parse --short HEAD
+
+          $assetLines = Get-ChildItem -LiteralPath $artifactDir -File |
+            Where-Object { $_.Name -notlike "*.sha256.txt" } |
+            Sort-Object Name |
+            ForEach-Object {
+              $hashFile = "$($_.FullName).sha256.txt"
+              $hashText = if (Test-Path -LiteralPath $hashFile) { (Get-Content -LiteralPath $hashFile -Raw).Trim() } else { "未生成 SHA256" }
+              "- `$($_.Name)`：$hashText"
+            }
+
+          @"
+          OpenClaw 启动器发布 $env:RELEASE_TAG
+
+          构建提交：$commit
+
+          更新内容：
+          - 本次发布由 GitHub Actions 自动构建并上传安装包、便携包和 SHA256 校验文件。
+          - 便携包发布前已执行 `verify-release.ps1`，检查文件完整性、运行时上下文和敏感配置残留。
+          - 手机 Agent 附件会随便携包进入 `OpenClawFiles\releases\agent-phone`。
+
+          附件校验：
+          $($assetLines -join "`n")
+
+          使用说明：
+          - 普通安装优先下载安装包。
+          - U 盘/免安装交付请下载 `OpenClaw-Portable-*.zip`，解压后运行 `OpenClaw.exe`。
+          - 下载后建议对照 `.sha256.txt` 校验文件完整性。
+          "@ | Set-Content -LiteralPath $bodyPath -Encoding UTF8
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -120,5 +285,10 @@ jobs:
           name: Lumi / OpenClaw ${{ inputs.tag_name || github.ref_name }}
           draft: false
           prerelease: false
-          generate_release_notes: true
-          files: ci_artifacts/*
+          generate_release_notes: false
+          body_path: ci_release/RELEASE_BODY.md
+          files: |
+            ci_artifacts/*.exe
+            ci_artifacts/*.msi
+            ci_artifacts/*.zip
+            ci_artifacts/*.sha256.txt
