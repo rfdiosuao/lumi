@@ -1,10 +1,11 @@
 param(
     [string]$Root = (Get-Location).Path,
     [string]$LauncherExe = "OpenClaw.exe",
-    [int]$TimeoutSec = 600,
-    [int]$PollMs = 500,
-    [switch]$StopAfterMeasure,
-    [string]$OutputPath = ""
+[int]$TimeoutSec = 600,
+[int]$PollMs = 500,
+[switch]$StopAfterMeasure,
+[string]$OutputPath = "",
+[int]$BudgetMs = 30000
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +58,8 @@ if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
     $argsList += "--output-path"
     $argsList += $OutputPath
 }
+$argsList += "--budget-ms"
+$argsList += $BudgetMs
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $pythonExe

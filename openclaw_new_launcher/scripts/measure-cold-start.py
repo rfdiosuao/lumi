@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-sec", type=int, default=600, help="Startup timeout in seconds")
     parser.add_argument("--stop-after-measure", action="store_true", help="Stop process after measurement")
     parser.add_argument("--output-path", default="", help="Where to write JSON output")
+    parser.add_argument("--budget-ms", type=int, default=30000, help="Expected cold-start budget in milliseconds")
     return parser.parse_args()
 
 
@@ -63,6 +65,45 @@ def read_json_if_exists(path: Path) -> dict:
         return {}
 
 
+def machine_profile() -> dict:
+    profile = {
+        "platform": platform.platform(),
+        "system": platform.system(),
+        "release": platform.release(),
+        "version": platform.version(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "cpuCount": os.cpu_count(),
+    }
+    if os.name == "nt":
+        try:
+            import ctypes
+            import ctypes.wintypes as wintypes
+
+            class MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", wintypes.DWORD),
+                    ("dwMemoryLoad", wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            mem = MemoryStatusEx()
+            mem.dwLength = ctypes.sizeof(MemoryStatusEx)
+            if kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+                profile["totalMemoryBytes"] = int(mem.ullTotalPhys)
+                profile["availableMemoryBytes"] = int(mem.ullAvailPhys)
+        except Exception:
+            pass
+    return profile
+
+
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
@@ -88,7 +129,9 @@ def main() -> int:
         "root": str(root),
         "pythonRoot": str(discover_python_root(root)),
         "snapshotPath": str(snapshot_path),
+        "budgetMs": args.budget_ms,
         "measuredColdStartMs": elapsed_ms,
+        "coldStartVerdict": "pass" if elapsed_ms <= args.budget_ms else "warn",
         "startupState": status.get("startupState"),
         "startupElapsedSec": status.get("startupElapsedSec"),
         "startupTimeoutSec": status.get("startupTimeoutSec"),
@@ -98,6 +141,7 @@ def main() -> int:
         "portReady": status.get("portReady"),
         "running": status.get("running"),
         "processAlive": status.get("processAlive"),
+        "machine": machine_profile(),
         "snapshot": snapshot,
         "logsTail": logs[-40:],
     }
