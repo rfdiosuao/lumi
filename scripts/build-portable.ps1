@@ -256,6 +256,36 @@ function Get-NodeRuntimeDir {
     return $nodeExe.Directory.FullName
 }
 
+function Get-PythonRuntimeDir {
+    $pythonCommand = Get-Command python -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($pythonCommand.Source)) {
+        throw "Unable to resolve python runtime path from PATH."
+    }
+
+    $pythonExe = Get-Item -LiteralPath $pythonCommand.Source
+    return $pythonExe.Directory.FullName
+}
+
+function Copy-PythonRuntime {
+    param([string]$PackageDir)
+
+    $target = Join-Path $PackageDir "_up_\python-runtime"
+    if (Test-Path -LiteralPath (Join-Path $target "python.exe")) {
+        return
+    }
+
+    Remove-SafePath $target
+    Copy-Directory `
+        -Source (Get-PythonRuntimeDir) `
+        -Destination $target `
+        -ExcludeDirs @("__pycache__", "site-packages") `
+        -ExcludeFiles @("*.pyc", "*.pyo")
+
+    if (-not (Test-Path -LiteralPath (Join-Path $target "python.exe"))) {
+        throw "Python runtime bootstrap did not create required file: $target\python.exe"
+    }
+}
+
 function Write-PortableStartJs {
     param([string]$PackageDir)
 
@@ -413,6 +443,7 @@ function Resolve-PhoneAgentVersionInfo {
     $resolvedVersion = $PhoneAgentVerifiedVersion.Trim()
     $resolvedCode = $PhoneAgentVerifiedVersionCode
     $latestApk = Join-Path $LauncherDir "AgentPhone_latest.apk"
+    $sourceRuntimeContext = Join-Path $LauncherDir "openclaw-workspace\runtime-context.json"
 
     if (Test-Path -LiteralPath $latestApk) {
         $latestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $latestApk).Hash
@@ -436,17 +467,30 @@ function Resolve-PhoneAgentVersionInfo {
     }
 
     if ([string]::IsNullOrWhiteSpace($resolvedVersion)) {
-        Write-Warning "Unable to infer phone agent verified version. Pass -PhoneAgentVerifiedVersion during release packaging."
-        $resolvedVersion = "unknown"
+        if (Test-Path -LiteralPath $sourceRuntimeContext) {
+            $sourceContext = Get-Content -LiteralPath $sourceRuntimeContext -Raw | ConvertFrom-Json
+            $sourcePhoneAgent = $sourceContext.capabilities.phoneAgent
+            $resolvedVersion = [string]$sourcePhoneAgent.verifiedVersion
+            if ($resolvedCode -le 0) {
+                try {
+                    $resolvedCode = [int]$sourcePhoneAgent.verifiedVersionCode
+                } catch {
+                    $resolvedCode = 0
+                }
+            }
+        }
     }
 
-    if ($resolvedCode -le 0 -and $resolvedVersion -ne "unknown") {
+    if ([string]::IsNullOrWhiteSpace($resolvedVersion) -or $resolvedVersion -eq "unknown") {
+        throw "Unable to resolve phone agent verified version. Pass -PhoneAgentVerifiedVersion or update openclaw-workspace\runtime-context.json."
+    }
+
+    if ($resolvedCode -le 0) {
         $resolvedCode = Get-PhoneAgentVersionCodeFromVersion -VersionName $resolvedVersion
     }
 
     if ($resolvedCode -le 0) {
-        Write-Warning "Unable to infer phone agent verified versionCode. Pass -PhoneAgentVerifiedVersionCode during release packaging."
-        $resolvedCode = $null
+        throw "Unable to resolve phone agent verified versionCode. Pass -PhoneAgentVerifiedVersionCode or update openclaw-workspace\runtime-context.json."
     }
 
     return [pscustomobject]@{
@@ -1016,6 +1060,7 @@ Invoke-Step "Create portable directory" {
     Remove-SafePath (Join-Path $packageDir "data")
     Remove-SafePath (Join-Path $packageDir "_up_\python")
     Remove-SafePath (Join-Path $packageDir "_up_\data")
+    Remove-SafePath (Join-Path $packageDir "_up_\python-runtime")
 
     Copy-Directory `
         -Source (Join-Path $LauncherDir "python") `
@@ -1023,6 +1068,7 @@ Invoke-Step "Create portable directory" {
         -ExcludeDirs @("__pycache__") `
         -ExcludeFiles @("*.pyc", "*.pyo")
 
+    Copy-PythonRuntime -PackageDir $packageDir
     Install-PythonBridgeDependencies -PackageDir $packageDir
 
     Copy-ThemeBundle -PackageDir $packageDir -ThemeId $brand.ThemeId
