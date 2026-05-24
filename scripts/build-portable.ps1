@@ -29,7 +29,11 @@ function Invoke-Step {
 
     Write-Host ""
     Write-Host "==> $Name" -ForegroundColor Cyan
+    $global:LASTEXITCODE = 0
     & $Script
+    if ($global:LASTEXITCODE -ne 0) {
+        throw "Step failed with exit code $global:LASTEXITCODE: $Name"
+    }
     Write-Host "OK: $Name" -ForegroundColor Green
 }
 
@@ -235,10 +239,125 @@ function Find-SeedPortableDir {
 
     $seed = $candidates | Select-Object -First 1
     if (-not $seed) {
-        throw "No usable seed portable directory found under $ReleaseDir"
+        Write-Warning "No usable seed portable directory found under $ReleaseDir; falling back to bootstrap package layout."
+        return $null
     }
 
     return $seed.FullName
+}
+
+function Get-NodeRuntimeDir {
+    $nodeCommand = Get-Command node -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($nodeCommand.Source)) {
+        throw "Unable to resolve node runtime path from PATH."
+    }
+
+    $nodeExe = Get-Item -LiteralPath $nodeCommand.Source
+    return $nodeExe.Directory.FullName
+}
+
+function Write-PortableStartJs {
+    param([string]$PackageDir)
+
+    $content = @"
+import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const openclaw = path.join(__dirname, 'node_modules', 'openclaw', 'openclaw.mjs');
+const port = process.env.OPENCLAW_GATEWAY_PORT || '18790';
+const child = spawn(process.execPath, [
+  openclaw,
+  'gateway',
+  '--port',
+  port,
+  '--bind',
+  'loopback',
+  '--auth',
+  'none',
+  '--allow-unconfigured',
+], {
+  cwd: __dirname,
+  env: process.env,
+  stdio: 'inherit',
+  windowsHide: true,
+});
+
+child.on('exit', (code, signal) => {
+  if (signal) {
+    console.log(`[OpenClaw] gateway stopped by ${signal}`);
+  }
+  process.exit(code ?? 0);
+});
+
+child.on('error', (error) => {
+  console.error('[OpenClaw] failed to start gateway:', error);
+  process.exit(1);
+});
+"@
+
+    Set-Content -LiteralPath (Join-Path $PackageDir "start.js") -Value $content -Encoding UTF8
+}
+
+function Write-PortableRuntimePackageJson {
+    param([string]$PackageDir)
+
+    $packageJson = [ordered]@{
+        type = "module"
+        version = $Version
+        scripts = [ordered]@{
+            start = "node start.js"
+        }
+        dependencies = [ordered]@{
+            "@larksuite/openclaw-lark" = "2026.5.20"
+            "@tencent-weixin/openclaw-weixin" = "2.4.4"
+            openclaw = "2026.5.5"
+        }
+    }
+
+    $packageJson |
+        ConvertTo-Json -Depth 10 |
+        Set-Content -LiteralPath (Join-Path $PackageDir "package.json") -Encoding UTF8
+}
+
+function Install-PortableRuntimeNodeModules {
+    param([string]$PackageDir)
+
+    Push-Location $PackageDir
+    try {
+        npm install --omit=dev --ignore-scripts --no-audit --fund=false
+    } finally {
+        Pop-Location
+    }
+
+    foreach ($required in @(
+        "node_modules\openclaw\openclaw.mjs",
+        "node_modules\@larksuite\openclaw-lark\package.json",
+        "node_modules\@tencent-weixin\openclaw-weixin\package.json",
+        "package-lock.json"
+    )) {
+        $path = Join-Path $PackageDir $required
+        if (-not (Test-Path -LiteralPath $path)) {
+            throw "Portable runtime bootstrap did not create required file: $path"
+        }
+    }
+}
+
+function Initialize-PortableBootstrap {
+    param([string]$PackageDir)
+
+    New-Item -ItemType Directory -Path $PackageDir -Force | Out-Null
+
+    Copy-Directory -Source (Get-NodeRuntimeDir) -Destination (Join-Path $PackageDir "node")
+
+    if (-not (Test-Path -LiteralPath (Join-Path $PackageDir ".npmrc"))) {
+        Set-Content -LiteralPath (Join-Path $PackageDir ".npmrc") -Value @("fund=false", "audit=false") -Encoding ASCII
+    }
+
+    Write-PortableRuntimePackageJson -PackageDir $PackageDir
+    Write-PortableStartJs -PackageDir $PackageDir
+    Install-PortableRuntimeNodeModules -PackageDir $PackageDir
 }
 
 function Find-TauriExe {
@@ -776,6 +895,7 @@ function Install-BundledBotPlugins {
     }
 
     $pkg = Get-Content -LiteralPath $pkgJsonPath -Raw | ConvertFrom-Json
+    Set-JsonProperty -Object $pkg -Name "version" -Value $Version
     if (-not $pkg.dependencies) {
         Set-JsonProperty -Object $pkg -Name "dependencies" -Value ([pscustomobject]@{})
     }
@@ -884,7 +1004,11 @@ Invoke-Step "Create portable directory" {
     Remove-SafePath $zipPath
     Remove-SafePath $hashPath
 
-    Copy-Directory -Source $seedDir -Destination $packageDir
+    if ($seedDir) {
+        Copy-Directory -Source $seedDir -Destination $packageDir
+    } else {
+        Initialize-PortableBootstrap -PackageDir $packageDir
+    }
     Expand-PortablePayloadForBuild -PackageDir $packageDir
     Remove-LegacyNestedLaunchers -PackageDir $packageDir
     Copy-Item -LiteralPath $tauriExe -Destination (Join-Path $packageDir "OpenClaw.exe") -Force

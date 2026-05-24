@@ -498,7 +498,12 @@ if ($null -ne $script:PackageJsonVersion -and $null -ne $script:RuntimeContextLa
 }
 
 if ($null -ne $script:LauncherRuntimePackageName) {
-    $packageName = [System.IO.Path]::GetFileNameWithoutExtension($item.Name)
+    $packageName = if ($item.PSIsContainer) {
+        $item.Name
+    }
+    else {
+        [System.IO.Path]::GetFileNameWithoutExtension($item.Name)
+    }
     if ($script:LauncherRuntimePackageName -ne $packageName) {
         $errors.Add("launcher_runtime.json packageName mismatch: launcher_runtime.json=$($script:LauncherRuntimePackageName), archive=$packageName")
     }

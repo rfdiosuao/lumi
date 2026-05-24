@@ -123,14 +123,18 @@ jobs:
 
           gh @downloadArgs
           if ($LASTEXITCODE -ne 0) {
-            throw "Unable to download previous portable seed. Set workflow input portable_seed_tag or publish one OpenClaw-Portable-*.zip first."
+            Write-Warning "Unable to download previous portable seed. The portable build will bootstrap runtime dependencies instead."
+            "PORTABLE_SEED_DIR=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            return
           }
 
           $seedZip = Get-ChildItem -LiteralPath $downloadDir -File -Filter "OpenClaw-Portable-*.zip" |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
           if (-not $seedZip) {
-            throw "No OpenClaw-Portable-*.zip seed was downloaded."
+            Write-Warning "No OpenClaw-Portable-*.zip seed was downloaded. The portable build will bootstrap runtime dependencies instead."
+            "PORTABLE_SEED_DIR=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            return
           }
 
           Expand-Archive -LiteralPath $seedZip.FullName -DestinationPath $extractDir -Force
@@ -147,7 +151,9 @@ jobs:
             Select-Object -First 1
 
           if (-not $seedDir) {
-            throw "Downloaded seed zip does not look like an OpenClaw portable package: $($seedZip.FullName)"
+            Write-Warning "Downloaded seed zip does not look like an OpenClaw portable package: $($seedZip.FullName). The portable build will bootstrap runtime dependencies instead."
+            "PORTABLE_SEED_DIR=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            return
           }
 
           "PORTABLE_SEED_DIR=$($seedDir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
