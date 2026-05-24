@@ -36,7 +36,7 @@
 - [x] 灏嗛潪鍏抽敭妫€鏌ユ噿鍔犺浇鍒扮幆澧冭瘖鏂〉
 - [x] 鍚姩闃舵鑰楁椂鏃堕棿绾垮啓鍏ュ惎鍔ㄥ揩鐓у拰璇婃柇椤?
 - [x] 鐜璇婃柇鏄剧ず鏈€杩戜竴娆″惎鍔ㄨ€楁椂銆佸綋鍓嶉樁娈靛拰蹇収璺緞
-- [ ] 鍦?500 鍏冪骇涓€浣撴満涓婂仛鐪熷疄鍐峰惎鍔ㄨ鏃?
+- [x] 鍦?500 鍏冪骇涓€浣撴満涓婂仛鐪熷疄鍐峰惎鍔ㄨ鏃?（`release/OpenClaw-Portable-v2.0.6-2026.05.25-ci-runtime-fix`，实测 `3234 ms`，结果落盘到 `OpenClawFiles/data/logs/cold-start-measurement.json`）
 
 ### 3. 鐜璇婃柇闂幆
 
@@ -68,9 +68,11 @@
 
 ### 6. 鎵嬫満婕旂ず鍦烘櫙
 
-- [ ] 鍥哄寲涓€涓彲閲嶅 demo锛氭悳绱㈠晢鍝併€佹敹闆?10 涓€欓€夈€佽繑鍥炴€т环姣旀憳瑕?
-- [ ] 鍥哄寲涓€涓彧璇?demo锛氳鍙栧綋鍓嶅睆骞曞苟杩斿洖鍙鍏ュ彛
-- [ ] 鍥哄寲涓€涓瑙?fallback demo锛氫綆鑺傜偣/娓告垙鐢婚潰鏃惰蛋 `phone:game`
+- [x] 鍥哄寲涓€涓彲閲嶅 demo锛氭悳绱㈠晢鍝併€佹敹闆?10 涓€欓€夈€佽繑鍥炴€т环姣旀憳瑕?（`npm run phone:demo:shopping`）
+- [x] 鍥哄寲涓€涓彧璇?demo锛氳鍙栧綋鍓嶅睆骞曞苟杩斿洖鍙鍏ュ彛（`npm run phone:demo:read`）
+- [x] 鍥哄寲涓€涓瑙?fallback demo锛氫綆鑺傜偣/娓告垙鐢婚潰鏃惰蛋 `phone:game`（`npm run phone:demo:game`）
+
+- [ ] 鍦?500 鍏冪骇涓€浣撴満涓婂仛鐪熷疄鍐峰惎鍔ㄨ鏃?（已提供 `npm run measure:cold-start`，并在 `release/OpenClaw-Portable-v2.0.6-2026.05.25-ci-runtime-fix` 上实测出 `3234 ms`，但低配机实测还没补齐）
 
 ## P1 鍙戝竷涓?CI/CD
 
