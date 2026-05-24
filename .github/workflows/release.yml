@@ -171,7 +171,8 @@ jobs:
           }
 
           if (-not (Test-Path -LiteralPath $apkPath)) {
-            throw "AgentPhone_latest.apk is missing. Commit the APK artifact or provide workflow input phone_agent_apk_url / repository variable PHONE_AGENT_APK_URL."
+            Write-Warning "AgentPhone_latest.apk is missing. Portable package will be built without bundled phone APK."
+            return
           }
 
           $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $apkPath
@@ -259,24 +260,25 @@ jobs:
               "- `$($_.Name)`：$hashText"
             }
 
-          @"
-          OpenClaw 启动器发布 $env:RELEASE_TAG
-
-          构建提交：$commit
-
-          更新内容：
-          - 本次发布由 GitHub Actions 自动构建并上传安装包、便携包和 SHA256 校验文件。
-          - 便携包发布前已执行 `verify-release.ps1`，检查文件完整性、运行时上下文和敏感配置残留。
-          - 手机 Agent 附件会随便携包进入 `OpenClawFiles\releases\agent-phone`。
-
-          附件校验：
-          $($assetLines -join "`n")
-
-          使用说明：
-          - 普通安装优先下载安装包。
-          - U 盘/免安装交付请下载 `OpenClaw-Portable-*.zip`，解压后运行 `OpenClaw.exe`。
-          - 下载后建议对照 `.sha256.txt` 校验文件完整性。
-          "@ | Set-Content -LiteralPath $bodyPath -Encoding UTF8
+          $body = @(
+            "OpenClaw 启动器发布 $env:RELEASE_TAG",
+            "",
+            "构建提交：$commit",
+            "",
+            "更新内容：",
+            "- 本次发布由 GitHub Actions 自动构建并上传安装包、便携包和 SHA256 校验文件。",
+            "- 便携包发布前已执行 ``verify-release.ps1``，检查文件完整性、运行时上下文和敏感配置残留。",
+            "- 如果配置了 ``PHONE_AGENT_APK_URL``，手机 Agent 附件会随便携包进入 ``OpenClawFiles\releases\agent-phone``；未配置时主包仍正常发布。",
+            "",
+            "附件校验：",
+            $($assetLines -join "`n"),
+            "",
+            "使用说明：",
+            "- 普通安装优先下载安装包。",
+            "- U 盘免安装交付请下载 ``OpenClaw-Portable-*.zip``，解压后运行 ``OpenClaw.exe``。",
+            "- 下载后建议对照 ``.sha256.txt`` 校验文件完整性。"
+          ) -join "`n"
+          Set-Content -LiteralPath $bodyPath -Value $body -Encoding UTF8
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
