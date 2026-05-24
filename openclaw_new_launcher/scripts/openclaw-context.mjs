@@ -257,12 +257,14 @@ async function buildContext(args) {
       generatedImages: path.join(root, 'data', 'generated-images'),
       phoneVideos: path.join(root, 'data', 'phone-videos'),
       scripts: path.join(root, 'scripts'),
-    imageToPhoneCli: path.join(root, 'scripts', 'openclaw-image-phone.mjs'),
-    phoneAgentCli: path.join(root, 'scripts', 'openclaw-phone-agent.mjs'),
-    phoneFleetCli: path.join(root, 'scripts', 'openclaw-phone-fleet.mjs'),
-    phoneVideoCli: path.join(root, 'scripts', 'openclaw-phone-video.mjs'),
+      imageToPhoneCli: path.join(root, 'scripts', 'openclaw-image-phone.mjs'),
+      phoneAgentCli: path.join(root, 'scripts', 'openclaw-phone-agent.mjs'),
+      phoneFleetCli: path.join(root, 'scripts', 'openclaw-phone-fleet.mjs'),
+      phoneVideoCli: path.join(root, 'scripts', 'openclaw-phone-video.mjs'),
       phoneGameCli: path.join(root, 'scripts', 'openclaw-phone-game.mjs'),
       phoneVerifier: path.join(root, 'scripts', 'verify-phone-agent.ps1'),
+      coldStartBenchmarkCli: path.join(root, 'scripts', 'measure-cold-start.ps1'),
+      phoneDemoCli: path.join(root, 'scripts', 'openclaw-phone-demo.mjs'),
     },
     capabilities: {
       imageGeneration: {
@@ -288,6 +290,9 @@ async function buildContext(args) {
         videoDownloadDir: path.join(root, 'data', 'phone-videos'),
         videoCli: 'npm run phone:video',
         gameModeCli: 'npm run phone:game',
+        shoppingDemoCli: 'npm run phone:demo:shopping -- --query "<search query>"',
+        readDemoCli: 'npm run phone:demo:read',
+        gameFallbackDemoCli: 'npm run phone:demo:game -- --goal "<goal>"',
         multiDevice: phoneFileConfig.devices.length > 1,
         defaultDeviceId: phoneFileConfig.selectedDeviceId || null,
         deviceCliArg: '--device-id <id>',
@@ -319,6 +324,7 @@ async function buildContext(args) {
       portableRuntime: {
         available: true,
         preferRelativePaths: true,
+        coldStartBenchmarkCli: 'npm run measure:cold-start -- --root <portable-root>',
       },
     },
     phone: {

@@ -56,6 +56,10 @@ The Android phone Agent currently supports:
 - signed game/vision mode frame capture through `npm run phone:vision`, including optional grid overlay and image-to-screen coordinate mapping;
 - productized game/canvas loop through `npm run phone:game`: APKClaw Agent probe, signed vision frame, OpenClaw visual plan, launcher safety guard, APKClaw Agent guided execution, and after-frame verification;
 - signed visual coordinate actions through `npm run phone:vision`; these now accept/return safety metadata and block obvious sensitive targets, but should still be used as debugging/fallback tools while the default path remains OpenClaw commanding APKClaw Agent through `npm run phone:agent`;
+- fixed demo wrappers for product search, read-only screen summaries, and game/canvas fallback:
+  - `npm run phone:demo:shopping`
+  - `npm run phone:demo:read`
+  - `npm run phone:demo:game`
 - wake screen without bypassing lock screen;
 - natural language Agent task execution;
 - safe task policies: `observe_only`, `safe_action`, `full_access`;
@@ -65,6 +69,7 @@ The Android phone Agent currently supports:
 - PC image generation, image-to-image editing, and Android gallery import through `npm run phone:image` / `npm run phone:image:edit`;
 - screen recording with Android MediaProjection user consent;
 - phone-to-PC recording list and MP4 download.
+- cold-start benchmark wrapper: `npm run measure:cold-start`.
 
 Current validated phone version target:
 

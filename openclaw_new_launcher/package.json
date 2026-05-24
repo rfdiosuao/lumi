@@ -14,6 +14,10 @@
     "phone:video": "node scripts/openclaw-phone-video.mjs",
     "phone:vision": "node scripts/openclaw-phone-vision.mjs",
     "phone:game": "node scripts/openclaw-phone-game.mjs",
+    "phone:demo:shopping": "node scripts/openclaw-phone-demo.mjs shopping",
+    "phone:demo:read": "node scripts/openclaw-phone-demo.mjs read",
+    "phone:demo:game": "node scripts/openclaw-phone-demo.mjs game",
+    "measure:cold-start": "powershell -ExecutionPolicy Bypass -File scripts/measure-cold-start.ps1",
     "openclaw:context": "node scripts/openclaw-context.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

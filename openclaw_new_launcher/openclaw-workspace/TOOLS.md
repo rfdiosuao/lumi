@@ -113,11 +113,20 @@ CLI helpers:
 
 ```powershell
 npm run phone:agent -- run --prompt "Search for budget headphones. Collect at most 10 visible product candidates using collect_list_items target=product, then return."
+npm run phone:demo:shopping -- --query "拼多多 好玩又有性价比的商品"
+npm run phone:demo:read
+npm run phone:demo:game -- --goal "inspect the current game/canvas screen safely"
 npm run phone:fleet -- list
 npm run phone:fleet -- status --target all
 npm run phone:fleet -- run --target all --prompt "Read the current screen on each phone and summarize visible app/page state." --mode observe
 npm run phone:vision -- frame --out .\data\phone-frames\frame.jpg
 npm run phone:vision -- action --force-action --action-body "{\"action\":\"tap\",\"gridCell\":\"C7\",\"targetLabel\":\"safe menu button\",\"reason\":\"debug one known safe tap\"}"
+```
+
+Cold-start benchmark:
+
+```powershell
+npm run measure:cold-start -- --root <portable-root>
 ```
 
 ## Context Files
