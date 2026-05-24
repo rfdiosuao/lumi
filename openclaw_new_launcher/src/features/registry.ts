@@ -19,12 +19,13 @@ export interface FeatureDefinition {
 }
 
 export const FEATURE_DEFINITIONS: FeatureDefinition[] = [
-  { key: 'dashboard', label: '控制台', desc: '系统状态总览', icon: 'HOME', group: '工作台', action: { type: 'page' } },
+  { key: 'dashboard', label: '系统状态总览', desc: '系统状态总览', icon: 'HOME', group: '工作台', action: { type: 'page' } },
   { key: 'terminal', label: '服务日志', desc: '查看运行状态', icon: 'LOG', group: '工作台', action: { type: 'page' } },
   { key: 'storyboard', label: '广告视频', desc: '分镜/首尾帧/九宫格', icon: 'AD', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
   { key: 'image', label: 'AI 生图', desc: '生成/编辑图片', icon: 'IMG', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
   { key: 'video', label: 'AI 视频', desc: '多模型视频生成', icon: 'VID', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
-  { key: 'phone', label: '手机控制', desc: '连接 APKClaw', icon: 'PH', group: '工作台', accent: true, action: { type: 'page' } },
+  { key: 'phone', label: '手机控制', desc: '连接 APKClaw', icon: 'PH', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
+  { key: 'desktop', label: '桌面控制', desc: '托管 Luminode', icon: 'PC', group: '工作台', accent: true, requiresLicense: true, action: { type: 'page' } },
   { key: 'license', label: '授权码', desc: '在线激活解锁', icon: 'LIC', group: '配置', action: { type: 'page' } },
   { key: 'api', label: 'API 配置', desc: '设置模型密钥', icon: 'KEY', group: '配置', action: { type: 'dialog', dialog: 'api' } },
   { key: 'feishu', label: '飞书机器人', desc: '绑定消息通道', icon: 'BOT', group: '配置', action: { type: 'dialog', dialog: 'feishu' } },
@@ -68,11 +69,6 @@ export function normalizeFeatureNavItems(items?: NavItem[]): NavItem[] {
     })
     .filter(Boolean) as NavItem[];
 
-  const existing = new Set(normalized.map((item) => item.key));
-  for (const item of DEFAULT_FEATURE_NAV_ITEMS) {
-    if (!existing.has(item.key)) {
-      normalized.push(item);
-    }
-  }
-  return normalized.length > 0 ? normalized : DEFAULT_FEATURE_NAV_ITEMS;
+  const byKey = new Map(normalized.map((item) => [item.key, item]));
+  return DEFAULT_FEATURE_NAV_ITEMS.map((item) => byKey.get(item.key) || item);
 }

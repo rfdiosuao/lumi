@@ -3,8 +3,10 @@ import { Button, Input, TextArea, Select, Loading, showToast, FieldLabel } from 
 import { imageApi, configApi } from '../../services/api';
 import { loadPhoneConfig, phoneApi } from '../../services/phoneApi';
 import { useLogStore } from '../../stores/logStore';
+import { readGatewayStoredConfig, readMemberGatewayDefaults, type GatewayMode } from '../../services/gatewayConfig';
 
 const SIZES = ['1024x1024', '1024x1536', '1536x1024', '512x512'];
+const IMAGE_CONFIG_PATH = 'imgapi_config.json';
 
 export const ImagePage: React.FC = () => {
   const [baseUrl, setBaseUrl] = useState('');
@@ -12,6 +14,7 @@ export const ImagePage: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [size, setSize] = useState('1024x1024');
   const [editImage, setEditImage] = useState<string | null>(null);
+  const [gatewayMode, setGatewayMode] = useState<GatewayMode>('manual');
   const [generating, setGenerating] = useState(false);
   const [tripleGenerating, setTripleGenerating] = useState(false);
   const [resultImage, setResultImage] = useState<string | null>(null);
@@ -22,15 +25,58 @@ export const ImagePage: React.FC = () => {
   const [phoneSyncStatus, setPhoneSyncStatus] = useState('');
 
   const appendLog = useLogStore((s) => s.append);
+  const managedMode = gatewayMode === 'member';
 
   const loadConfig = async () => {
+    let storedMode: GatewayMode | null = null;
+    let storedBaseUrl = '';
+    let storedApiKey = '';
+
     try {
-      const resp = await configApi.read('imgapi_config.json', {});
-      const data = resp.data as any;
-      if (data?.baseUrl) setBaseUrl(data.baseUrl);
-      if (data?.apiKey) setApiKey(data.apiKey);
+      const resp = await configApi.read(IMAGE_CONFIG_PATH, {});
+      const stored = readGatewayStoredConfig(resp.data);
+      storedMode = stored.mode;
+      storedBaseUrl = stored.baseUrl;
+      storedApiKey = stored.apiKey;
     } catch (e) {
-      appendLog('[生图] 配置加载失败: ' + e + '\n');
+      appendLog('[生图] 读取配置失败: ' + e + '\n');
+    }
+
+    try {
+      const memberGateway = await readMemberGatewayDefaults();
+
+      if (storedMode === 'member') {
+        setGatewayMode('member');
+        setBaseUrl(memberGateway.baseUrl || storedBaseUrl);
+        setApiKey(memberGateway.apiKey || storedApiKey);
+        return;
+      }
+
+      if (storedMode === 'manual') {
+        setGatewayMode('manual');
+        setBaseUrl(storedBaseUrl);
+        setApiKey(storedApiKey);
+        return;
+      }
+
+      if (storedBaseUrl || storedApiKey) {
+        setGatewayMode('manual');
+        setBaseUrl(storedBaseUrl);
+        setApiKey(storedApiKey);
+        return;
+      }
+
+      if (memberGateway.hasGateway) {
+        setGatewayMode('member');
+        setBaseUrl(memberGateway.baseUrl);
+        setApiKey(memberGateway.apiKey);
+      }
+    } catch {
+      if (storedBaseUrl || storedApiKey) {
+        setGatewayMode('manual');
+        setBaseUrl(storedBaseUrl);
+        setApiKey(storedApiKey);
+      }
     }
   };
 
@@ -38,14 +84,34 @@ export const ImagePage: React.FC = () => {
 
   const saveConfig = async () => {
     try {
-      await configApi.write('imgapi_config.json', { baseUrl, apiKey });
+      await configApi.write(IMAGE_CONFIG_PATH, {
+        gatewayMode,
+        managedMode,
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+      });
     } catch (e) {
-      appendLog('[生图] 配置保存失败: ' + e + '\n');
+      appendLog('[生图] 保存配置失败: ' + e + '\n');
+    }
+  };
+
+  const handleGatewayModeChange = async (nextMode: GatewayMode) => {
+    setGatewayMode(nextMode);
+    if (nextMode !== 'member') return;
+
+    try {
+      const memberGateway = await readMemberGatewayDefaults();
+      if (memberGateway.hasGateway) {
+        setBaseUrl(memberGateway.baseUrl);
+        setApiKey(memberGateway.apiKey);
+      }
+    } catch {
+      // keep current manual values if the license lookup fails
     }
   };
 
   const handleGenerate = async () => {
-    if (!baseUrl || !prompt) {
+    if ((!baseUrl && !managedMode) || !prompt) {
       showToast('请填写中转站地址和提示词', 'error');
       return;
     }
@@ -55,7 +121,7 @@ export const ImagePage: React.FC = () => {
     setPhoneSyncStatus('');
     try {
       await saveConfig();
-      const resp = await imageApi.generate({ baseUrl, apiKey, prompt, size, count: 1, editImagePath: editImage || undefined });
+      const resp = await imageApi.generate({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), prompt, size, count: 1, editImagePath: editImage || undefined });
       if (resp.images?.[0]) {
         const dataUrl = `data:image/png;base64,${resp.images[0]}`;
         const file = resp.files?.[0];
@@ -80,7 +146,7 @@ export const ImagePage: React.FC = () => {
   ];
 
   const handleTripleGenerate = async () => {
-    if (!baseUrl || !prompt) {
+    if ((!baseUrl && !managedMode) || !prompt) {
       showToast('请填写中转站地址和提示词', 'error');
       return;
     }
@@ -93,7 +159,7 @@ export const ImagePage: React.FC = () => {
       setTripleStatus(`生成中: ${i + 1}/3 - ${TRIPLE_PROMPTS[i].label}`);
       try {
         const fullPrompt = `${prompt}\n${TRIPLE_PROMPTS[i].prefix}`;
-        const resp = await imageApi.generate({ baseUrl, apiKey, prompt: fullPrompt, size, count: 1 });
+        const resp = await imageApi.generate({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), prompt: fullPrompt, size, count: 1 });
         if (resp.images?.[0]) {
           const dataUrl = `data:image/png;base64,${resp.images[0]}`;
           const file = resp.files?.[0];
@@ -165,6 +231,7 @@ export const ImagePage: React.FC = () => {
             <div>
               <FieldLabel text="URL 链接" required />
               <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://..." />
+              {managedMode && <div className="mt-1 text-xs text-status-success">已读取会员网关配置</div>}
             </div>
             <div>
               <FieldLabel text="API Key" />
@@ -196,6 +263,29 @@ export const ImagePage: React.FC = () => {
                 className="h-4 w-4 accent-[var(--color-accent)]"
               />
             </label>
+            <div className="rounded-xl border border-border bg-surface p-2">
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={managedMode ? 'primary' : 'quiet'}
+                  onClick={() => { void handleGatewayModeChange('member'); }}
+                  className="justify-center"
+                >
+                  会员模式
+                </Button>
+                <Button
+                  type="button"
+                  variant={!managedMode ? 'primary' : 'quiet'}
+                  onClick={() => setGatewayMode('manual')}
+                  className="justify-center"
+                >
+                  手动模式
+                </Button>
+              </div>
+              <p className="mt-2 text-xs text-text-muted">
+                会员模式会自动读取授权后台的网关配置；手动模式保留当前填写的地址和密钥。
+              </p>
+            </div>
             <div>
               <FieldLabel text="提示词" required />
               <TextArea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="描述你想要生成的图片..." />

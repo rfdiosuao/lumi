@@ -252,8 +252,10 @@ class OpenClawProcessService:
         checks.append(self._webview2_check())
         checks.append(self._python_runtime_check())
         checks.append(self._portable_integrity_check())
+        checks.append(self._security_software_block_check())
         checks.append(self._runtime_context_check())
         checks.append(self._phone_agent_apk_check())
+        checks.append(self._member_gateway_check())
         checks.append(self._core_service_snapshot_check())
 
         port_listeners = self._port_listeners(APP_PORT)
@@ -567,6 +569,30 @@ class OpenClawProcessService:
         launcher_runtime = self._read_json_if_exists(os.path.join(self.paths.data_dir, "launcher_runtime.json"))
         image_config = self._read_json_if_exists(self.paths.image_config)
         video_config = self._read_json_if_exists(self.paths.video_config)
+        member_license = self._read_json_if_exists(self.paths.license_file)
+        member_gateway_configured = False
+        member_gateway_base = ""
+        member_gateway_token = ""
+        member_gateway_models: list[str] = []
+        member_gateway_default_model = ""
+        member_gateway_image_model = ""
+        member_gateway_video_model = ""
+        if isinstance(member_license, dict):
+            member_gateway_base = str(member_license.get("gatewayBaseUrl") or member_license.get("gatewayUrl") or "").strip()
+            member_gateway_token = str(member_license.get("gatewayAccessToken") or member_license.get("gatewayToken") or "").strip()
+            raw_models = member_license.get("gatewayModels") if isinstance(member_license.get("gatewayModels"), list) else member_license.get("models")
+            if isinstance(raw_models, list):
+                for item in raw_models:
+                    model_id = item.get("id") if isinstance(item, dict) else item
+                    if isinstance(model_id, str):
+                        clean = model_id.strip()
+                        if clean and clean not in member_gateway_models:
+                            member_gateway_models.append(clean)
+            member_gateway_default_model = str(member_license.get("gatewayDefaultModel") or member_license.get("defaultModel") or "").strip()
+            member_gateway_image_model = str(member_license.get("gatewayImageModel") or member_license.get("imageModel") or "").strip()
+            member_gateway_video_model = str(member_license.get("gatewayVideoModel") or member_license.get("videoModel") or "").strip()
+            member_gateway_configured = bool(member_gateway_base and member_gateway_token)
+        phone_store = self._read_json_if_exists(os.path.join(self.paths.launcher_dir, "phone-agents.json"))
         phone_config = self._read_json_if_exists(os.path.join(self.paths.launcher_dir, "phone-agent.json"))
         desktop_config = self._read_json_if_exists(os.path.join(self.paths.launcher_dir, "desktop-agent.json"))
         launcher_version = "unknown"
@@ -576,9 +602,42 @@ class OpenClawProcessService:
             package_data = self._read_json_if_exists(package_json_path)
             if package_data.get("name") == "openclaw-new-launcher":
                 launcher_version = str(package_data.get("version") or "unknown")
-        phone_album = str(phone_config.get("album") or os.environ.get("OPENCLAW_PHONE_ALBUM") or "OpenClaw") if isinstance(phone_config, dict) else "OpenClaw"
-        phone_url = str(phone_config.get("baseUrl") or "").rstrip("/") if isinstance(phone_config, dict) else ""
-        token_available = bool(str(phone_config.get("token") or "").strip()) if isinstance(phone_config, dict) else False
+        phone_devices: list[dict] = []
+        selected_device_id = ""
+        phone_config_path = "data/.openclaw/launcher/phone-agent.json"
+        selected_phone_config = phone_config if isinstance(phone_config, dict) else {}
+        if isinstance(phone_store, dict) and isinstance(phone_store.get("devices"), list) and phone_store.get("devices"):
+            phone_config_path = "data/.openclaw/launcher/phone-agents.json"
+            selected_device_id = str(phone_store.get("selectedDeviceId") or "").strip()
+            raw_devices = [device for device in phone_store.get("devices", []) if isinstance(device, dict)]
+            selected_phone_config = next(
+                (device for device in raw_devices if str(device.get("id") or "").strip() == selected_device_id),
+                raw_devices[0] if raw_devices else {},
+            )
+            phone_devices = [
+                {
+                    "id": str(device.get("id") or "").strip() or None,
+                    "name": str(device.get("name") or "").strip() or None,
+                    "tokenAvailable": bool(str(device.get("token") or "").strip()),
+                    "baseUrl": None,
+                    "tags": device.get("tags") if isinstance(device.get("tags"), list) else [],
+                    "lastSeenAt": str(device.get("lastSeenAt") or "").strip() or None,
+                }
+                for device in raw_devices
+            ]
+        elif isinstance(phone_config, dict) and (str(phone_config.get("baseUrl") or "").strip() or str(phone_config.get("token") or "").strip()):
+            selected_device_id = str(phone_config.get("id") or "").strip()
+            phone_devices = [{
+                "id": selected_device_id or None,
+                "name": str(phone_config.get("name") or "Android Phone").strip() or "Android Phone",
+                "tokenAvailable": bool(str(phone_config.get("token") or "").strip()),
+                "baseUrl": None,
+                "tags": [],
+                "lastSeenAt": None,
+            }]
+        phone_album = str(selected_phone_config.get("album") or os.environ.get("OPENCLAW_PHONE_ALBUM") or "OpenClaw") if isinstance(selected_phone_config, dict) else "OpenClaw"
+        phone_url = str(selected_phone_config.get("baseUrl") or "").rstrip("/") if isinstance(selected_phone_config, dict) else ""
+        token_available = bool(str(selected_phone_config.get("token") or "").strip()) if isinstance(selected_phone_config, dict) else False
         desktop_port = int(desktop_config.get("port") or 21900) if isinstance(desktop_config, dict) else 21900
         desktop_agent_dir = str(desktop_config.get("agentDir") or "").strip() if isinstance(desktop_config, dict) else ""
         desktop_token_available = bool(str(desktop_config.get("token") or "").strip()) if isinstance(desktop_config, dict) else False
@@ -604,6 +663,14 @@ class OpenClawProcessService:
                 "version": self._openclaw_version(),
                 "configPath": self.paths.openclaw_config,
                 "workspacePath": self.paths.openclaw_workspace,
+                "memberGateway": {
+                    "configured": member_gateway_configured,
+                    "baseUrl": member_gateway_base or None,
+                    "defaultModel": member_gateway_default_model or None,
+                    "imageModel": member_gateway_image_model or None,
+                    "videoModel": member_gateway_video_model or None,
+                    "models": member_gateway_models,
+                },
             },
             "workspace": {
                 "path": self.paths.openclaw_workspace,
@@ -615,18 +682,23 @@ class OpenClawProcessService:
                 "scripts": os.path.join(self.paths.base_path, "scripts"),
                 "imageToPhoneCli": os.path.join(self.paths.base_path, "scripts", "openclaw-image-phone.mjs"),
                 "phoneVerifier": os.path.join(self.paths.base_path, "scripts", "verify-phone-agent.ps1"),
+                "phoneFleetCli": os.path.join(self.paths.base_path, "scripts", "openclaw-phone-fleet.mjs"),
             },
             "capabilities": {
                 "imageGeneration": {
                     "available": True,
-                    "configured": self._has_config_values(image_config),
+                    "configured": self._has_config_values(image_config) or member_gateway_configured,
                     "localOutputDir": self.paths.generated_images_dir,
                     "cli": "npm run phone:image",
                     "editCli": 'npm run phone:image:edit -- --reference-image <path> --prompt "<edit instruction>"',
+                    "model": image_config.get("model") if isinstance(image_config, dict) else None,
+                    "memberModel": member_gateway_image_model or None,
                 },
                 "videoGeneration": {
                     "available": True,
-                    "configured": self._has_config_values(video_config),
+                    "configured": self._has_config_values(video_config) or member_gateway_configured,
+                    "model": video_config.get("model") if isinstance(video_config, dict) else None,
+                    "memberModel": member_gateway_video_model or None,
                 },
                 "phoneAgent": {
                     "available": True,
@@ -638,11 +710,16 @@ class OpenClawProcessService:
                     "verifiedVersionCode": verified_phone_version_code,
                     "maxRoundsPerTask": 60,
                     "agentCli": "npm run phone:agent --",
+                    "fleetCli": "npm run phone:fleet --",
                     "secureCli": "npm run phone:secure --",
                     "visionCli": "npm run phone:vision --",
                     "imageCli": "npm run phone:image --",
                     "imageEditCli": 'npm run phone:image:edit -- --reference-image <path> --prompt "<edit instruction>"',
                     "videoCli": "npm run phone:video --",
+                    "multiDevice": len(phone_devices) > 1,
+                    "defaultDeviceId": selected_device_id or None,
+                    "deviceCliArg": "--device-id <id>",
+                    "fleetTargets": "--target <id|id,id|all>",
                     "controlPolicy": "wrapper-only",
                     "tokenPolicy": "never expose token; never call APKClaw HTTP APIs directly; use launcher CLI wrappers only",
                 },
@@ -672,8 +749,10 @@ class OpenClawProcessService:
                 "connected": False,
                 "endpoint": "launcher-cli-wrapper",
                 "baseUrl": None,
-                "tokenAvailable": False,
-                "configPath": "data/.openclaw/launcher/phone-agent.json",
+                "tokenAvailable": token_available,
+                "configPath": phone_config_path,
+                "defaultDeviceId": selected_device_id or None,
+                "devices": phone_devices,
                 "lastStatus": None,
             },
             "desktop": {
@@ -705,6 +784,40 @@ class OpenClawProcessService:
 
     def _has_config_values(self, value: dict) -> bool:
         return any(isinstance(item, str) and bool(item.strip()) for item in value.values())
+
+    def _member_gateway_check(self) -> dict:
+        license_data = self._read_json_if_exists(self.paths.license_file)
+        if not isinstance(license_data, dict):
+            license_data = {}
+        base_url = str(license_data.get("gatewayBaseUrl") or license_data.get("gatewayUrl") or "").strip()
+        token = str(license_data.get("gatewayAccessToken") or license_data.get("gatewayToken") or "").strip()
+        plan = str(license_data.get("plan") or license_data.get("edition") or "").strip()
+        if base_url and token:
+            return {
+                "id": "member_gateway",
+                "label": "会员托管网关",
+                "status": "ok",
+                "message": f"已配置 {plan or 'member'} 网关",
+                "detail": f"{base_url} | token=present",
+                "repairable": False,
+            }
+        if base_url or token:
+            return {
+                "id": "member_gateway",
+                "label": "会员托管网关",
+                "status": "warn",
+                "message": "会员网关字段不完整，启动器会回退到本地 API 配置",
+                "detail": f"baseUrl={bool(base_url)} token={bool(token)}",
+                "repairable": False,
+            }
+        return {
+            "id": "member_gateway",
+            "label": "会员托管网关",
+            "status": "warn",
+            "message": "未配置会员托管网关",
+            "detail": self.paths.license_file,
+            "repairable": False,
+        }
 
     def _logs_dir(self) -> str:
         return os.path.join(self.paths.data_dir, "logs")
@@ -791,6 +904,21 @@ class OpenClawProcessService:
                 "status": "fail",
                 "message": "最近一次核心服务启动失败，已捕获启动快照",
                 "detail": detail,
+                "repairable": True,
+            }
+
+        if self.startup_state == "failed" or self.startup_error:
+            error_text = self.startup_error or "OpenClaw startup failed"
+            return {
+                "id": "core_service_snapshot",
+                "label": "OpenClaw 核心服务状态",
+                "status": "fail",
+                "message": "核心服务启动失败，但没有读取到完整启动快照",
+                "detail": (
+                    f"error={error_text}; "
+                    f"portReady={port_ready}; "
+                    f"snapshot={self._startup_snapshot_path()}"
+                ),
                 "repairable": True,
             }
 
@@ -957,6 +1085,162 @@ class OpenClawProcessService:
             "status": status,
             "message": message,
             "detail": "缺失: " + "；".join(missing) if missing else self.paths.base_path,
+            "repairable": False,
+        }
+
+    def _security_software_block_check(self) -> dict:
+        """Detect common Windows security software blocks that look like startup failures."""
+        if os.name != "nt":
+            return {
+                "id": "security_software_block",
+                "label": "杀毒 / 安全软件拦截",
+                "status": "ok",
+                "message": "非 Windows 环境，跳过安全软件拦截检查",
+                "detail": os.name,
+                "repairable": False,
+            }
+
+        explicit_keywords = (
+            "operation did not complete successfully because the file contains a virus",
+            "virus or potentially unwanted software",
+            "microsoft defender",
+            "windows defender",
+            "controlled folder access",
+            "unauthorized changes blocked",
+            "blocked by antivirus",
+            "quarantine",
+            "quarantined",
+            "smartscreen",
+            "病毒",
+            "威胁",
+            "隔离",
+            "已阻止",
+            "安全中心",
+            "杀毒",
+            "恶意软件",
+            "潜在不需要",
+            "受控文件夹访问",
+            "勒索软件防护",
+        )
+        weak_keywords = (
+            "access is denied",
+            "permission denied",
+            "拒绝访问",
+            "eacces",
+            "eperm",
+            "winerror 5",
+            "winerror 225",
+        )
+
+        text_parts: list[str] = []
+        snapshot = self._read_startup_snapshot()
+        if isinstance(snapshot, dict):
+            for key in ("error", "status", "command", "cwd"):
+                value = snapshot.get(key)
+                if isinstance(value, list):
+                    text_parts.append(" ".join(str(item) for item in value))
+                elif value:
+                    text_parts.append(str(value))
+            output_tail = snapshot.get("outputTail")
+            if isinstance(output_tail, list):
+                text_parts.extend(str(line) for line in output_tail[-80:])
+
+        for log_name in ("bridge-service.log", "openclaw-service.log"):
+            log_path = os.path.join(self._logs_dir(), log_name)
+            if not os.path.exists(log_path):
+                continue
+            try:
+                with open(log_path, "rb") as handle:
+                    handle.seek(0, os.SEEK_END)
+                    size = handle.tell()
+                    handle.seek(max(0, size - 120_000), os.SEEK_SET)
+                    text_parts.append(handle.read().decode("utf-8", errors="replace"))
+            except Exception as error:
+                text_parts.append(str(error))
+
+        critical_files = [
+            ("Node.js", self.paths.node_exe),
+            ("OpenClaw start.js", self.paths.find_file("start.js", ("back", "backup", ""))),
+            ("OpenClaw core", self.paths.openclaw_mjs),
+            ("Bridge", os.path.join(self.paths.base_path, "_up_", "python", "bridge.py")),
+            ("Phone Agent CLI", os.path.join(self.paths.base_path, "scripts", "openclaw-phone-agent.mjs")),
+        ]
+        missing: list[str] = []
+        unreadable: list[str] = []
+        access_errors: list[str] = []
+        for label, path in critical_files:
+            if not path:
+                continue
+            if not os.path.exists(path):
+                missing.append(f"{label}: {path}")
+                continue
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "rb") as handle:
+                    handle.read(1)
+            except PermissionError as error:
+                unreadable.append(f"{label}: {path}")
+                access_errors.append(str(error))
+            except OSError as error:
+                unreadable.append(f"{label}: {path}")
+                access_errors.append(str(error))
+
+        text_parts.extend(access_errors)
+        combined = "\n".join(text_parts)
+        lowered = combined.lower()
+        explicit_hits = [keyword for keyword in explicit_keywords if keyword.lower() in lowered]
+        weak_hits = [keyword for keyword in weak_keywords if keyword.lower() in lowered]
+        is_dev_tree = os.path.isdir(os.path.join(self.paths.base_path, "src")) and os.path.exists(os.path.join(self.paths.base_path, "package.json"))
+
+        detail_parts: list[str] = []
+        if explicit_hits:
+            detail_parts.append("匹配信号: " + "；".join(dict.fromkeys(explicit_hits)))
+        if weak_hits:
+            detail_parts.append("权限信号: " + "；".join(dict.fromkeys(weak_hits)))
+        if unreadable:
+            detail_parts.append("不可读取: " + "；".join(unreadable[:6]))
+        if missing and not is_dev_tree:
+            detail_parts.append("关键文件缺失: " + "；".join(missing[:8]))
+        if snapshot:
+            detail_parts.append(f"startupSnapshot={self._startup_snapshot_path()}")
+
+        if explicit_hits or unreadable:
+            return {
+                "id": "security_software_block",
+                "label": "杀毒 / 安全软件拦截",
+                "status": "fail",
+                "message": "检测到疑似杀毒软件、Windows Defender 或受控文件夹访问拦截",
+                "detail": "\n".join(detail_parts),
+                "repairable": False,
+            }
+
+        if missing and not is_dev_tree:
+            return {
+                "id": "security_software_block",
+                "label": "杀毒 / 安全软件拦截",
+                "status": "warn",
+                "message": "离线包关键文件缺失，可能是解压不完整或被安全软件隔离",
+                "detail": "\n".join(detail_parts),
+                "repairable": False,
+            }
+
+        if weak_hits:
+            return {
+                "id": "security_software_block",
+                "label": "杀毒 / 安全软件拦截",
+                "status": "warn",
+                "message": "最近日志出现权限拒绝信号，若启动失败请检查安全软件拦截记录",
+                "detail": "\n".join(detail_parts),
+                "repairable": False,
+            }
+
+        return {
+            "id": "security_software_block",
+            "label": "杀毒 / 安全软件拦截",
+            "status": "ok",
+            "message": "未发现明显的 Defender、杀毒软件或受控文件夹访问拦截信号",
+            "detail": "checked startup snapshot, bridge logs and critical files",
             "repairable": False,
         }
 

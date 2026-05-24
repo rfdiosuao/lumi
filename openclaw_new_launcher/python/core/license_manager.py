@@ -33,6 +33,30 @@ class LicenseManager:
         self.paths = paths
         self.public_key = Ed25519PublicKey.from_public_bytes(base64.b64decode(LICENSE_PUBLIC_KEY_B64))
 
+    @property
+    def license_meta_file(self) -> str:
+        return os.path.join(self.paths.data_dir, "license-meta.json")
+
+    @staticmethod
+    def activation_code_meta(code: str) -> dict[str, str]:
+        normalized = "".join(ch for ch in str(code or "").strip().upper() if ch.isalnum())
+        last8 = normalized[-8:]
+        label = f"{last8[:4]}-{last8[4:]}" if len(last8) == 8 else last8
+        return {
+            "activationCodeLabel": label,
+            "activationCodeLast8": last8,
+        }
+
+    def _with_license_meta(self, license_data: dict[str, Any]) -> dict[str, Any]:
+        meta = read_json(self.license_meta_file, None)
+        if isinstance(meta, dict):
+            merged = dict(license_data)
+            for key in ("activationCodeLabel", "activationCodeLast8"):
+                if not merged.get(key) and meta.get(key):
+                    merged[key] = meta[key]
+            return merged
+        return license_data
+
     def get_install_id(self) -> str:
         os.makedirs(self.paths.data_dir, exist_ok=True)
         if os.path.exists(self.paths.install_id_file):
@@ -102,10 +126,128 @@ class LicenseManager:
     def current_license(self) -> dict[str, Any] | None:
         license_data = read_json(self.paths.license_file, None)
         if isinstance(license_data, dict) and self.verify(license_data):
-            return license_data
+            return self._with_license_meta(license_data)
         return None
 
+    def current_gateway_profile(self) -> dict[str, Any] | None:
+        def build_profile(source: dict[str, Any], *, fallback_name: str) -> dict[str, Any] | None:
+            base_url = str(
+                source.get("gatewayBaseUrl")
+                or source.get("gatewayUrl")
+                or source.get("baseUrl")
+                or source.get("url")
+                or ""
+            ).strip().rstrip("/")
+            token = str(
+                source.get("gatewayAccessToken")
+                or source.get("gatewayToken")
+                or source.get("memberToken")
+                or source.get("apiKey")
+                or source.get("token")
+                or ""
+            ).strip()
+            if not base_url or not token:
+                return None
+            models = self._gateway_model_ids(source)
+            default_model = str(
+                source.get("gatewayDefaultModel")
+                or source.get("defaultModel")
+                or source.get("model")
+                or ""
+            ).strip()
+            if not default_model and models:
+                default_model = models[0]
+            image_model = str(
+                source.get("gatewayImageModel")
+                or source.get("imageModel")
+                or source.get("image_model")
+                or ""
+            ).strip()
+            video_model = str(
+                source.get("gatewayVideoModel")
+                or source.get("videoModel")
+                or source.get("video_model")
+                or ""
+            ).strip()
+            features = source.get("features")
+            return {
+                "baseUrl": base_url,
+                "apiKey": token,
+                "defaultModel": default_model,
+                "imageModel": image_model,
+                "videoModel": video_model,
+                "models": models,
+                "features": features if isinstance(features, list) else [],
+                "plan": str(source.get("plan") or source.get("edition") or fallback_name or "").strip(),
+                "memberId": str(source.get("memberId") or source.get("id") or "").strip(),
+                "expiresAt": str(source.get("leaseExpiresAt") or source.get("expiresAt") or source.get("expires") or "").strip(),
+                "quotas": source.get("quotas") if isinstance(source.get("quotas"), dict) else {},
+                "usage": source.get("usage") if isinstance(source.get("usage"), dict) else {},
+                "source": fallback_name,
+            }
+
+        license_data = self.current_license()
+        if isinstance(license_data, dict):
+            profile = build_profile(license_data, fallback_name="license")
+            if profile:
+                return profile
+
+        member_session = read_json(self.paths.member_session_file, None)
+        if isinstance(member_session, dict):
+            profile = build_profile(member_session, fallback_name="member")
+            if profile:
+                return profile
+
+        profiles = read_json(self.paths.auth_profiles, {"models": {"providers": {}}})
+        models = profiles.get("models") if isinstance(profiles, dict) else {}
+        providers = models.get("providers") if isinstance(models, dict) else {}
+        if isinstance(providers, dict):
+            primary = models.get("primary") if isinstance(models, dict) else None
+            candidate = providers.get(primary) if primary else None
+            if not isinstance(candidate, dict):
+                candidate = next(
+                    (
+                        item
+                        for item in providers.values()
+                        if isinstance(item, dict) and str(item.get("authMode") or item.get("mode") or "").strip().lower() == "member"
+                    ),
+                    None,
+                )
+            if isinstance(candidate, dict):
+                profile = build_profile(candidate, fallback_name="member-profile")
+                if profile:
+                    return profile
+        return None
+
+    def has_gateway_profile(self) -> bool:
+        return self.current_gateway_profile() is not None
+
     def diagnose(self) -> dict[str, Any]:
+        gateway_profile = self.current_gateway_profile()
+        if gateway_profile:
+            expires = str(gateway_profile.get("expiresAt") or "").strip()
+            if expires:
+                try:
+                    if date.fromisoformat(expires[:10]) < date.today():
+                        return {
+                            "ok": False,
+                            "code": "expired",
+                            "message": f"会员托管已过期：{expires}",
+                            "detail": str(gateway_profile.get("baseUrl") or self.paths.member_session_file),
+                            "license": self.current_license(),
+                            "gatewayProfile": gateway_profile,
+                        }
+                except ValueError:
+                    pass
+            return {
+                "ok": True,
+                "code": "member",
+                "message": f"会员托管已激活：{gateway_profile.get('memberId') or 'member'}",
+                "detail": str(gateway_profile.get("baseUrl") or self.paths.member_session_file),
+                "license": self.current_license(),
+                "gatewayProfile": gateway_profile,
+            }
+
         if not os.path.exists(self.paths.license_file):
             return {
                 "ok": False,
@@ -159,7 +301,7 @@ class LicenseManager:
             return {
                 "ok": False,
                 "code": "signature_invalid",
-                "message": "授权签名无效，文件可能被修改或不是本产品授权",
+                "message": "授权签名无效，文件可能被修改或不属于本产品",
                 "detail": f"{self.paths.license_file} ({error.__class__.__name__})",
                 "license": license_data,
             }
@@ -181,7 +323,7 @@ class LicenseManager:
             return {
                 "ok": False,
                 "code": "device_id_mismatch",
-                "message": "deviceId 不匹配，授权文件绑定的设备/U盘不是当前运行环境",
+                "message": "deviceId 不匹配，授权文件绑定的设备或 U 盘不是当前运行环境",
                 "detail": f"license={licensed_device} current={', '.join(sorted(device_candidates))}",
                 "license": license_data,
             }
@@ -217,10 +359,25 @@ class LicenseManager:
 
     def is_authorized(self, feature: str | None = None) -> bool:
         license_data = self.current_license()
-        if not license_data:
+        if isinstance(license_data, dict):
+            if feature and feature not in license_data.get("features", []):
+                return False
+            return True
+
+        gateway_profile = self.current_gateway_profile()
+        if not isinstance(gateway_profile, dict):
             return False
-        if feature and feature not in license_data.get("features", []):
-            return False
+        expires = str(gateway_profile.get("expiresAt") or "").strip()
+        if expires:
+            try:
+                if date.fromisoformat(expires[:10]) < date.today():
+                    return False
+            except ValueError:
+                pass
+        if feature:
+            features = gateway_profile.get("features")
+            if isinstance(features, list) and feature not in features:
+                return False
         return True
 
     def verify(self, license_data: dict[str, Any]) -> bool:
@@ -251,30 +408,46 @@ class LicenseManager:
             "deviceId": self.device_id(),
             "appVersion": "desktop",
         }
-        request = urllib.request.Request(
-            f"{LICENSE_SERVER_URL.rstrip('/')}/activate",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "Lumi-Desktop/2.0",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            raise LicenseError(self._read_error(error)) from error
-        except Exception as error:
-            raise LicenseError(f"无法连接授权服务器：{error}") from error
-        license_data = data.get("license")
+        request_body = json.dumps(payload).encode("utf-8")
+        data: dict[str, Any] | None = None
+        last_error: Exception | None = None
+        for endpoint in ("/api/member/activate", "/activate"):
+            request = urllib.request.Request(
+                f"{LICENSE_SERVER_URL.rstrip('/')}{endpoint}",
+                data=request_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Lumi-Desktop/2.0",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as error:
+                last_error = error
+                if error.code in (404, 405):
+                    continue
+                raise LicenseError(self._read_error(error)) from error
+            except Exception as error:
+                last_error = error
+                continue
+        if not isinstance(data, dict):
+            if isinstance(last_error, urllib.error.HTTPError):
+                raise LicenseError(self._read_error(last_error)) from last_error
+            raise LicenseError(f"无法连接授权服务器：{last_error}") from last_error
+        license_data = data.get("license") if isinstance(data.get("license"), dict) else data.get("member")
         if not isinstance(license_data, dict) or not self.verify(license_data):
             raise LicenseError("授权服务器返回的许可证无效")
         write_json(self.paths.license_file, license_data)
+        code_meta = self.activation_code_meta(code)
+        if code_meta.get("activationCodeLast8"):
+            write_json(self.license_meta_file, code_meta)
         theme_data = data.get("theme")
         if isinstance(theme_data, dict) and theme_data.get("colors"):
             write_json(self.paths.theme_json, theme_data)
-        return license_data
+        return self._with_license_meta(license_data)
 
     def get_brand_config(self) -> dict[str, Any] | None:
         license_data = self.current_license()
@@ -288,6 +461,20 @@ class LicenseManager:
     def _canonical(self, payload: dict[str, Any]) -> bytes:
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
+    def _gateway_model_ids(self, license_data: dict[str, Any]) -> list[str]:
+        raw_models = license_data.get("gatewayModels")
+        if not isinstance(raw_models, list) or not raw_models:
+            raw_models = license_data.get("models")
+        if not isinstance(raw_models, list):
+            return []
+        model_ids: list[str] = []
+        for item in raw_models:
+            model_id = item.get("id") if isinstance(item, dict) else item
+            if isinstance(model_id, str):
+                clean = model_id.strip()
+                if clean and clean not in model_ids:
+                    model_ids.append(clean)
+        return model_ids
     def _read_error(self, error: urllib.error.HTTPError) -> str:
         try:
             data = json.loads(error.read().decode("utf-8"))

@@ -32,6 +32,10 @@ def register_license_routes(app, ctx) -> None:
             return ctx.fastapi_json({"error": "授权码不能为空"}, 400)
         try:
             result = ctx.get_license_mgr().activate(code)
+            try:
+                ctx.sync_openclaw_models_from_api_profiles()
+            except Exception as sync_error:
+                ctx.append_log(f"[License] Gateway config sync failed after activation: {sync_error}\n")
             theme = ctx.get_theme_mgr().get_current(ctx.get_license_mgr().current_license())
             return ctx.fastapi_json({"license": result, "theme": theme})
         except LicenseError as exc:

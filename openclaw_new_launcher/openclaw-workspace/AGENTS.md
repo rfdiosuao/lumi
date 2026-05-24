@@ -8,11 +8,12 @@ OpenClaw is the commander. APKClaw is the Android-side executor and phone-local 
 
 ## Phone Runtime Contract
 
-- Hard rule: OpenClaw must not talk to APKClaw task endpoints directly. Send phone Agent work only through launcher-provided wrappers, especially `npm run phone:agent`.
+- Hard rule: OpenClaw must not talk to APKClaw task endpoints directly. Send phone Agent work only through launcher-provided wrappers, especially `npm run phone:agent` for one phone and `npm run phone:fleet` for multiple phones.
 - Hard rule: do not hardcode, infer, print, or request APKClaw phone IPs, ports, raw endpoints, headers, signatures, or tokens.
 - Read `runtime-context.json` to learn whether a phone is configured and what capability limits apply.
-- The launcher stores the raw APKClaw token in `data/.openclaw/launcher/phone-agent.json`; it is intentionally absent from `runtime-context.json`.
-- Use launcher CLI helpers (`npm run phone:agent`, `npm run phone:vision`, `npm run phone:game`, `npm run phone:video`, `npm run phone:image`, `npm run phone:image:edit`) because they read the saved phone URL/token automatically and keep the token out of logs.
+- The launcher stores raw APKClaw tokens in private launcher config (`data/.openclaw/launcher/phone-agent.json` for legacy single-device config, or `data/.openclaw/launcher/phone-agents.json` for multi-device config); tokens are intentionally absent from `runtime-context.json`.
+- Use launcher CLI helpers (`npm run phone:agent`, `npm run phone:fleet`, `npm run phone:vision`, `npm run phone:game`, `npm run phone:video`, `npm run phone:image`, `npm run phone:image:edit`) because they read the saved phone URL/token automatically and keep the token out of logs.
+- When multiple APKClaw devices are configured, list them with `npm run phone:fleet -- list`. Use `--device-id <id>` for single-device helpers, or `npm run phone:fleet -- run --target <id|id,id|all> --prompt "..." --mode observe|safe|full` for batch dispatch.
 - For image-to-image or reference-image editing, use `npm run phone:image:edit -- --reference-image <path> --prompt "<edit instruction>"`; do not report that this CLI is unavailable when image generation is configured.
 - When `phone.tokenAvailable=true`, do not ask the user for the token. If a helper still reports missing token, ask the user to save/test the Phone Control config once.
 - APKClaw Agent tasks have a hard 60-round budget. Split long tasks into stages and ask APKClaw to return bounded partial results instead of looping indefinitely.
@@ -20,7 +21,7 @@ OpenClaw is the commander. APKClaw is the Android-side executor and phone-local 
 Default phone work should flow like this:
 
 1. OpenClaw understands the user's goal and chooses the safest policy.
-2. OpenClaw sends a natural-language task to APKClaw with `npm run phone:agent -- run --prompt "..." --mode observe|safe|full`.
+2. OpenClaw sends a natural-language task to APKClaw with `npm run phone:agent -- run --prompt "..." --mode observe|safe|full`, or uses `npm run phone:fleet -- run --target all --prompt "..." --mode observe|safe|full` when the user clearly wants multiple devices.
 3. APKClaw observes, plans locally, uses phone tools, and returns trace/results.
 4. OpenClaw evaluates the result and either finishes, asks the user for missing consent, or sends a better follow-up task.
 

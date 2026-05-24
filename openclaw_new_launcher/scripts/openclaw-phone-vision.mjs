@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensurePhoneConfig, readLauncherPhoneConfig, signedJsonRequest } from './openclaw-phone-secure.mjs';
+import { ensurePhoneConfig, readLauncherPhoneConfigByDevice, signedJsonRequest } from './openclaw-phone-secure.mjs';
 import { inspectVisionActionPlan, minimalActionForPhone } from './lib/vision-safety.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -40,6 +40,7 @@ Action options:
   --allow-unknown-target        Debug only. Permit an action plan without targetLabel/reason metadata. Blacklisted labels still block.
 
 Common options:
+  --device-id <id>             Optional. Select one configured APKClaw device from launcher
   --phone-url <url>            Optional. Defaults to launcher Phone Control config, then env
   --phone-token <token>        Optional. Defaults to launcher Phone Control config, then env
   --json                       Print machine-readable JSON
@@ -50,6 +51,7 @@ Common options:
 function parseArgs(argv) {
   const args = {
     command: '',
+    deviceId: '',
     phoneUrl: '',
     phoneToken: '',
     out: '',
@@ -87,6 +89,9 @@ function parseArgs(argv) {
         break;
       case '--phone-url':
         args.phoneUrl = next();
+        break;
+      case '--device-id':
+        args.deviceId = next();
         break;
       case '--phone-token':
         args.phoneToken = next();
@@ -140,11 +145,12 @@ function parseArgs(argv) {
 
 async function resolveConfig(args) {
   const runtime = await readRuntimeContext();
-  const launcherPhone = await readLauncherPhoneConfig();
+  const launcherPhone = await readLauncherPhoneConfigByDevice(args.deviceId);
   return {
     ...args,
     phoneUrl: firstNonEmpty(args.phoneUrl, process.env.OPENCLAW_PHONE_BASE_URL, process.env.APKCLAW_BASE_URL, runtime?.phone?.baseUrl, launcherPhone.phoneUrl),
     phoneToken: firstNonEmpty(args.phoneToken, process.env.OPENCLAW_PHONE_TOKEN, process.env.APKCLAW_TOKEN, launcherPhone.phoneToken),
+    deviceId: args.deviceId || launcherPhone.id || runtime?.phone?.defaultDeviceId || '',
   };
 }
 

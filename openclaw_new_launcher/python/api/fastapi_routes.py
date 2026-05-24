@@ -7,8 +7,10 @@ import traceback
 from fastapi import Request
 
 from api.routes_config import register_config_routes
+from api.routes_desktop_agent import register_desktop_agent_routes
 from api.routes_diagnostics import register_diagnostics_routes
 from api.routes_license import register_license_routes
+from api.routes_member import register_member_routes
 from api.routes_log import register_log_routes
 from api.routes_media import register_media_routes
 from api.routes_process import register_process_routes
@@ -30,9 +32,11 @@ def register_fastapi_routes(app, ctx) -> None:
     register_process_routes(app, ctx)
     register_log_routes(app, ctx)
     register_license_routes(app, ctx)
+    register_member_routes(app, ctx)
     register_media_routes(app, ctx)
     register_theme_routes(app, ctx)
     register_config_routes(app, ctx)
+    register_desktop_agent_routes(app, ctx)
     register_diagnostics_routes(app, ctx)
     register_update_routes(app, ctx)
     register_skills_routes(app, ctx)

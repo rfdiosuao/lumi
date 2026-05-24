@@ -10,6 +10,7 @@
     "phone:image": "node scripts/openclaw-image-phone.mjs",
     "phone:image:edit": "node scripts/openclaw-image-phone.mjs --mode edit",
     "phone:agent": "node scripts/openclaw-phone-agent.mjs",
+    "phone:fleet": "node scripts/openclaw-phone-fleet.mjs",
     "phone:video": "node scripts/openclaw-phone-video.mjs",
     "phone:vision": "node scripts/openclaw-phone-vision.mjs",
     "phone:game": "node scripts/openclaw-phone-game.mjs",

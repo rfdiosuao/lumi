@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
 import { useTheme } from '../../hooks/useTheme';
-import { configApi, processApi, skillsApi, systemApi, waitForProcessReady } from '../../services/api';
+import { configApi, licenseApi, processApi, skillsApi, systemApi, waitForProcessReady } from '../../services/api';
 import { showToast } from '../common';
 import packageJson from '../../../package.json';
 
@@ -91,7 +91,16 @@ export const DashboardPage: React.FC = () => {
   const refreshStatus = useCallback(async () => {
     try {
       const resp = await configApi.read(AUTH_PROFILES_PATH, { models: { providers: {} } });
-      setApiConfigured(hasConfiguredApiProfile(resp.data));
+      if (hasConfiguredApiProfile(resp.data)) {
+        setApiConfigured(true);
+      } else {
+        const licenseResp = await licenseApi.current();
+        const license = licenseResp.license as any;
+        setApiConfigured(Boolean(
+          String(license?.gatewayBaseUrl || license?.gatewayUrl || '').trim()
+          && String(license?.gatewayAccessToken || license?.gatewayToken || '').trim(),
+        ));
+      }
     } catch {
       setApiConfigured(false);
     }

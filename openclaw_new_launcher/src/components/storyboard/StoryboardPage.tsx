@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { Button, Input, TextArea, Select, Loading, showToast, FieldLabel } from '../common';
 import { imageApi, videoApi, configApi } from '../../services/api';
+import { readGatewayStoredConfig, readMemberGatewayDefaults } from '../../services/gatewayConfig';
 import { useLogStore } from '../../stores/logStore';
 import { Scene, type VideoProviderId } from '../../types';
 import { VIDEO_PROVIDERS, getDefaultVideoModel, getVideoProvider } from '../../features/video/providers';
@@ -380,8 +381,17 @@ export const StoryboardPage: React.FC = () => {
 
   const handleGenerateCandidates = async () => {
     const imgConfig = (await configApi.read('imgapi_config.json', {})).data as any;
-    const baseUrl = imgConfig?.baseUrl || '';
-    const apiKey = imgConfig?.apiKey || '';
+    const stored = readGatewayStoredConfig(imgConfig);
+    let baseUrl = stored.baseUrl;
+    let apiKey = stored.apiKey;
+
+    if (!baseUrl || !apiKey || stored.mode === 'member') {
+      const memberGateway = await readMemberGatewayDefaults();
+      if (memberGateway.hasGateway) {
+        baseUrl = memberGateway.baseUrl;
+        apiKey = memberGateway.apiKey;
+      }
+    }
 
     if (!baseUrl) {
       showToast('请先在 AI 生图页面配置中转站地址', 'error');
@@ -455,9 +465,10 @@ export const StoryboardPage: React.FC = () => {
       return;
     }
 
-    const cleanApiKey = videoApiKey.trim();
-    const cleanApiBase = videoApiBase.trim();
-    const cleanModel = videoModel.trim();
+    const memberGateway = await readMemberGatewayDefaults();
+    const cleanApiKey = videoApiKey.trim() || memberGateway.apiKey;
+    const cleanApiBase = videoApiBase.trim() || memberGateway.baseUrl;
+    const cleanModel = videoModel.trim() || memberGateway.videoModel || memberGateway.defaultModel;
     if (!cleanApiKey) {
       showToast(`请填写 ${videoProvider.authLabel}`, 'error');
       return;

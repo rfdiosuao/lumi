@@ -13,6 +13,30 @@ export interface License {
   installId: string;
   deviceId?: string;
   signature: string;
+  memberId?: string;
+  plan?: string;
+  memberMode?: boolean;
+  issuedAt?: string | null;
+  leaseExpiresAt?: string | null;
+  gatewayBaseUrl?: string;
+  gatewayAccessToken?: string;
+  gatewayToken?: string;
+  gatewayDefaultModel?: string;
+  activationCodeLabel?: string;
+  activationCodeLast8?: string;
+  codeLabel?: string;
+  gatewayModels?: string[];
+  quotas?: {
+    llm?: number;
+    image?: number;
+    video?: number;
+    month?: number;
+  };
+  usage?: {
+    llm?: number;
+    image?: number;
+    video?: number;
+  };
 }
 
 export interface LicenseState {
@@ -24,6 +48,7 @@ export interface LicenseState {
 export interface ImageConfig {
   baseUrl: string;
   apiKey: string;
+  gatewayMode?: 'member' | 'manual';
 }
 
 // === Video ===
@@ -32,6 +57,7 @@ export interface VideoConfig {
   apiBase: string;
   model: string;
   dashKey: string;
+  gatewayMode?: 'member' | 'manual';
 }
 
 export type VideoProviderId = 'dashscope' | 'seedance' | 'custom';

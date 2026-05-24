@@ -14,6 +14,7 @@ function usage() {
 
 Options:
   --root <path>          Launcher or OpenClawFiles root. Default: project root
+  --device-id <id>       Optional. Select one configured APKClaw device for context defaults
   --phone-url <url>      Optional phone Agent base URL for this context refresh
   --phone-token <token>  Optional phone Agent token. Never written to context
   --phone-album <name>   Optional phone gallery album. Default: OpenClaw
@@ -27,6 +28,7 @@ Options:
 function parseArgs(argv) {
   const args = {
     root: defaultRoot,
+    deviceId: '',
     phoneUrl: process.env.OPENCLAW_PHONE_BASE_URL || '',
     phoneToken: process.env.OPENCLAW_PHONE_TOKEN || '',
     phoneAlbum: process.env.OPENCLAW_PHONE_ALBUM || 'OpenClaw',
@@ -44,6 +46,7 @@ function parseArgs(argv) {
     };
 
     if (arg === '--root') args.root = next();
+    else if (arg === '--device-id') args.deviceId = next();
     else if (arg === '--phone-url') args.phoneUrl = next();
     else if (arg === '--phone-token') args.phoneToken = next();
     else if (arg === '--phone-album') args.phoneAlbum = next();
@@ -99,9 +102,52 @@ async function readOpenClawVersion(root) {
   return 'unknown';
 }
 
-async function readPhoneConfig(root) {
-  const phoneConfig = await readJson(path.join(root, 'data', '.openclaw', 'launcher', 'phone-agent.json'), {});
+async function readPhoneConfig(root, requestedDeviceId = '') {
+  const storePath = path.join(root, 'data', '.openclaw', 'launcher', 'phone-agents.json');
+  const store = await readJson(storePath, {});
+  const devices = Array.isArray(store?.devices) ? store.devices : [];
+  if (devices.length) {
+    const selected =
+      (requestedDeviceId ? devices.find((device) => String(device?.id || '').trim() === requestedDeviceId) : undefined) ||
+      (hasText(store?.selectedDeviceId)
+        ? devices.find((device) => String(device?.id || '').trim() === String(store.selectedDeviceId).trim())
+        : undefined) ||
+      devices[0];
+    return {
+      source: storePath,
+      selectedDeviceId: typeof selected?.id === 'string' ? selected.id.trim() : '',
+      devices: devices.map((device) => ({
+        id: hasText(device?.id) ? String(device.id).trim() : '',
+        name: hasText(device?.name) ? String(device.name).trim() : '',
+        tokenAvailable: hasText(device?.token),
+        baseUrl: '',
+        tags: Array.isArray(device?.tags)
+          ? device.tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+          : [],
+        lastSeenAt: hasText(device?.lastSeenAt) ? String(device.lastSeenAt).trim() : '',
+      })),
+      baseUrl: hasText(selected?.baseUrl) ? String(selected.baseUrl).trim() : '',
+      tokenAvailable: hasText(selected?.token),
+    };
+  }
+
+  const legacyPath = path.join(root, 'data', '.openclaw', 'launcher', 'phone-agent.json');
+  const phoneConfig = await readJson(legacyPath, {});
   return {
+    source: legacyPath,
+    selectedDeviceId: hasText(phoneConfig?.id) ? String(phoneConfig.id).trim() : '',
+    devices: hasText(phoneConfig?.baseUrl) || hasText(phoneConfig?.token)
+      ? [
+          {
+            id: hasText(phoneConfig?.id) ? String(phoneConfig.id).trim() : '',
+            name: hasText(phoneConfig?.name) ? String(phoneConfig.name).trim() : 'Android Phone',
+            tokenAvailable: hasText(phoneConfig?.token),
+            baseUrl: '',
+            tags: [],
+            lastSeenAt: '',
+          },
+        ]
+      : [],
     baseUrl: hasText(phoneConfig?.baseUrl) ? String(phoneConfig.baseUrl).trim() : '',
     tokenAvailable: hasText(phoneConfig?.token),
   };
@@ -179,7 +225,7 @@ async function buildContext(args) {
   const launcherRuntime = await readJson(path.join(root, 'data', 'launcher_runtime.json'), {});
   const imageConfig = await readJson(path.join(root, 'imgapi_config.json'), {});
   const videoConfig = await readJson(path.join(root, 'video_config.json'), {});
-  const phoneFileConfig = await readPhoneConfig(root);
+  const phoneFileConfig = await readPhoneConfig(root, args.deviceId);
   const desktopFileConfig = await readDesktopConfig(root);
   const phoneUrl = args.phoneUrl || phoneFileConfig.baseUrl;
   const phoneAlbum = args.phoneAlbum || phoneFileConfig.album || 'OpenClaw';
@@ -213,6 +259,7 @@ async function buildContext(args) {
       scripts: path.join(root, 'scripts'),
     imageToPhoneCli: path.join(root, 'scripts', 'openclaw-image-phone.mjs'),
     phoneAgentCli: path.join(root, 'scripts', 'openclaw-phone-agent.mjs'),
+    phoneFleetCli: path.join(root, 'scripts', 'openclaw-phone-fleet.mjs'),
     phoneVideoCli: path.join(root, 'scripts', 'openclaw-phone-video.mjs'),
       phoneGameCli: path.join(root, 'scripts', 'openclaw-phone-game.mjs'),
       phoneVerifier: path.join(root, 'scripts', 'verify-phone-agent.ps1'),
@@ -234,18 +281,23 @@ async function buildContext(args) {
         configured: hasText(phoneUrl) && tokenAvailable,
         controlPolicy: 'wrapper-only',
         agentCli: 'npm run phone:agent',
+        fleetCli: 'npm run phone:fleet',
         imageCli: 'npm run phone:image',
         imageEditCli: 'npm run phone:image:edit -- --reference-image <path> --prompt "<edit instruction>"',
         visionCli: 'npm run phone:vision',
         videoDownloadDir: path.join(root, 'data', 'phone-videos'),
         videoCli: 'npm run phone:video',
         gameModeCli: 'npm run phone:game',
+        multiDevice: phoneFileConfig.devices.length > 1,
+        defaultDeviceId: phoneFileConfig.selectedDeviceId || null,
+        deviceCliArg: '--device-id <id>',
+        fleetTargets: '--target <id|id,id|all>',
         defaultAlbum: phoneAlbum,
         galleryPath: `Pictures/${phoneAlbum}`,
         verifiedVersion: '6.26',
         verifiedVersionCode: 860,
         maxRoundsPerTask: 60,
-        tokenSource: 'data/.openclaw/launcher/phone-agent.json',
+        tokenSource: phoneFileConfig.source ? path.relative(root, phoneFileConfig.source).replace(/\\/g, '/') : 'data/.openclaw/launcher/phone-agent.json',
         tokenPolicy: 'never expose token; use launcher CLI helpers only',
       },
       desktopAgent: {
@@ -275,7 +327,9 @@ async function buildContext(args) {
       endpoint: 'launcher-cli-wrapper',
       baseUrl: null,
       tokenAvailable,
-      configPath: 'data/.openclaw/launcher/phone-agent.json',
+      configPath: phoneFileConfig.source ? path.relative(root, phoneFileConfig.source).replace(/\\/g, '/') : 'data/.openclaw/launcher/phone-agent.json',
+      defaultDeviceId: phoneFileConfig.selectedDeviceId || null,
+      devices: phoneFileConfig.devices,
       lastStatus: phoneProbe,
       lastProfile: phoneProfile,
       visionRecommended: phoneProfile?.vision?.recommended ?? null,

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export interface PhoneConnectionConfig {
+  id?: string;
   name?: string;
   baseUrl: string;
   token: string;
@@ -9,6 +10,16 @@ export interface PhoneConnectionConfig {
   secureChannelPairedAt?: string;
   visualizeActions?: boolean;
   useDeviceProfileContext?: boolean;
+  enabled?: boolean;
+  tags?: string[];
+  lastSeenAt?: string;
+}
+
+export interface PhoneDeviceStore {
+  version: 1;
+  selectedDeviceId: string | null;
+  devices: PhoneConnectionConfig[];
+  updatedAt?: string;
 }
 
 export interface PhoneApiResult<T> {
@@ -454,6 +465,7 @@ export interface PhoneVideoListResult {
 }
 
 const STORAGE_KEY = 'lumi_phone_connector_config';
+const DEVICE_STORE_KEY = 'lumi_phone_connector_devices';
 const DEVICE_PROFILE_STORAGE_PREFIX = 'lumi_phone_device_profile';
 const LUMI_LAUNCHER_ID_HEADER = 'X-LUMI-LAUNCHER-ID';
 const LUMI_TIMESTAMP_HEADER = 'X-LUMI-TIMESTAMP';
@@ -469,11 +481,14 @@ const PHONE_REQUEST_TIMEOUT_MS = 30000;
 const PHONE_AGENT_TASK_TIMEOUT_SEC = 600;
 const PHONE_AGENT_TASK_TIMEOUT_MS = PHONE_AGENT_TASK_TIMEOUT_SEC * 1000 + 15000;
 const DEFAULT_CONFIG: PhoneConnectionConfig = {
+  id: 'android-phone',
   name: DEFAULT_PHONE_NAME,
   baseUrl: 'http://192.168.1.100:9527',
   token: '',
   visualizeActions: true,
   useDeviceProfileContext: true,
+  enabled: true,
+  tags: [],
 };
 
 type PhoneRequestOptions = RequestInit & {
@@ -536,9 +551,207 @@ function buildPhoneBaseUrlCandidates(baseUrl: string): string[] {
 }
 
 function profileStorageKey(config: PhoneConnectionConfig): string {
-  const normalized = normalizeBaseUrl(config.baseUrl).toLowerCase() || 'default';
-  const safe = normalized.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'default';
+  const source = (config.id || normalizeBaseUrl(config.baseUrl).toLowerCase() || 'default').trim();
+  const safe = source.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'default';
   return `${DEVICE_PROFILE_STORAGE_PREFIX}_${safe}`;
+}
+
+function slugifyDeviceName(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/https?:\/\//g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'phone-device';
+}
+
+function createPhoneDeviceId(config: Partial<PhoneConnectionConfig>, existingIds: Set<string> = new Set()): string {
+  const url = parseBaseUrl(String(config.baseUrl || ''));
+  const host = url?.hostname ? slugifyDeviceName(url.hostname) : '';
+  const port = url?.port ? `-${url.port}` : '';
+  const name = slugifyDeviceName(String(config.name || ''));
+  const base = [name || 'phone', host].filter(Boolean).join('-') || `phone${port || ''}`;
+  let candidate = `${base}${port}`.replace(/-+/g, '-');
+  if (!candidate) candidate = 'phone-device';
+  let counter = 2;
+  while (existingIds.has(candidate)) {
+    candidate = `${base}${port}-${counter}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
+function normalizeTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function normalizePhoneConfig(
+  config: Partial<PhoneConnectionConfig>,
+  existingIds: Set<string> = new Set(),
+  preferredId?: string
+): PhoneConnectionConfig {
+  const requestedId = typeof config.id === 'string' ? config.id.trim() : '';
+  const existingIdSet = new Set(existingIds);
+  if (requestedId) {
+    existingIdSet.delete(requestedId);
+  }
+  if (preferredId) {
+    existingIdSet.delete(preferredId);
+  }
+  const id = preferredId || requestedId || createPhoneDeviceId(config, existingIdSet);
+  return {
+    id,
+    name: typeof config.name === 'string' ? config.name : DEFAULT_PHONE_NAME,
+    baseUrl: typeof config.baseUrl === 'string' ? config.baseUrl.trim() : '',
+    token: String(config.token || '').trim(),
+    launcherId: typeof config.launcherId === 'string' ? config.launcherId : undefined,
+    launcherSecret: typeof config.launcherSecret === 'string' ? config.launcherSecret : undefined,
+    secureChannelPairedAt:
+      typeof config.secureChannelPairedAt === 'string' ? config.secureChannelPairedAt : undefined,
+    visualizeActions: config.visualizeActions !== false,
+    useDeviceProfileContext: config.useDeviceProfileContext !== false,
+    enabled: config.enabled !== false,
+    tags: normalizeTags(config.tags),
+    lastSeenAt: typeof config.lastSeenAt === 'string' ? config.lastSeenAt : undefined,
+  };
+}
+
+function buildDefaultDeviceStore(): PhoneDeviceStore {
+  const device = normalizePhoneConfig(DEFAULT_CONFIG);
+  return {
+    version: 1,
+    selectedDeviceId: device.id || null,
+    devices: [device],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function dedupeDeviceIds(configs: Partial<PhoneConnectionConfig>[]): PhoneConnectionConfig[] {
+  const usedIds = new Set<string>();
+  return configs.map((config) => {
+    const normalized = normalizePhoneConfig(config, usedIds);
+    if (normalized.id) {
+      usedIds.add(normalized.id);
+    }
+    return normalized;
+  });
+}
+
+export function loadPhoneDeviceStore(): PhoneDeviceStore {
+  try {
+    const raw = window.localStorage.getItem(DEVICE_STORE_KEY);
+    if (!raw) {
+      const legacy = loadPhoneConfig();
+      return {
+        version: 1,
+        selectedDeviceId: legacy.id || null,
+        devices: [legacy],
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    const parsed = JSON.parse(raw) as Partial<PhoneDeviceStore>;
+    const devices = dedupeDeviceIds(Array.isArray(parsed?.devices) ? parsed.devices : []);
+    if (!devices.length) {
+      return buildDefaultDeviceStore();
+    }
+    const selectedDeviceId =
+      typeof parsed?.selectedDeviceId === 'string' && devices.some((device) => device.id === parsed.selectedDeviceId)
+        ? parsed.selectedDeviceId
+        : devices[0].id || null;
+    return {
+      version: 1,
+      selectedDeviceId,
+      devices,
+      updatedAt: typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : undefined,
+    };
+  } catch {
+    const legacy = loadPhoneConfig();
+    return {
+      version: 1,
+      selectedDeviceId: legacy.id || null,
+      devices: [legacy],
+      updatedAt: new Date().toISOString(),
+    };
+  }
+}
+
+export function savePhoneDeviceStore(store: PhoneDeviceStore): PhoneDeviceStore {
+  const devices = dedupeDeviceIds(store.devices);
+  const selectedDeviceId =
+    store.selectedDeviceId && devices.some((device) => device.id === store.selectedDeviceId)
+      ? store.selectedDeviceId
+      : devices[0]?.id || null;
+  const clean: PhoneDeviceStore = {
+    version: 1,
+    selectedDeviceId,
+    devices,
+    updatedAt: new Date().toISOString(),
+  };
+  window.localStorage.setItem(DEVICE_STORE_KEY, JSON.stringify(clean));
+  return clean;
+}
+
+export function loadPhoneDevices(): PhoneConnectionConfig[] {
+  return loadPhoneDeviceStore().devices;
+}
+
+export function loadSelectedPhoneDeviceId(): string | null {
+  return loadPhoneDeviceStore().selectedDeviceId;
+}
+
+export function setSelectedPhoneDeviceId(deviceId: string | null): PhoneDeviceStore {
+  const store = loadPhoneDeviceStore();
+  return savePhoneDeviceStore({
+    ...store,
+    selectedDeviceId: deviceId,
+  });
+}
+
+export function upsertPhoneDevice(config: PhoneConnectionConfig): PhoneDeviceStore {
+  const store = loadPhoneDeviceStore();
+  const devices = [...store.devices];
+  const index = devices.findIndex((device) => device.id === config.id);
+  const usedIds = new Set(devices.filter((_, currentIndex) => currentIndex !== index).map((device) => device.id || ''));
+  const normalized = normalizePhoneConfig(config, usedIds, config.id);
+  if (index >= 0) {
+    devices[index] = normalized;
+  } else {
+    devices.push(normalized);
+  }
+  return savePhoneDeviceStore({
+    ...store,
+    selectedDeviceId: normalized.id || store.selectedDeviceId,
+    devices,
+  });
+}
+
+export function removePhoneDevice(deviceId: string): PhoneDeviceStore {
+  const store = loadPhoneDeviceStore();
+  const devices = store.devices.filter((device) => device.id !== deviceId);
+  const nextStore =
+    devices.length > 0
+      ? {
+          ...store,
+          devices,
+          selectedDeviceId:
+            store.selectedDeviceId === deviceId ? devices[0].id || null : store.selectedDeviceId,
+        }
+      : buildDefaultDeviceStore();
+  return savePhoneDeviceStore(nextStore);
+}
+
+export function getSelectedPhoneConfig(deviceId?: string | null): PhoneConnectionConfig {
+  const store = loadPhoneDeviceStore();
+  const selected =
+    (deviceId ? store.devices.find((device) => device.id === deviceId) : undefined) ||
+    store.devices.find((device) => device.id === store.selectedDeviceId) ||
+    store.devices[0];
+  return selected ? { ...selected } : normalizePhoneConfig(DEFAULT_CONFIG);
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -1277,35 +1490,32 @@ function summarizeVisionHint(vision: Record<string, unknown>): {
 export function loadPhoneConfig(): PhoneConnectionConfig {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_CONFIG };
+    if (!raw) return normalizePhoneConfig(DEFAULT_CONFIG);
     const parsed = JSON.parse(raw);
-    return {
-      name: String(parsed?.name || DEFAULT_PHONE_NAME),
-      baseUrl: String(parsed?.baseUrl || ''),
-      token: String(parsed?.token || ''),
-      launcherId: typeof parsed?.launcherId === 'string' ? parsed.launcherId : undefined,
-      launcherSecret: typeof parsed?.launcherSecret === 'string' ? parsed.launcherSecret : undefined,
-      secureChannelPairedAt: typeof parsed?.secureChannelPairedAt === 'string' ? parsed.secureChannelPairedAt : undefined,
-      visualizeActions: typeof parsed?.visualizeActions === 'boolean' ? parsed.visualizeActions : true,
-      useDeviceProfileContext: typeof parsed?.useDeviceProfileContext === 'boolean' ? parsed.useDeviceProfileContext : true,
-    };
+    return normalizePhoneConfig(parsed);
   } catch {
-    return { ...DEFAULT_CONFIG };
+    return normalizePhoneConfig(DEFAULT_CONFIG);
   }
 }
 
 export function savePhoneConfig(config: PhoneConnectionConfig): PhoneConnectionConfig {
-  const clean = {
-    name: (config.name || DEFAULT_PHONE_NAME).trim() || DEFAULT_PHONE_NAME,
-    baseUrl: normalizeBaseUrl(config.baseUrl),
-    token: config.token.trim(),
-    launcherId: config.launcherId,
-    launcherSecret: config.launcherSecret,
-    secureChannelPairedAt: config.secureChannelPairedAt,
-    visualizeActions: config.visualizeActions !== false,
-    useDeviceProfileContext: config.useDeviceProfileContext !== false,
-  };
+  const clean = normalizePhoneConfig(config);
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
+  const store = loadPhoneDeviceStore();
+  const matchingDevice =
+    (clean.id && store.devices.find((device) => device.id === clean.id)) ||
+    store.devices.find(
+      (device) =>
+        normalizeBaseUrl(device.baseUrl) === clean.baseUrl &&
+        (device.name || DEFAULT_PHONE_NAME) === clean.name
+    );
+  savePhoneDeviceStore({
+    ...store,
+    selectedDeviceId: matchingDevice?.id || clean.id || store.selectedDeviceId,
+    devices: matchingDevice
+      ? store.devices.map((device) => (device.id === matchingDevice.id ? clean : device))
+      : [...store.devices, clean],
+  });
   return clean;
 }
 

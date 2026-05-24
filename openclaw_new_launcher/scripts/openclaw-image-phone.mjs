@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readLauncherPhoneConfig, uploadImageBuffer } from './openclaw-phone-secure.mjs';
+import { readLauncherPhoneConfigByDevice, uploadImageBuffer } from './openclaw-phone-secure.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,6 +36,7 @@ Options:
   --size <size>                Image size. Default: ${DEFAULT_SIZE}
   --count <n>                  Number of images to generate. Default: 1, max: ${MAX_COUNT}
   --out-dir <path>             Directory for generated images. Default: data/generated-images
+  --device-id <id>             Optional. Select one configured APKClaw device from launcher
   --phone-url <url>            Optional. Defaults to launcher Phone Control config, then env
   --phone-token <token>        Optional. Defaults to launcher Phone Control config, then env
   --album <name>               Phone gallery album. Default: ${DEFAULT_ALBUM}
@@ -62,6 +63,7 @@ function parseArgs(argv) {
     size: DEFAULT_SIZE,
     count: 1,
     outDir: DEFAULT_OUT_DIR,
+    deviceId: '',
     phoneUrl: '',
     phoneToken: '',
     album: DEFAULT_ALBUM,
@@ -124,6 +126,9 @@ function parseArgs(argv) {
       case '--out-dir':
         args.outDir = path.resolve(next());
         break;
+      case '--device-id':
+        args.deviceId = next();
+        break;
       case '--phone-url':
         args.phoneUrl = next();
         break;
@@ -175,7 +180,7 @@ async function readJsonIfExists(filePath) {
 
 async function resolveConfig(args) {
   const imageConfig = await readJsonIfExists(path.join(PROJECT_ROOT, 'imgapi_config.json'));
-  const launcherPhone = await readLauncherPhoneConfig();
+  const launcherPhone = await readLauncherPhoneConfigByDevice(args.deviceId);
   return {
     ...args,
     imageBaseUrl: firstNonEmpty(
@@ -193,6 +198,7 @@ async function resolveConfig(args) {
     imageModel: firstNonEmpty(args.imageModel, process.env.OPENCLAW_IMAGE_MODEL, imageConfig.model, DEFAULT_IMAGE_MODEL),
     phoneUrl: firstNonEmpty(args.phoneUrl, process.env.OPENCLAW_PHONE_BASE_URL, process.env.APKCLAW_BASE_URL, launcherPhone.phoneUrl),
     phoneToken: firstNonEmpty(args.phoneToken, process.env.OPENCLAW_PHONE_TOKEN, process.env.APKCLAW_TOKEN, launcherPhone.phoneToken),
+    deviceId: args.deviceId || launcherPhone.id || '',
   };
 }
 

@@ -12,7 +12,7 @@ Use this skill to control or inspect the connected Android phone through the pho
 
 OpenClaw must not guess or hardcode the phone IP or token.
 
-- Hard rule: send APKClaw Agent tasks only with `npm run phone:agent`. Do not call APKClaw task endpoints directly from generated shell, JavaScript, Python, browser code, or HTTP clients.
+- Hard rule: send APKClaw Agent tasks only with launcher wrappers: `npm run phone:agent` for one phone and `npm run phone:fleet` for multiple phones. Do not call APKClaw task endpoints directly from generated shell, JavaScript, Python, browser code, or HTTP clients.
 - Hard rule: do not construct phone URLs, endpoint paths, auth headers, signatures, or token-bearing requests manually.
 - Read `runtime-context.json` for current phone state and capability limits.
 - `runtime-context.json` exposes phone readiness and wrapper names, but it must not expose the raw phone URL or token.
@@ -24,6 +24,8 @@ For CLI commands, rely on the launcher-saved Phone Control config:
 
 ```powershell
 npm run phone:agent -- run --prompt "inspect the current phone screen safely" --mode observe
+npm run phone:fleet -- list
+npm run phone:fleet -- run --target all --prompt "inspect each current phone screen safely" --mode observe
 npm run phone:vision -- status
 npm run phone:game -- run --goal "inspect the current phone screen safely"
 npm run phone:video -- status

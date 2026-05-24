@@ -5,17 +5,19 @@ use std::collections::HashMap;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::Duration;
 use tauri::path::BaseDirectory;
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
 
 mod license;
 
 static BRIDGE_PORT: AtomicU16 = AtomicU16::new(0);
 static BRIDGE_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static BRIDGE_CHILD_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
 static BRIDGE_START_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static LAST_BRIDGE_STARTUP_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -57,6 +59,79 @@ fn set_bridge_startup_error(message: impl Into<String>) {
     if let Ok(mut guard) = LAST_BRIDGE_STARTUP_ERROR.lock() {
         *guard = Some(message.into());
     }
+}
+
+fn bridge_token() -> Option<String> {
+    BRIDGE_TOKEN.lock().ok().and_then(|guard| guard.clone())
+}
+
+fn clear_bridge_state_for_pid(pid: u32) {
+    let mut should_clear = false;
+    if let Ok(mut guard) = BRIDGE_CHILD_PID.lock() {
+        if guard.map(|known_pid| known_pid == pid).unwrap_or(false) {
+            *guard = None;
+            should_clear = true;
+        }
+    }
+    if should_clear {
+        BRIDGE_PORT.store(0, Ordering::Relaxed);
+        if let Ok(mut guard) = BRIDGE_TOKEN.lock() {
+            *guard = None;
+        }
+    }
+}
+
+fn kill_process_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("taskkill");
+        command.args(["/F", "/T", "/PID", &pid.to_string()]);
+        command.creation_flags(CREATE_NO_WINDOW);
+        let _ = command.output();
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .output();
+    }
+}
+
+fn terminate_bridge_process_tree() {
+    let pid = BRIDGE_CHILD_PID.lock().ok().and_then(|guard| *guard);
+    if let Some(pid) = pid {
+        kill_process_tree(pid);
+        clear_bridge_state_for_pid(pid);
+    }
+}
+
+async fn post_bridge_shutdown(path: &str) {
+    let port = BRIDGE_PORT.load(Ordering::Relaxed);
+    if port == 0 {
+        return;
+    }
+
+    let url = format!("http://127.0.0.1:{}/{}", port, path.trim_start_matches('/'));
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return,
+    };
+
+    let mut request = client.post(url);
+    if let Some(token) = bridge_token() {
+        request = request.header("X-Bridge-Token", token);
+    }
+    let _ = request.send().await;
+}
+
+async fn shutdown_backend() {
+    post_bridge_shutdown("/api/process/stop").await;
+    post_bridge_shutdown("/api/desktop-agent/stop").await;
+    terminate_bridge_process_tree();
 }
 
 fn summarize_checks(checks: &[DiagnosticCheck]) -> DiagnosticSummary {
@@ -173,6 +248,10 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
             set_bridge_startup_error(message.clone());
             message
         })?;
+    let child_pid = child.id();
+    if let Ok(mut guard) = BRIDGE_CHILD_PID.lock() {
+        *guard = Some(child_pid);
+    }
 
     let mut child_stderr = child.stderr.take();
     let stdout = child.stdout.take().ok_or("无法获取 bridge 输出")?;
@@ -205,6 +284,7 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
                 stderr_text.trim()
             );
             set_bridge_startup_error(message.clone());
+            clear_bridge_state_for_pid(child_pid);
             return Err(message);
         }
         line.clear();
@@ -241,6 +321,7 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
             }
         }
         let _ = child.wait();
+        clear_bridge_state_for_pid(child_pid);
     });
 
     Ok(format!(
@@ -608,6 +689,20 @@ pub fn run() {
                 }
             });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if SHUTDOWN_REQUESTED.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+
+                let app_handle = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    shutdown_backend().await;
+                    app_handle.exit(0);
+                });
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_bridge_port,

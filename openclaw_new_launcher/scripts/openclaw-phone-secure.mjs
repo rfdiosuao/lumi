@@ -18,6 +18,62 @@ export function ensurePhoneConfig(config) {
 }
 
 export async function readLauncherPhoneConfig() {
+  const selected = await readLauncherPhoneConfigByDevice();
+  return selected;
+}
+
+export async function readLauncherPhoneStore() {
+  const candidates = [
+    path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agents.json'),
+    path.join(PROJECT_ROOT, 'OpenClawFiles', 'data', '.openclaw', 'launcher', 'phone-agents.json'),
+  ];
+
+  for (const filePath of candidates) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(filePath, 'utf8'));
+      if (!Array.isArray(parsed?.devices) || !parsed.devices.length) continue;
+      return {
+        selectedDeviceId: typeof parsed?.selectedDeviceId === 'string' ? parsed.selectedDeviceId : '',
+        devices: parsed.devices
+          .filter((item) => item && typeof item === 'object')
+          .map((item) => ({
+            id: typeof item.id === 'string' ? item.id.trim() : '',
+            name: typeof item.name === 'string' ? item.name.trim() : '',
+            phoneUrl: typeof item.baseUrl === 'string' ? item.baseUrl.trim().replace(/\/+$/, '') : '',
+            phoneToken: typeof item.token === 'string' ? item.token.trim() : '',
+            lumiLauncherId: typeof item.launcherId === 'string' ? item.launcherId.trim() : '',
+            lumiLauncherSecret: typeof item.launcherSecret === 'string' ? item.launcherSecret.trim() : '',
+            album: typeof item.album === 'string' ? item.album.trim() : '',
+          }))
+          .filter((item) => item.id || item.phoneUrl || item.name),
+        source: filePath,
+      };
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw new Error(`Failed to read launcher phone config: ${filePath}: ${error.message}`);
+    }
+  }
+
+  return { selectedDeviceId: '', devices: [], source: '' };
+}
+
+export async function readLauncherPhoneConfigByDevice(deviceId = '') {
+  const store = await readLauncherPhoneStore();
+  if (store.devices.length) {
+    if (deviceId && !store.devices.some((device) => device.id === deviceId)) {
+      throw new Error(`Unknown APKClaw device id: ${deviceId}`);
+    }
+    const selected =
+      (deviceId ? store.devices.find((device) => device.id === deviceId) : undefined) ||
+      (store.selectedDeviceId ? store.devices.find((device) => device.id === store.selectedDeviceId) : undefined) ||
+      store.devices[0];
+    if (selected) {
+      return {
+        ...selected,
+        source: store.source,
+      };
+    }
+  }
+
   const candidates = [
     path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agent.json'),
     path.join(PROJECT_ROOT, 'OpenClawFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
@@ -26,9 +82,18 @@ export async function readLauncherPhoneConfig() {
   for (const filePath of candidates) {
     try {
       const parsed = JSON.parse(await fs.readFile(filePath, 'utf8'));
+      const parsedId = typeof parsed?.id === 'string' ? parsed.id.trim() : '';
+      if (deviceId && (!parsedId || parsedId !== deviceId)) {
+        throw new Error(`Unknown APKClaw device id: ${deviceId}`);
+      }
       return {
+        id: parsedId,
+        name: typeof parsed?.name === 'string' ? parsed.name.trim() : '',
         phoneUrl: typeof parsed?.baseUrl === 'string' ? parsed.baseUrl.trim().replace(/\/+$/, '') : '',
         phoneToken: typeof parsed?.token === 'string' ? parsed.token.trim() : '',
+        lumiLauncherId: typeof parsed?.launcherId === 'string' ? parsed.launcherId.trim() : '',
+        lumiLauncherSecret: typeof parsed?.launcherSecret === 'string' ? parsed.launcherSecret.trim() : '',
+        album: typeof parsed?.album === 'string' ? parsed.album.trim() : '',
         source: filePath,
       };
     } catch (error) {
@@ -36,6 +101,9 @@ export async function readLauncherPhoneConfig() {
     }
   }
 
+  if (deviceId) {
+    throw new Error(`Unknown APKClaw device id: ${deviceId}`);
+  }
   return { phoneUrl: '', phoneToken: '', source: '' };
 }
 

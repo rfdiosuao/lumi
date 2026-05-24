@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensurePhoneConfig, readLauncherPhoneConfig, signedFetch, signedJsonRequest } from './openclaw-phone-secure.mjs';
+import { ensurePhoneConfig, readLauncherPhoneConfigByDevice, signedFetch, signedJsonRequest } from './openclaw-phone-secure.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +30,7 @@ Commands:
   download                    Download a recording from phone to PC
 
 Options:
+  --device-id <id>             Optional. Select one configured APKClaw device from launcher
   --phone-url <url>            Optional. Defaults to launcher Phone Control config, then env
   --phone-token <token>        Optional. Defaults to launcher Phone Control config, then env
   --id <filename>              Recording id/filename for download
@@ -52,6 +53,7 @@ Notes:
 function parseArgs(argv) {
   const args = {
     command: '',
+    deviceId: '',
     phoneUrl: '',
     phoneToken: '',
     id: '',
@@ -90,6 +92,9 @@ function parseArgs(argv) {
         break;
       case '--phone-url':
         args.phoneUrl = next();
+        break;
+      case '--device-id':
+        args.deviceId = next();
         break;
       case '--phone-token':
         args.phoneToken = next();
@@ -141,7 +146,7 @@ function parseArgs(argv) {
 
 async function resolveConfig(args) {
   const runtime = await readRuntimeContext();
-  const launcherPhone = await readLauncherPhoneConfig();
+  const launcherPhone = await readLauncherPhoneConfigByDevice(args.deviceId);
   return {
     ...args,
     phoneUrl: firstNonEmpty(
@@ -152,6 +157,7 @@ async function resolveConfig(args) {
       launcherPhone.phoneUrl
     ),
     phoneToken: firstNonEmpty(args.phoneToken, process.env.OPENCLAW_PHONE_TOKEN, process.env.APKCLAW_TOKEN, launcherPhone.phoneToken),
+    deviceId: args.deviceId || launcherPhone.id || runtime?.phone?.defaultDeviceId || '',
   };
 }
 

@@ -6,21 +6,27 @@ import {
   buildAgentPromptWithDeviceProfile,
   buildPhoneInitializationReport,
   clearPhoneDeviceProfile,
-  loadPhoneConfig,
+  getSelectedPhoneConfig,
+  loadPhoneDeviceStore,
+  loadPhoneDevices,
   loadPhoneDeviceProfile,
   phoneApi,
   PhoneAgentAsyncTask,
   PhoneAgentEvent,
   PhoneAgentTaskResult,
   PhoneConnectionConfig,
+  PhoneDeviceStore,
   PhoneDeviceProfileCache,
   PhoneInitializationReport,
   PhoneScreenNode,
   PhoneScreenTree,
   PhoneScreenshot,
   PhoneStatus,
+  removePhoneDevice,
   savePhoneConfig,
   savePhoneDeviceProfile,
+  setSelectedPhoneDeviceId,
+  upsertPhoneDevice,
 } from '../../services/phoneApi';
 
 interface ActionLog {
@@ -81,9 +87,26 @@ interface AgentRun {
   error?: string;
 }
 
+interface FleetRun {
+  id: number;
+  deviceId: string;
+  deviceName: string;
+  prompt: string;
+  mode: AgentTaskMode;
+  status: 'queued' | 'running' | 'success' | 'error';
+  startedAt: string;
+  finishedAt?: string;
+  answer?: string;
+  error?: string;
+}
+
 let logId = 0;
 let traceSeq = 0;
 let agentRunSeq = 0;
+let fleetRunSeq = 0;
+const PHONE_AGENT_CONFIG_PATH = 'data/.openclaw/launcher/phone-agent.json';
+const PHONE_AGENT_STORE_PATH = 'data/.openclaw/launcher/phone-agents.json';
+const APKCLAW_TASK_TIMEOUT_SEC = 600;
 
 const TASK_MODE_OPTIONS: Array<{ id: AgentTaskMode; title: string; desc: string }> = [
   { id: 'observe_only', title: '只读观察', desc: '只看屏幕和应用，不改变状态' },
@@ -322,51 +345,108 @@ function summarizeAgentEvents(events?: PhoneAgentEvent[] | null): string {
 }
 
 export const PhoneControlPage: React.FC = () => {
-  const [config, setConfig] = React.useState<PhoneConnectionConfig>(() => loadPhoneConfig());
+  const [deviceStore, setDeviceStore] = React.useState<PhoneDeviceStore>(() => loadPhoneDeviceStore());
+  const [devices, setDevices] = React.useState<PhoneConnectionConfig[]>(() => loadPhoneDevices());
+  const [config, setConfig] = React.useState<PhoneConnectionConfig>(() => getSelectedPhoneConfig());
   const [status, setStatus] = React.useState<PhoneStatus | null>(null);
   const [screenshot, setScreenshot] = React.useState<PhoneScreenshot | null>(null);
   const [screenTree, setScreenTree] = React.useState<PhoneScreenTree | null>(null);
   const [naturalSize, setNaturalSize] = React.useState<{ width: number; height: number } | null>(null);
-  const [loading, setLoading] = React.useState<'connect' | 'screenshot' | 'tree' | 'action' | 'agent' | 'cancel' | 'cursor' | 'profile' | 'acceptance' | null>(null);
+  const [loading, setLoading] = React.useState<'connect' | 'screenshot' | 'tree' | 'action' | 'agent' | 'fleet' | 'cancel' | 'cursor' | 'profile' | 'acceptance' | null>(null);
   const [logs, setLogs] = React.useState<ActionLog[]>([]);
   const [traces, setTraces] = React.useState<ActionTrace[]>([]);
-  const [deviceProfileCache, setDeviceProfileCache] = React.useState<PhoneDeviceProfileCache | null>(() => loadPhoneDeviceProfile(loadPhoneConfig()));
-  const [initializationReport, setInitializationReport] = React.useState<PhoneInitializationReport | null>(() => loadPhoneDeviceProfile(loadPhoneConfig())?.healthReport || null);
+  const [deviceProfileCache, setDeviceProfileCache] = React.useState<PhoneDeviceProfileCache | null>(() => loadPhoneDeviceProfile(getSelectedPhoneConfig()));
+  const [initializationReport, setInitializationReport] = React.useState<PhoneInitializationReport | null>(() => loadPhoneDeviceProfile(getSelectedPhoneConfig())?.healthReport || null);
   const [agentPrompt, setAgentPrompt] = React.useState('读取当前手机屏幕。不要点击、输入、滑动或切换 App。用中文说明当前页面标题、所在应用和三个最明显的可见入口，然后结束。');
   const [agentUseTemplate, setAgentUseTemplate] = React.useState(true);
   const [agentForceAgent, setAgentForceAgent] = React.useState(false);
   const [agentTaskMode, setAgentTaskMode] = React.useState<AgentTaskMode>('observe_only');
   const [agentRuns, setAgentRuns] = React.useState<AgentRun[]>([]);
+  const [fleetTargetIds, setFleetTargetIds] = React.useState<string[]>([]);
+  const [fleetRuns, setFleetRuns] = React.useState<FleetRun[]>([]);
   const [dragPickMode, setDragPickMode] = React.useState(false);
   const [dragDraft, setDragDraft] = React.useState<{ x: number; y: number } | null>(null);
   const imageRef = React.useRef<HTMLImageElement | null>(null);
   const setPhoneAgentSnapshot = useAppStore((state) => state.setPhoneAgentSnapshot);
   const deviceProfile = deviceProfileCache?.profile || null;
   const agentReadOnly = agentTaskMode === 'observe_only';
+  const selectedDeviceId = deviceStore.selectedDeviceId || config.id || null;
 
   React.useEffect(() => {
     const cache = loadPhoneDeviceProfile(config);
     setDeviceProfileCache(cache);
     setInitializationReport(cache?.healthReport || null);
-  }, [config.baseUrl]);
+  }, [config.baseUrl, config.id]);
+
+  React.useEffect(() => {
+    setFleetTargetIds((current) => {
+      const available = new Set(devices.map((device) => device.id).filter(Boolean) as string[]);
+      const kept = current.filter((id) => available.has(id));
+      if (kept.length) return kept;
+      return selectedDeviceId ? [selectedDeviceId] : [];
+    });
+  }, [devices, selectedDeviceId]);
 
   const addLog = React.useCallback((message: string, tone: ActionLog['tone'] = 'info') => {
     const id = ++logId;
     setLogs((items) => [{ id, message, tone }, ...items].slice(0, 12));
   }, []);
 
+  const syncRuntimePhoneFiles = React.useCallback(async (selected: PhoneConnectionConfig, store: PhoneDeviceStore) => {
+    await Promise.all([
+      configApi.write(PHONE_AGENT_CONFIG_PATH, {
+        id: selected.id,
+        name: selected.name || 'Android Phone',
+        baseUrl: selected.baseUrl,
+        token: selected.token,
+        visualizeActions: selected.visualizeActions !== false,
+        useDeviceProfileContext: selected.useDeviceProfileContext !== false,
+        album: 'OpenClaw',
+        updatedAt: new Date().toISOString(),
+      }),
+      configApi.write(PHONE_AGENT_STORE_PATH, {
+        selectedDeviceId: store.selectedDeviceId,
+        updatedAt: new Date().toISOString(),
+        devices: store.devices.map((device) => ({
+          id: device.id,
+          name: device.name || 'Android Phone',
+          baseUrl: device.baseUrl,
+          token: device.token,
+          launcherId: device.launcherId,
+          launcherSecret: device.launcherSecret,
+          secureChannelPairedAt: device.secureChannelPairedAt,
+          visualizeActions: device.visualizeActions !== false,
+          useDeviceProfileContext: device.useDeviceProfileContext !== false,
+          enabled: device.enabled !== false,
+          tags: Array.isArray(device.tags) ? device.tags : [],
+          lastSeenAt: device.lastSeenAt,
+          album: 'OpenClaw',
+        })),
+      }),
+    ]);
+  }, []);
+
+  const applyDeviceStore = React.useCallback((store: PhoneDeviceStore, preferredId?: string | null) => {
+    setDeviceStore(store);
+    setDevices(store.devices);
+    const nextSelected =
+      (preferredId ? store.devices.find((device) => device.id === preferredId) : undefined) ||
+      store.devices.find((device) => device.id === store.selectedDeviceId) ||
+      store.devices[0] ||
+      null;
+    if (nextSelected) {
+      setConfig(nextSelected);
+    }
+    return nextSelected;
+  }, []);
+
   const updateConfig = (patch: Partial<PhoneConnectionConfig>) => {
     setConfig((current) => {
       const saved = savePhoneConfig({ ...current, ...patch });
-      void configApi.write('data/.openclaw/launcher/phone-agent.json', {
-        name: saved.name || 'Android Phone',
-        baseUrl: saved.baseUrl,
-        token: saved.token,
-        visualizeActions: saved.visualizeActions !== false,
-        useDeviceProfileContext: saved.useDeviceProfileContext !== false,
-        album: 'OpenClaw',
-        updatedAt: new Date().toISOString(),
-      }).catch(() => {
+      const store = upsertPhoneDevice(saved);
+      setDeviceStore(store);
+      setDevices(store.devices);
+      void syncRuntimePhoneFiles(saved, store).catch(() => {
         // Best-effort live sync; explicit actions still report persistence errors.
       });
       return saved;
@@ -375,7 +455,11 @@ export const PhoneControlPage: React.FC = () => {
 
   const persistConfig = React.useCallback(() => {
     const saved = savePhoneConfig(config);
-    setConfig(saved);
+    const store = upsertPhoneDevice(saved);
+    applyDeviceStore(store, saved.id);
+    void syncRuntimePhoneFiles(saved, store).catch(() => {
+      addLog('Phone config sync failed', 'error');
+    });
     void configApi.write('data/.openclaw/launcher/phone-agent.json', {
       name: saved.name || 'Android Phone',
       baseUrl: saved.baseUrl,
@@ -388,7 +472,55 @@ export const PhoneControlPage: React.FC = () => {
       addLog(`手机配置同步到运行时失败：${error?.error || error?.message || '未知错误'}`, 'error');
     });
     return saved;
-  }, [addLog, config]);
+  }, [addLog, applyDeviceStore, config, syncRuntimePhoneFiles]);
+
+  const handleSelectDevice = React.useCallback(
+    (deviceId: string) => {
+      const nextStore = setSelectedPhoneDeviceId(deviceId);
+      const nextSelected = applyDeviceStore(nextStore, deviceId);
+      if (!nextSelected) return;
+      savePhoneConfig(nextSelected);
+      void syncRuntimePhoneFiles(nextSelected, nextStore).catch(() => {
+        addLog('Switch device failed', 'error');
+      });
+    },
+    [addLog, applyDeviceStore, syncRuntimePhoneFiles]
+  );
+
+  const handleAddDevice = React.useCallback(() => {
+    const nextIndex = devices.length + 1;
+    const draft = savePhoneConfig({
+      ...config,
+      id: undefined,
+      name: `Android Phone ${nextIndex}`,
+      baseUrl: '',
+      token: '',
+      launcherId: undefined,
+      launcherSecret: undefined,
+      secureChannelPairedAt: undefined,
+      lastSeenAt: undefined,
+    });
+    const store = upsertPhoneDevice(draft);
+    applyDeviceStore(store, draft.id);
+    void syncRuntimePhoneFiles(draft, store).catch(() => {
+      addLog('Add device failed', 'error');
+    });
+  }, [addLog, applyDeviceStore, config, devices.length, syncRuntimePhoneFiles]);
+
+  const handleRemoveDevice = React.useCallback(() => {
+    if (!selectedDeviceId) return;
+    if (devices.length <= 1) {
+      showToast('Keep at least one device', 'error');
+      return;
+    }
+    const store = removePhoneDevice(selectedDeviceId);
+    const nextSelected = applyDeviceStore(store, store.selectedDeviceId);
+    if (!nextSelected) return;
+    savePhoneConfig(nextSelected);
+    void syncRuntimePhoneFiles(nextSelected, store).catch(() => {
+      addLog('Remove device failed', 'error');
+    });
+  }, [addLog, applyDeviceStore, devices.length, selectedDeviceId, syncRuntimePhoneFiles]);
 
   const refreshScreenTree = React.useCallback(
     async (saved: PhoneConnectionConfig, announce = true) => {
@@ -805,7 +937,7 @@ export const PhoneControlPage: React.FC = () => {
     showToast('已发送给 APKClaw Agent，正在执行', 'info');
 
     let finalTask = null;
-    const maxWaitMs = 615000;
+    const maxWaitMs = APKCLAW_TASK_TIMEOUT_SEC * 1000 + 15000;
     const startedMs = Date.now();
     while (Date.now() - startedMs < maxWaitMs) {
       await new Promise((resolve) => window.setTimeout(resolve, 1800));
@@ -960,6 +1092,110 @@ export const PhoneControlPage: React.FC = () => {
     setAgentPrompt(task.prompt);
     setAgentTaskMode(task.mode);
     addLog('已填入预设任务', 'info');
+  };
+
+  const toggleFleetTarget = React.useCallback((deviceId?: string) => {
+    if (!deviceId) return;
+    setFleetTargetIds((current) =>
+      current.includes(deviceId)
+        ? current.filter((id) => id !== deviceId)
+        : [...current, deviceId]
+    );
+  }, []);
+
+  const selectAllFleetTargets = React.useCallback(() => {
+    setFleetTargetIds(devices.map((device) => device.id).filter(Boolean) as string[]);
+  }, [devices]);
+
+  const handleRunFleetTask = async () => {
+    const prompt = agentPrompt.trim();
+    if (!prompt) {
+      showToast('Write a fleet task first', 'info');
+      return;
+    }
+    const targets = devices.filter((device) => device.id && fleetTargetIds.includes(device.id));
+    if (!targets.length) {
+      showToast('Select at least one device', 'info');
+      return;
+    }
+
+    setLoading('fleet');
+    const startedAt = new Date().toISOString();
+    const batchRuns = targets.map((device) => ({
+      id: ++fleetRunSeq,
+      deviceId: device.id || '',
+      deviceName: device.name || device.id || 'Android Phone',
+      prompt,
+      mode: agentTaskMode,
+      status: 'queued' as const,
+      startedAt,
+    }));
+    setFleetRuns((items) => [...batchRuns, ...items].slice(0, 24));
+    addLog(`Fleet task started: ${targets.length} device(s)`, 'info');
+
+    const runOneFleetDevice = async (device: PhoneConnectionConfig, index: number) => {
+      try {
+        const runId = batchRuns[index].id;
+        setFleetRuns((items) =>
+          items.map((item) => item.id === runId ? { ...item, status: 'running' as const } : item)
+        );
+        const result = await phoneApi.executeTask(device, {
+          prompt,
+          useTemplate: agentUseTemplate,
+          forceAgent: agentForceAgent,
+          readOnly: agentTaskMode === 'observe_only',
+          toolPolicy: agentTaskMode,
+          timeoutSec: APKCLAW_TASK_TIMEOUT_SEC,
+        });
+        const finishedAt = new Date().toISOString();
+        if (!result.ok || !result.data) {
+          const message = errorMessage(result.error);
+          setFleetRuns((items) =>
+            items.map((item) => item.id === runId ? { ...item, status: 'error' as const, finishedAt, error: message } : item)
+          );
+          addLog(`Fleet ${device.name || device.id}: ${message}`, 'error');
+          return;
+        }
+        setFleetRuns((items) =>
+          items.map((item) =>
+            item.id === runId
+              ? {
+                  ...item,
+                  status: 'success' as const,
+                  finishedAt,
+                  answer: result.data?.answer || summarizeAgentEvents(result.data?.events || []) || 'done',
+                }
+              : item
+          )
+        );
+        addLog(`Fleet ${device.name || device.id}: completed`, 'success');
+      } catch (error: any) {
+        const runId = batchRuns[index].id;
+        const finishedAt = new Date().toISOString();
+        const message = errorMessage(error?.message || 'device_failed');
+        setFleetRuns((items) =>
+          items.map((item) => item.id === runId ? { ...item, status: 'error' as const, finishedAt, error: message } : item)
+        );
+        addLog(`Fleet ${device.name || device.id}: ${message}`, 'error');
+      }
+    };
+
+    const concurrency = Math.min(2, targets.length);
+    let nextTargetIndex = 0;
+    try {
+      await Promise.all(
+        Array.from({ length: concurrency }, async () => {
+          while (nextTargetIndex < targets.length) {
+            const index = nextTargetIndex;
+            nextTargetIndex += 1;
+            await runOneFleetDevice(targets[index], index);
+          }
+        })
+      );
+      showToast('Fleet task finished', 'success');
+    } finally {
+      setLoading(null);
+    }
   };
 
   const handleFillVisionTask = () => {
@@ -1311,6 +1547,8 @@ export const PhoneControlPage: React.FC = () => {
   const latestTools = toolsFromRun(latestRun);
   const completedRuns = agentRuns.filter((run) => run.status === 'success').length;
   const failedRuns = agentRuns.filter((run) => run.status === 'error').length;
+  const activeFleetRuns = fleetRuns.filter((run) => run.status === 'queued' || run.status === 'running').length;
+  const latestFleetRuns = fleetRuns.slice(0, Math.max(6, devices.length));
   const liveStatusText = loading === 'agent' || status?.taskRunning ? 'Agent running' : readyForAgent ? 'Ready' : 'Needs setup';
   const deviceProfileContextEnabled = config.useDeviceProfileContext !== false;
   const deviceProfileContextActive = deviceProfileContextEnabled && Boolean(deviceProfileCache?.profile);
@@ -1348,6 +1586,40 @@ export const PhoneControlPage: React.FC = () => {
           <section className="rounded-[16px] border border-border/80 bg-surface-alt/35 p-4">
             <div className="mb-4 text-xs font-bold uppercase tracking-[0.22em] text-text-subtle">连接配置</div>
             <div className="space-y-3">
+              <div className="rounded-xl border border-border/60 bg-surface/35 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-text-subtle">Devices</div>
+                  <div className="flex items-center gap-2">
+                    <Button onClick={handleAddDevice} disabled={loading !== null} variant="quiet" className="px-2 py-1 text-[11px]">
+                      + Add
+                    </Button>
+                    <Button onClick={handleRemoveDevice} disabled={loading !== null || devices.length <= 1} variant="quiet" className="px-2 py-1 text-[11px]">
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {devices.map((device) => {
+                    const active = device.id === selectedDeviceId;
+                    return (
+                      <button
+                        key={device.id || device.baseUrl || device.name}
+                        type="button"
+                        onClick={() => device.id && handleSelectDevice(device.id)}
+                        className={`w-full rounded-xl border px-3 py-2 text-left transition ${
+                          active ? 'border-accent bg-accent/12' : 'border-border/60 bg-surface/25 hover:border-accent/40'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="truncate text-sm font-bold text-text">{device.name || 'Android Phone'}</div>
+                          {active && <span className="text-[10px] font-black uppercase tracking-[0.18em] text-accent">Current</span>}
+                        </div>
+                        <div className="mt-1 truncate text-[11px] text-text-subtle">{device.baseUrl || 'No APKClaw URL yet'}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div>
                 <FieldLabel text="设备名称" />
                 <Input value={config.name || ''} onChange={(event) => updateConfig({ name: event.target.value })} placeholder="Android Phone" />
@@ -1406,6 +1678,64 @@ export const PhoneControlPage: React.FC = () => {
                 {loading === 'acceptance' ? '验收中...' : '一键验收'}
               </Button>
             </div>
+          </section>
+
+          <section className="rounded-[16px] border border-border/80 bg-surface-alt/35 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-[0.22em] text-text-subtle">Fleet</div>
+                <div className="mt-1 text-xs text-text-muted">{fleetTargetIds.length}/{devices.length} selected</div>
+              </div>
+              <Button onClick={selectAllFleetTargets} disabled={loading !== null || devices.length === 0} variant="quiet" className="px-3 py-1.5 text-xs">
+                All
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {devices.map((device) => (
+                <label key={device.id || device.baseUrl || device.name} className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-surface/35 px-3 py-2">
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs font-bold text-text">{device.name || 'Android Phone'}</span>
+                    <span className="block truncate text-[11px] text-text-subtle">{device.id || 'no-id'}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(device.id && fleetTargetIds.includes(device.id))}
+                    onChange={() => toggleFleetTarget(device.id)}
+                    className="h-4 w-4 accent-[var(--color-accent)]"
+                  />
+                </label>
+              ))}
+            </div>
+            <Button onClick={handleRunFleetTask} disabled={loading !== null || fleetTargetIds.length === 0} variant="primary" className="mt-3 w-full">
+              {loading === 'fleet' ? 'Fleet running...' : 'Run on selected'}
+            </Button>
+            {latestFleetRuns.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-[0.18em] text-text-subtle">
+                  <span>Batch Trace</span>
+                  <span>{activeFleetRuns ? `${activeFleetRuns} active` : 'idle'}</span>
+                </div>
+                {latestFleetRuns.map((run) => (
+                  <div key={run.id} className="rounded-xl border border-border/60 bg-surface/35 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="truncate text-xs font-bold text-text">{run.deviceName}</div>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                        run.status === 'success'
+                          ? 'bg-status-success/15 text-status-success'
+                          : run.status === 'error'
+                            ? 'bg-status-danger/15 text-status-danger'
+                            : 'bg-accent/15 text-accent'
+                      }`}>
+                        {run.status}
+                      </span>
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-text-subtle">
+                      {run.error || run.answer || run.prompt}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           {deviceProfile && (

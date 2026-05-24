@@ -25,6 +25,7 @@ from core.storage import read_json, write_json, update_json
 from core.license_manager import LicenseManager
 from core.theme_manager import ThemeManager
 from services.process import OpenClawProcessService
+from services.desktop_agent import DesktopAgentService
 from services.image_api import ImageApiClient
 from services.video_api import DashScopeVideoClient
 from services.updater import OpenClawUpdater
@@ -39,6 +40,13 @@ def append_log(text: str) -> None:
         log_buffer.append(text)
         if len(log_buffer) > 500:
             log_buffer[:] = log_buffer[-500:]
+    try:
+        log_dir = os.path.join(paths.data_dir, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "bridge-service.log"), "a", encoding="utf-8") as file:
+            file.write(text)
+    except Exception:
+        pass
 
 def append_log_ui(text: str) -> None:
     append_log(text)
@@ -49,6 +57,7 @@ def ui_call(func, *args) -> None:
 # Create service instances
 _license_mgr: LicenseManager | None = None
 _process_svc: OpenClawProcessService | None = None
+_desktop_agent_svc: DesktopAgentService | None = None
 _updater: OpenClawUpdater | None = None
 _image_client: ImageApiClient | None = None
 _video_client: DashScopeVideoClient | None = None
@@ -68,6 +77,12 @@ def _get_process_svc() -> OpenClawProcessService:
     if _process_svc is None:
         _process_svc = OpenClawProcessService(paths, append_log_ui, ui_call)
     return _process_svc
+
+def _get_desktop_agent_svc() -> DesktopAgentService:
+    global _desktop_agent_svc
+    if _desktop_agent_svc is None:
+        _desktop_agent_svc = DesktopAgentService(paths, append_log_ui)
+    return _desktop_agent_svc
 
 def _get_updater() -> OpenClawUpdater:
     global _updater
@@ -109,7 +124,10 @@ def _provider_id_from_base_url(base_url: str, fallback: str) -> str:
 
 
 def _model_definition(model_id: str) -> dict:
-    is_reasoning = model_id.startswith(("claude", "qwen3", "o1", "o3", "o4"))
+    # Qwen thinking over OpenAI-compatible gateways may require provider-specific
+    # limits. Mark it as plain text here so OpenClaw does not emit an invalid
+    # thinking_budget/max_completion_tokens pair by default.
+    is_reasoning = model_id.startswith(("claude", "o1", "o3", "o4", "deepseek-reasoner"))
     context_window = 200000 if model_id.startswith("claude") else 128000
     max_tokens = 32000
     if model_id.startswith("qwen3"):
@@ -129,6 +147,74 @@ def _model_definition(model_id: str) -> dict:
 
 def _sync_openclaw_models_from_api_profiles() -> None:
     """Keep launcher API settings compatible with OpenClaw 2026.5+ model config."""
+    gateway_profile = _get_license_mgr().current_gateway_profile()
+    if gateway_profile:
+        base_url = str(gateway_profile.get("baseUrl") or "").strip().rstrip("/")
+        api_key = str(gateway_profile.get("apiKey") or "").strip()
+        model_ids = [
+            str(item).strip()
+            for item in (gateway_profile.get("models") or [])
+            if str(item).strip()
+        ]
+        default_model = str(gateway_profile.get("defaultModel") or "").strip()
+        if default_model:
+            model_ids = [default_model] + [model_id for model_id in model_ids if model_id != default_model]
+        if not base_url or not api_key or not model_ids:
+            return
+
+        provider_id = _provider_id_from_base_url(base_url, "member")
+        primary_model = default_model or model_ids[0]
+        model_ref = f"{provider_id}/{primary_model}"
+        provider_config = {
+            "baseUrl": base_url,
+            "apiKey": api_key,
+            "api": "openai-completions",
+            "models": [_model_definition(model_id) for model_id in model_ids],
+        }
+
+        agent_dir = os.path.dirname(paths.auth_profiles)
+        models_path = os.path.join(agent_dir, "models.json")
+        models_json = read_json(models_path, {"providers": {}})
+        if not isinstance(models_json, dict):
+            models_json = {"providers": {}}
+        models_json.setdefault("providers", {})
+        models_json["providers"][provider_id] = provider_config
+        write_json(models_path, models_json)
+
+        profiles = read_json(paths.auth_profiles, {"models": {"providers": {}}})
+        if not isinstance(profiles, dict):
+            profiles = {"models": {"providers": {}}}
+        profiles.setdefault("models", {})
+        profiles["models"].setdefault("providers", {})
+        profiles["models"]["providers"]["member_gateway"] = {
+            "id": "member_gateway",
+            "name": "会员托管",
+            "baseUrl": base_url,
+            "apiKey": api_key,
+            "models": model_ids,
+            "defaultModel": primary_model,
+        }
+        profiles["models"]["primary"] = "member_gateway"
+        write_json(paths.auth_profiles, profiles)
+
+        oc = read_json(paths.openclaw_config, {})
+        if not isinstance(oc, dict):
+            oc = {}
+        oc.setdefault("models", {})
+        oc["models"]["mode"] = "merge"
+        oc["models"].setdefault("providers", {})
+        oc["models"]["providers"][provider_id] = provider_config
+
+        oc.setdefault("agents", {})
+        oc["agents"].setdefault("defaults", {})
+        defaults = oc["agents"]["defaults"]
+        defaults.setdefault("model", {})
+        defaults["model"]["primary"] = model_ref
+        defaults.setdefault("models", {})
+        defaults["models"][model_ref] = {"alias": primary_model}
+        write_json(paths.openclaw_config, oc)
+        return
+
     profiles = read_json(paths.auth_profiles, {"models": {"providers": {}}})
     profile_models = profiles.get("models") if isinstance(profiles, dict) else {}
     providers = profile_models.get("providers") if isinstance(profile_models, dict) else {}
@@ -196,6 +282,8 @@ def _sync_openclaw_models_from_api_profiles() -> None:
 
 
 def _has_configured_api_profile() -> bool:
+    if _get_license_mgr().has_gateway_profile():
+        return True
     profiles = read_json(paths.auth_profiles, {"models": {"providers": {}}})
     models = profiles.get("models") if isinstance(profiles, dict) else {}
     providers = models.get("providers") if isinstance(models, dict) else {}
@@ -263,18 +351,139 @@ def _sanitize_text(value: str) -> str:
     return value
 
 
+def _startup_snapshot_path() -> str:
+    return os.path.join(paths.data_dir, "logs", "openclaw-startup-snapshot.json")
+
+
+def _startup_snapshot_text(snapshot: dict) -> str:
+    if not isinstance(snapshot, dict):
+        return ""
+
+    lines: list[str] = []
+    for key in ("timestamp", "status", "error", "exitCode", "pid", "portReady", "command", "cwd"):
+        value = snapshot.get(key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, list):
+            value = " ".join(str(item) for item in value)
+        lines.append(f"{key}={value}")
+
+    output_tail = snapshot.get("outputTail")
+    if isinstance(output_tail, list):
+        lines.extend(str(line) for line in output_tail[-40:] if str(line).strip())
+
+    return "\n".join(lines)
+
+
+def _classify_startup_failure(text: str) -> list[str]:
+    lower = text.lower()
+    patterns = [
+        ("权限拒绝", ("permission denied", "access is denied", "拒绝访问", "eacces", "eperm")),
+        ("文件缺失", ("no such file", "cannot find", "找不到", "not found", "filenotfounderror", "modulenotfounderror")),
+        ("端口占用", ("eaddrinuse", "address already in use", "端口占用", "port already", "listen eaddrinuse")),
+        ("进程异常退出", ("process ended", "process exited", "startup did not become ready", "exited before the port became ready", "exitcode=")),
+        ("Python/Bridge 缺失", ("no module named 'fastapi'", 'no module named "fastapi"', "no module named fastapi", "no module named 'uvicorn'", 'no module named "uvicorn"', "python runtime missing", "bridge dependency")),
+        ("Node/OpenClaw 缺失", ("cannot find node", "找不到 node", "node.js missing", "node runtime missing", "openclaw.mjs not found", "start.js not found", "找不到启动脚本")),
+        ("WebView2 缺失", ("webview2", "edgewebview")),
+        ("OpenClaw 配置错误", ("invalid config", "openclaw.json", "plugin manifest", "validation", "schema")),
+        ("模型参数错误", ("thinking_budget", "max_completion_tokens", "invalidparameter", "request schema")),
+    ]
+    hits: list[str] = []
+    for label, keywords in patterns:
+        if any(keyword in lower for keyword in keywords):
+            hits.append(label)
+    return list(dict.fromkeys(hits))
+
+
+def _license_check() -> dict:
+    diagnosis = _get_license_mgr().diagnose()
+    code = str(diagnosis.get("code") or "unknown")
+    return {
+        "id": "license",
+        "label": "授权状态",
+        "status": "ok" if diagnosis.get("ok") else "fail",
+        "message": str(diagnosis.get("message") or "授权状态未知"),
+        "detail": f"{diagnosis.get('detail') or paths.license_file}；code={code}",
+        "repairable": False,
+    }
+
+
+def _startup_failure_summary_check() -> dict:
+    snapshot_path = _startup_snapshot_path()
+    snapshot = read_json(snapshot_path, {}) if os.path.exists(snapshot_path) else {}
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    snapshot_status = str(snapshot.get("status") or "").lower()
+    snapshot_text = _sanitize_text(_startup_snapshot_text(snapshot))
+
+    with log_lock:
+        recent_log = "".join(log_buffer[-160:])
+    sanitized = _sanitize_text(recent_log)
+
+    if snapshot_status == "fail":
+        combined = "\n".join(text for text in (snapshot_text, sanitized) if text.strip())
+        hits = _classify_startup_failure(combined)
+        tail_lines = [line.strip() for line in combined.splitlines() if line.strip()][-12:]
+        error_text = _sanitize_text(str(snapshot.get("error") or "OpenClaw 启动失败"))
+        message = "最近一次核心服务启动失败"
+        if hits:
+            message += "，疑似：" + "、".join(hits)
+
+        detail_lines = [
+            f"snapshot={snapshot_path}",
+            f"error={error_text}",
+            f"exitCode={snapshot.get('exitCode')}; pid={snapshot.get('pid')}; portReady={snapshot.get('portReady')}",
+        ]
+        if tail_lines:
+            detail_lines.append("--- captured tail ---")
+            detail_lines.extend(tail_lines)
+
+        return {
+            "id": "startup_failure_summary",
+            "label": "启动失败原因摘要",
+            "status": "fail",
+            "message": message,
+            "detail": "\n".join(detail_lines),
+            "repairable": True,
+        }
+
+    hits = _classify_startup_failure(sanitized)
+
+    if not sanitized.strip():
+        return {
+            "id": "startup_failure_summary",
+            "label": "启动失败原因摘要",
+            "status": "ok",
+            "message": "暂无启动失败日志",
+            "detail": "最近日志为空",
+            "repairable": False,
+        }
+
+    tail_lines = [line.strip() for line in sanitized.splitlines() if line.strip()][-8:]
+    if hits:
+        return {
+            "id": "startup_failure_summary",
+            "label": "启动失败原因摘要",
+            "status": "warn",
+            "message": "最近日志疑似包含：" + "、".join(dict.fromkeys(hits)),
+            "detail": "\n".join(tail_lines),
+            "repairable": False,
+        }
+    return {
+        "id": "startup_failure_summary",
+        "label": "启动失败原因摘要",
+        "status": "ok",
+        "message": "最近日志未匹配到常见启动失败特征",
+        "detail": "\n".join(tail_lines),
+        "repairable": False,
+    }
+
+
 def _append_runtime_checks(payload: dict) -> dict:
     checks = list(payload.get("checks", []))
 
-    license_data = _get_license_mgr().current_license()
-    checks.append({
-        "id": "license",
-        "label": "授权状态",
-        "status": "ok" if license_data else "fail",
-        "message": f"已授权：{license_data.get('licensee', 'OpenClaw Customer')}" if isinstance(license_data, dict) else "未授权，启动服务前需要先激活",
-        "detail": paths.license_file,
-        "repairable": False,
-    })
+    checks.append(_license_check())
+    checks.append(_startup_failure_summary_check())
 
     api_configured = _has_configured_api_profile()
     checks.append({
@@ -391,9 +600,13 @@ def _safe_config_path(file_path: str) -> str | None:
     if not os.path.isabs(file_path):
         file_path = os.path.join(paths.base_path, file_path)
     real_path = os.path.realpath(file_path)
-    allowed_prefixes = (os.path.realpath(paths.base_path), os.path.realpath(paths.data_dir))
-    if real_path.startswith(allowed_prefixes):
-        return real_path
+    allowed_roots = (os.path.realpath(paths.base_path), os.path.realpath(paths.data_dir))
+    for root in allowed_roots:
+        try:
+            if os.path.commonpath([real_path, root]) == root:
+                return real_path
+        except ValueError:
+            continue
     return None
 
 
@@ -460,6 +673,7 @@ def _build_fastapi_context():
         data_url_to_temp_file=_data_url_to_temp_file,
         fastapi_json=_fastapi_json,
         get_image_client=_get_image_client,
+        get_desktop_agent_svc=_get_desktop_agent_svc,
         get_license_mgr=_get_license_mgr,
         get_process_svc=_get_process_svc,
         get_skill_svc=_get_skill_svc,

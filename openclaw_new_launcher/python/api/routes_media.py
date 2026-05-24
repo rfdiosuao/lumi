@@ -22,10 +22,12 @@ def register_media_routes(app, ctx) -> None:
 
         body = await ctx.body(request)
         client = ctx.get_image_client()
-        base_url = body.get("baseUrl", "")
-        api_key = body.get("apiKey", "")
+        gateway_profile = ctx.get_license_mgr().current_gateway_profile()
+        base_url = str(body.get("baseUrl", "") or "").strip() or str((gateway_profile or {}).get("baseUrl") or "").strip()
+        api_key = str(body.get("apiKey", "") or "").strip() or str((gateway_profile or {}).get("apiKey") or "").strip()
         prompt = body.get("prompt", "")
         size = body.get("size", "1024x1024")
+        model = str(body.get("model", "") or "").strip() or str((gateway_profile or {}).get("imageModel") or "").strip()
         edit_path = body.get("editImagePath")
         count = body.get("count", 1)
 
@@ -42,7 +44,7 @@ def register_media_routes(app, ctx) -> None:
                 return ctx.fastapi_json({"error": str(exc)}, 400)
 
         try:
-            results = client.generate_many(base_url, api_key, prompt, size, count=count, edit_image_path=edit_path)
+            results = client.generate_many(base_url, api_key, prompt, size, count=count, edit_image_path=edit_path, model=model)
             images_b64 = [base64.b64encode(result).decode() for result in results]
             image_dir = os.path.join(ctx.paths.data_dir, "generated-images")
             os.makedirs(image_dir, exist_ok=True)
@@ -81,9 +83,14 @@ def register_media_routes(app, ctx) -> None:
         body = await ctx.body(request)
         client = ctx.get_video_client()
         provider_id = body.get("providerId", "dashscope")
-        api_base = body.get("apiBase", "")
-        model = body.get("model", "")
-        dash_key = body.get("dashKey", "")
+        gateway_profile = ctx.get_license_mgr().current_gateway_profile()
+        api_base = str(body.get("apiBase", "") or "").strip() or str((gateway_profile or {}).get("baseUrl") or "").strip()
+        model = (
+            str(body.get("model", "") or "").strip()
+            or str((gateway_profile or {}).get("videoModel") or "").strip()
+            or str((gateway_profile or {}).get("defaultModel") or "").strip()
+        )
+        dash_key = str(body.get("dashKey", "") or "").strip() or str((gateway_profile or {}).get("apiKey") or "").strip()
         prompt = body.get("prompt", "")
         mode = body.get("mode", "t2v")
         resolution = body.get("resolution", "720P")

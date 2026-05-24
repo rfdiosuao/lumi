@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { Button, FieldLabel, Input, Loading, Select, TextArea, showToast } from '../common';
-import { videoApi } from '../../services/api';
+import { videoApi, configApi } from '../../services/api';
+import { readGatewayStoredConfig, readMemberGatewayDefaults, type GatewayMode } from '../../services/gatewayConfig';
 import { useLogStore } from '../../stores/logStore';
 import type { VideoMode, VideoProviderId } from '../../types';
 import { VIDEO_PROVIDERS, getDefaultVideoModel, getVideoProvider } from '../../features/video/providers';
@@ -9,6 +10,7 @@ import { VIDEO_PROVIDERS, getDefaultVideoModel, getVideoProvider } from '../../f
 const RESOLUTIONS = ['720P', '1080P'];
 const DURATIONS = [5, 10];
 const RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
+const VIDEO_CONFIG_PATH = 'videoapi_config.json';
 
 type GeneratedVideo = {
   previewUrl: string;
@@ -85,6 +87,7 @@ export const VideoPage: React.FC = () => {
   const [apiKey, setApiKey] = useState('');
   const [apiBase, setApiBase] = useState(getVideoProvider('dashscope').apiBase);
   const [model, setModel] = useState(getDefaultVideoModel('dashscope', 't2v'));
+  const [gatewayMode, setGatewayMode] = useState<GatewayMode>('manual');
   const [prompt, setPrompt] = useState('');
   const [mode, setMode] = useState<VideoMode>('t2v');
   const [resolution, setResolution] = useState('720P');
@@ -98,6 +101,7 @@ export const VideoPage: React.FC = () => {
   const [videoError, setVideoError] = useState('');
 
   const appendLog = useLogStore((s) => s.append);
+  const managedMode = gatewayMode === 'member';
   const provider = getVideoProvider(providerId);
   const availableModels = provider.models.filter((item) => item.modes.includes(mode));
 
@@ -114,11 +118,105 @@ export const VideoPage: React.FC = () => {
     });
   }, [providerId, mode]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const resp = await configApi.read(VIDEO_CONFIG_PATH, {});
+        if (cancelled) return;
+
+        const stored = readGatewayStoredConfig(resp.data);
+        const data = resp.data as any;
+        const storedProviderId = ['dashscope', 'seedance', 'custom'].includes(String(data?.providerId || ''))
+          ? (String(data?.providerId || '') as VideoProviderId)
+          : null;
+        const storedApiBase = String(data?.apiBase || '').trim();
+        const storedApiKey = String(data?.apiKey || '').trim();
+        const storedModel = String(data?.model || '').trim();
+        const memberGateway = await readMemberGatewayDefaults();
+
+        if (stored.mode === 'member') {
+          setGatewayMode('member');
+          setProviderId('custom');
+          setApiBase(memberGateway.baseUrl || storedApiBase);
+          setApiKey(memberGateway.apiKey || storedApiKey);
+          setModel(memberGateway.videoModel || memberGateway.defaultModel || storedModel || getDefaultVideoModel('custom', 't2v'));
+          return;
+        }
+
+        if (stored.mode === 'manual') {
+          setGatewayMode('manual');
+          if (storedProviderId) setProviderId(storedProviderId);
+          setApiBase(storedApiBase);
+          setApiKey(storedApiKey);
+          if (storedModel) setModel(storedModel);
+          return;
+        }
+
+        if (storedProviderId) setProviderId(storedProviderId);
+        if (storedApiBase || storedApiKey || storedModel) {
+          setGatewayMode('manual');
+          setApiBase(storedApiBase);
+          setApiKey(storedApiKey);
+          if (storedModel) setModel(storedModel);
+          return;
+        }
+
+        if (memberGateway.hasGateway) {
+          setGatewayMode('member');
+          setProviderId('custom');
+          setApiBase(memberGateway.baseUrl);
+          setApiKey(memberGateway.apiKey);
+          setModel(memberGateway.videoModel || memberGateway.defaultModel || getDefaultVideoModel('custom', mode));
+        }
+      } catch {
+        // ignore gateway bootstrap failures; manual mode remains available
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   React.useEffect(() => () => {
     if (resultVideo?.blobUrl) {
       URL.revokeObjectURL(resultVideo.blobUrl);
     }
   }, [resultVideo?.blobUrl]);
+
+  const saveConfig = async () => {
+    try {
+      await configApi.write(VIDEO_CONFIG_PATH, {
+        gatewayMode,
+        managedMode,
+        providerId,
+        apiBase: apiBase.trim(),
+        apiKey: apiKey.trim(),
+        model: model.trim(),
+      });
+    } catch {
+      // ignore config write failures; generation can still proceed
+    }
+  };
+
+  const handleGatewayModeChange = async (nextMode: GatewayMode) => {
+    setGatewayMode(nextMode);
+    if (nextMode !== 'member') return;
+
+    try {
+      const memberGateway = await readMemberGatewayDefaults();
+      if (memberGateway.hasGateway) {
+        setProviderId('custom');
+        setApiBase(memberGateway.baseUrl);
+        setApiKey(memberGateway.apiKey);
+        setModel(memberGateway.videoModel || memberGateway.defaultModel || getDefaultVideoModel('custom', mode));
+      }
+    } catch {
+      // keep current manual values if the license lookup fails
+    }
+  };
 
   const handlePickImage = () => {
     const input = document.createElement('input');
@@ -165,6 +263,8 @@ export const VideoPage: React.FC = () => {
     setResultVideo(null);
     setVideoError('');
     setProgress('正在提交任务...');
+
+    await saveConfig();
 
     try {
       const resp = await videoApi.generate({
@@ -262,6 +362,30 @@ export const VideoPage: React.FC = () => {
                 placeholder={`${provider.authPlaceholder}，每次启动后需手动填写，不会保存到本地`}
                 autoComplete="off"
               />
+            </div>
+
+            <div className="mb-3 rounded-xl border border-border bg-surface p-2">
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={managedMode ? 'primary' : 'quiet'}
+                  onClick={() => { void handleGatewayModeChange('member'); }}
+                  className="justify-center"
+                >
+                  会员模式
+                </Button>
+                <Button
+                  type="button"
+                  variant={!managedMode ? 'primary' : 'quiet'}
+                  onClick={() => setGatewayMode('manual')}
+                  className="justify-center"
+                >
+                  手动模式
+                </Button>
+              </div>
+              <p className="mt-2 text-xs text-text-muted">
+                会员模式会自动读取授权后台的网关配置；手动模式保留当前填写的视频服务商地址和密钥。
+              </p>
             </div>
 
             <div>

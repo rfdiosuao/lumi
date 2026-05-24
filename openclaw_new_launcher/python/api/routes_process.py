@@ -26,6 +26,15 @@ def register_process_routes(app, ctx) -> None:
             status["status"] = "already_running" if status.get("running") else "starting"
             return ctx.fastapi_json(status)
 
+        try:
+            ctx.sync_openclaw_models_from_api_profiles()
+        except Exception as sync_error:
+            ctx.append_log(f"[OpenClaw] Gateway config sync failed before startup: {sync_error}\n")
+            return ctx.fastapi_json({
+                "status": "failed",
+                "error": f"会员网关配置同步失败：{sync_error}",
+            }, 500)
+
         def on_exit(code: int | None) -> None:
             ctx.append_log(f"\n[OpenClaw] Process ended (exit: {code})\n")
 

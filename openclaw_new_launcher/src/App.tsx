@@ -6,13 +6,28 @@ import { WindowTitlebar } from './components/window/WindowTitlebar';
 import { ToastContainer, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
-import { processApi, logApi, updateApi, configApi, waitForProcessReady } from './services/api';
+import { processApi, logApi, updateApi, configApi, licenseApi, waitForProcessReady } from './services/api';
 import { ThemeProvider } from './providers/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 import { getFeatureDefinition } from './features/registry';
 import { renderFeaturePage } from './features/pages';
 import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
 import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
+
+function formatError(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const value = error as { error?: unknown; message?: unknown };
+    if (typeof value.error === 'string') return value.error;
+    if (typeof value.message === 'string') return value.message;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
 
 function safeCurrentWindow() {
   try {
@@ -69,7 +84,16 @@ export default function App() {
   const refreshApiConfigured = React.useCallback(async () => {
     try {
       const resp = await configApi.read(AUTH_PROFILES_PATH, { models: { providers: {} } });
-      setApiConfigured(hasConfiguredApiProfile(resp.data));
+      if (hasConfiguredApiProfile(resp.data)) {
+        setApiConfigured(true);
+        return;
+      }
+      const licenseResp = await licenseApi.current();
+      const license = licenseResp.license as any;
+      setApiConfigured(Boolean(
+        String(license?.gatewayBaseUrl || license?.gatewayUrl || '').trim()
+        && String(license?.gatewayAccessToken || license?.gatewayToken || '').trim(),
+      ));
     } catch {
       setApiConfigured(false);
     }
@@ -87,7 +111,7 @@ export default function App() {
           appendLog(resp.log);
         }
       } catch (error) {
-        appendLog(`[日志轮询] 错误: ${error}\n`);
+        appendLog(`[日志轮询] 错误: ${formatError(error)}\n`);
       }
     }, 1000);
   };
@@ -217,6 +241,10 @@ export default function App() {
     setCurrentPage(key);
   };
 
+  const currentFeature = getFeatureDefinition(currentPage);
+  const canOpenCurrentPage = !currentFeature?.requiresLicense || isAuthorized || isLicenseChecking;
+  const visiblePage = canOpenCurrentPage ? currentPage : 'license';
+
   return (
     <ThemeProvider>
       <DynamicTitle />
@@ -224,7 +252,7 @@ export default function App() {
         <WindowTitlebar />
         <div className="flex min-h-0 flex-1 overflow-hidden bg-surface">
           <Sidebar
-            activePage={currentPage}
+            activePage={visiblePage}
             serviceRunning={serviceRunning}
             serviceStatus={serviceStatus}
             isAuthorized={isAuthorized}
@@ -234,7 +262,7 @@ export default function App() {
             onStop={handleStop}
           />
           <main className="relative flex-1 overflow-hidden bg-surface">
-            {renderFeaturePage(currentPage)}
+            {renderFeaturePage(visiblePage)}
           </main>
         </div>
 

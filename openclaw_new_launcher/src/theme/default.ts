@@ -128,9 +128,10 @@ export function buildRuntimeTheme(baseTheme: ThemeConfig | null | undefined, mod
   const brand = baseTheme?.brand ? { ...palette.brand, ...baseTheme.brand } : palette.brand;
   const windowConfig = baseTheme?.window ? { ...palette.window, ...baseTheme.window } : palette.window;
   const modeColors = baseTheme?.modes?.[mode];
+  const hasModeSpecificColors = Boolean(baseTheme?.modes?.light || baseTheme?.modes?.dark);
   const colors = {
     ...palette.colors,
-    ...(modeColors ?? baseTheme?.colors ?? {}),
+    ...(modeColors ?? (hasModeSpecificColors ? {} : (mode === 'light' ? (baseTheme?.colors ?? {}) : {}))),
   };
 
   return {

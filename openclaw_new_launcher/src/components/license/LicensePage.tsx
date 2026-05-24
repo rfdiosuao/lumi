@@ -4,6 +4,21 @@ import { licenseApi } from '../../services/api';
 import { useAppStore } from '../../stores/appStore';
 import { useLogStore } from '../../stores/logStore';
 
+const ACTIVATION_CODE_LABEL_KEY = 'openclaw_activation_code_label';
+
+function activationCodeLabelFromCode(value: string): string {
+  const last8 = value.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(-8);
+  return last8.length === 8 ? `${last8.slice(0, 4)}-${last8.slice(4)}` : last8;
+}
+
+function activationCodeLabelFromLicense(license: unknown): string {
+  const data = license && typeof license === 'object' ? license as Record<string, unknown> : {};
+  const explicit = String(data.activationCodeLabel || data.codeLabel || '').trim();
+  if (explicit) return explicit;
+  const last8 = String(data.activationCodeLast8 || '').trim();
+  return last8 ? activationCodeLabelFromCode(last8) : '';
+}
+
 export const LicensePage: React.FC = () => {
   const [code, setCode] = useState('');
   const [activating, setActivating] = useState(false);
@@ -28,6 +43,10 @@ export const LicensePage: React.FC = () => {
       }
       setLicenseInfo(license as any);
       setAuthorized(true);
+      const codeLabel = activationCodeLabelFromLicense(license) || activationCodeLabelFromCode(code);
+      if (codeLabel) {
+        try { localStorage.setItem(ACTIVATION_CODE_LABEL_KEY, codeLabel); } catch { /* ignore */ }
+      }
       if (typeof (window as any).__reloadTheme === 'function') {
         await (window as any).__reloadTheme();
       }
@@ -61,6 +80,12 @@ export const LicensePage: React.FC = () => {
   };
 
   const features = licenseInfo?.features?.join(' / ') || '';
+  const gatewayBaseUrl = String((licenseInfo as any)?.gatewayBaseUrl || (licenseInfo as any)?.gatewayUrl || '').trim();
+  const gatewayToken = String((licenseInfo as any)?.gatewayAccessToken || (licenseInfo as any)?.gatewayToken || '').trim();
+  const memberMode = Boolean(gatewayBaseUrl && gatewayToken);
+  const activationCodeLabel = activationCodeLabelFromLicense(licenseInfo) || (() => {
+    try { return localStorage.getItem(ACTIVATION_CODE_LABEL_KEY) || ''; } catch { return ''; }
+  })();
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-surface">
@@ -77,10 +102,13 @@ export const LicensePage: React.FC = () => {
 
           {isAuthorized && licenseInfo && (
             <div className="mb-5 space-y-1 rounded-xl border border-border bg-surface/65 p-4 text-sm text-text-muted">
+              {activationCodeLabel && <p>授权码后八位：<span className="font-mono text-text">{activationCodeLabel}</span></p>}
               <p>客户：{licenseInfo.licensee || '未命名'}</p>
               <p>版本：{licenseInfo.edition || 'pro'}</p>
               <p>到期：{licenseInfo.expires || '永久'}</p>
               <p>功能：{features || '标准功能'}</p>
+              {memberMode && <p>会员网关：{gatewayBaseUrl}</p>}
+              {memberMode && <p>会员模式：托管 / 月卡</p>}
             </div>
           )}
 
