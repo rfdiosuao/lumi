@@ -131,53 +131,119 @@ class LicenseManager:
 
     def current_gateway_profile(self) -> dict[str, Any] | None:
         def build_profile(source: dict[str, Any], *, fallback_name: str) -> dict[str, Any] | None:
-            base_url = str(
-                source.get("gatewayBaseUrl")
-                or source.get("gatewayUrl")
-                or source.get("baseUrl")
-                or source.get("url")
-                or ""
-            ).strip().rstrip("/")
-            token = str(
-                source.get("gatewayAccessToken")
-                or source.get("gatewayToken")
-                or source.get("memberToken")
-                or source.get("apiKey")
-                or source.get("token")
-                or ""
-            ).strip()
+            gateway = source.get("gateway") if isinstance(source.get("gateway"), dict) else {}
+            lease = source.get("lease") if isinstance(source.get("lease"), dict) else {}
+            member = source.get("member") if isinstance(source.get("member"), dict) else {}
+            base_url = self._pick_text(
+                source.get("gatewayBaseUrl"),
+                source.get("gatewayUrl"),
+                source.get("baseUrl"),
+                source.get("url"),
+                gateway.get("gatewayBaseUrl"),
+                gateway.get("baseUrl"),
+                gateway.get("url"),
+                lease.get("gatewayBaseUrl"),
+                lease.get("gatewayUrl"),
+                member.get("gatewayBaseUrl"),
+                member.get("gatewayUrl"),
+            ).rstrip("/")
+            token = self._pick_text(
+                source.get("gatewayAccessToken"),
+                source.get("gatewayToken"),
+                source.get("memberToken"),
+                source.get("apiKey"),
+                source.get("token"),
+                gateway.get("gatewayAccessToken"),
+                gateway.get("gatewayToken"),
+                gateway.get("memberToken"),
+                gateway.get("apiKey"),
+                gateway.get("token"),
+                gateway.get("accessToken"),
+                lease.get("gatewayAccessToken"),
+                lease.get("gatewayToken"),
+                member.get("gatewayAccessToken"),
+                member.get("gatewayToken"),
+            )
             if not base_url or not token:
                 return None
+            image_token = self._pick_text(
+                source.get("gatewayImageAccessToken"),
+                source.get("gatewayImageToken"),
+                source.get("imageApiKey"),
+                source.get("imageToken"),
+                gateway.get("gatewayImageAccessToken"),
+                gateway.get("gatewayImageToken"),
+                gateway.get("imageAccessToken"),
+                gateway.get("imageToken"),
+                gateway.get("imageApiKey"),
+                lease.get("gatewayImageAccessToken"),
+                lease.get("gatewayImageToken"),
+                member.get("gatewayImageAccessToken"),
+                member.get("gatewayImageToken"),
+                token,
+            )
+            video_token = self._pick_text(
+                source.get("gatewayVideoAccessToken"),
+                source.get("gatewayVideoToken"),
+                source.get("videoApiKey"),
+                source.get("videoToken"),
+                gateway.get("gatewayVideoAccessToken"),
+                gateway.get("gatewayVideoToken"),
+                gateway.get("videoAccessToken"),
+                gateway.get("videoToken"),
+                gateway.get("videoApiKey"),
+                lease.get("gatewayVideoAccessToken"),
+                lease.get("gatewayVideoToken"),
+                member.get("gatewayVideoAccessToken"),
+                member.get("gatewayVideoToken"),
+                token,
+            )
             models = self._gateway_model_ids(source)
-            default_model = str(
-                source.get("gatewayDefaultModel")
-                or source.get("defaultModel")
-                or source.get("model")
-                or ""
-            ).strip()
+            default_model = self._pick_text(
+                source.get("gatewayDefaultModel"),
+                source.get("defaultModel"),
+                source.get("model"),
+                gateway.get("gatewayDefaultModel"),
+                gateway.get("defaultModel"),
+                gateway.get("model"),
+                lease.get("gatewayDefaultModel"),
+                lease.get("defaultModel"),
+                member.get("gatewayDefaultModel"),
+                member.get("defaultModel"),
+            )
             if not default_model and models:
                 default_model = models[0]
-            image_model = str(
-                source.get("gatewayImageModel")
-                or source.get("imageModel")
-                or source.get("image_model")
-                or ""
-            ).strip()
-            video_model = str(
-                source.get("gatewayVideoModel")
-                or source.get("videoModel")
-                or source.get("video_model")
-                or ""
-            ).strip()
+            image_model = self._pick_text(
+                source.get("gatewayImageModel"),
+                source.get("imageModel"),
+                source.get("image_model"),
+                gateway.get("gatewayImageModel"),
+                gateway.get("imageModel"),
+                gateway.get("image_model"),
+                lease.get("gatewayImageModel"),
+                member.get("gatewayImageModel"),
+            )
+            video_model = self._pick_text(
+                source.get("gatewayVideoModel"),
+                source.get("videoModel"),
+                source.get("video_model"),
+                gateway.get("gatewayVideoModel"),
+                gateway.get("videoModel"),
+                gateway.get("video_model"),
+                lease.get("gatewayVideoModel"),
+                member.get("gatewayVideoModel"),
+            )
             features = source.get("features")
             return {
                 "baseUrl": base_url,
                 "apiKey": token,
+                "imageApiKey": image_token or token,
+                "videoApiKey": video_token or token,
                 "defaultModel": default_model,
                 "imageModel": image_model,
                 "videoModel": video_model,
                 "models": models,
-                "features": features if isinstance(features, list) else [],
+                "features": features if isinstance(features, list) else (lease.get("features") if isinstance(lease.get("features"), list) else []),
                 "plan": str(source.get("plan") or source.get("edition") or fallback_name or "").strip(),
                 "memberId": str(source.get("memberId") or source.get("id") or "").strip(),
                 "expiresAt": str(source.get("leaseExpiresAt") or source.get("expiresAt") or source.get("expires") or "").strip(),
@@ -186,15 +252,15 @@ class LicenseManager:
                 "source": fallback_name,
             }
 
-        license_data = self.current_license()
-        if isinstance(license_data, dict):
-            profile = build_profile(license_data, fallback_name="license")
-            if profile:
-                return profile
-
         member_session = read_json(self.paths.member_session_file, None)
         if isinstance(member_session, dict):
             profile = build_profile(member_session, fallback_name="member")
+            if profile:
+                return profile
+
+        license_data = self.current_license()
+        if isinstance(license_data, dict):
+            profile = build_profile(license_data, fallback_name="license")
             if profile:
                 return profile
 
@@ -461,12 +527,32 @@ class LicenseManager:
     def _canonical(self, payload: dict[str, Any]) -> bytes:
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
+    @staticmethod
+    def _pick_text(*values: Any) -> str:
+        for value in values:
+            if isinstance(value, str):
+                clean = value.strip()
+                if clean:
+                    return clean
+        return ""
+
     def _gateway_model_ids(self, license_data: dict[str, Any]) -> list[str]:
-        raw_models = license_data.get("gatewayModels")
-        if not isinstance(raw_models, list) or not raw_models:
-            raw_models = license_data.get("models")
-        if not isinstance(raw_models, list):
-            return []
+        candidates: list[Any] = [
+            license_data.get("gatewayModels"),
+            license_data.get("models"),
+            license_data.get("modelIds"),
+            license_data.get("model_ids"),
+        ]
+        for nested_key in ("gateway", "lease", "member"):
+            nested = license_data.get(nested_key)
+            if isinstance(nested, dict):
+                candidates.extend([
+                    nested.get("gatewayModels"),
+                    nested.get("models"),
+                    nested.get("modelIds"),
+                    nested.get("model_ids"),
+                ])
+        raw_models = next((item for item in candidates if isinstance(item, list) and item), [])
         model_ids: list[str] = []
         for item in raw_models:
             model_id = item.get("id") if isinstance(item, dict) else item

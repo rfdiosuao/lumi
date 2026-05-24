@@ -6,7 +6,8 @@ param(
     [string]$PhoneAgentVerifiedVersion = "",
     [int]$PhoneAgentVerifiedVersionCode = 0,
     [switch]$SkipBuild,
-    [switch]$NoZip
+    [switch]$NoZip,
+    [switch]$IncludePhoneAgentApk
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,6 +61,54 @@ function Get-LauncherVersion {
     }
 
     throw "Unable to determine launcher version from package.json or tauri.conf.json."
+}
+
+function Assert-SourceVersionConsistency {
+    $packageJsonPath = Join-Path $LauncherDir "package.json"
+    $tauriConfigPath = Join-Path $TauriDir "tauri.conf.json"
+    $packageVersion = $null
+    $tauriVersion = $null
+
+    if (Test-Path -LiteralPath $packageJsonPath) {
+        $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
+        $packageVersion = [string]$packageJson.version
+    }
+    if (Test-Path -LiteralPath $tauriConfigPath) {
+        $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
+        $tauriVersion = [string]$tauriConfig.version
+    }
+
+    if ([string]::IsNullOrWhiteSpace($packageVersion)) {
+        throw "package.json version is missing: $packageJsonPath"
+    }
+    if ([string]::IsNullOrWhiteSpace($tauriVersion)) {
+        throw "tauri.conf.json version is missing: $tauriConfigPath"
+    }
+    if ($packageVersion -ne $tauriVersion) {
+        throw "Launcher version mismatch: package.json=$packageVersion, tauri.conf.json=$tauriVersion"
+    }
+
+    return $packageVersion
+}
+
+function Assert-PackageNameVersionConsistency {
+    param(
+        [string]$ResolvedVersion,
+        [string]$ResolvedPackageName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ResolvedPackageName)) {
+        throw "PackageName is empty"
+    }
+
+    if ($ResolvedPackageName -notmatch '^OpenClaw-Portable-v(?<version>\d+(?:\.\d+){1,3})-') {
+        throw "PackageName must encode the launcher version: $ResolvedPackageName"
+    }
+
+    $packageVersion = [string]$Matches.version
+    if ($packageVersion -ne $ResolvedVersion) {
+        throw "Package name version mismatch: packageName=$ResolvedPackageName, launcherVersion=$ResolvedVersion"
+    }
 }
 
 function Assert-InWorkspace {
@@ -246,15 +295,24 @@ function Resolve-PhoneAgentVersionInfo {
     $resolvedCode = $PhoneAgentVerifiedVersionCode
     $latestApk = Join-Path $LauncherDir "AgentPhone_latest.apk"
 
-    if ([string]::IsNullOrWhiteSpace($resolvedVersion) -and (Test-Path -LiteralPath $latestApk)) {
+    if (Test-Path -LiteralPath $latestApk) {
         $latestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $latestApk).Hash
         $matchingVersionedApk = Get-ChildItem -LiteralPath $LauncherDir -File -Filter "AgentPhone_v*.apk" -ErrorAction SilentlyContinue |
             Where-Object { (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash -eq $latestHash } |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
 
-        if ($matchingVersionedApk -and $matchingVersionedApk.Name -match "AgentPhone_v(?<version>\d+\.\d+)_") {
-            $resolvedVersion = $Matches["version"]
+        if (-not $matchingVersionedApk) {
+            throw "AgentPhone_latest.apk hash does not match any versioned AgentPhone APK under $LauncherDir"
+        }
+
+        if ($matchingVersionedApk.Name -match "AgentPhone_v(?<version>\d+\.\d+)_") {
+            if ([string]::IsNullOrWhiteSpace($resolvedVersion)) {
+                $resolvedVersion = $Matches["version"]
+            }
+        }
+        else {
+            throw "Matched AgentPhone APK name does not encode version: $($matchingVersionedApk.Name)"
         }
     }
 
@@ -352,6 +410,7 @@ function Write-CleanRuntimeConfig {
             scripts = "scripts"
             imageToPhoneCli = "scripts/openclaw-image-phone.mjs"
             phoneAgentCli = "scripts/openclaw-phone-agent.mjs"
+            phoneFleetCli = "scripts/openclaw-phone-fleet.mjs"
             phoneVideoCli = "scripts/openclaw-phone-video.mjs"
             phoneVisionCli = "scripts/openclaw-phone-vision.mjs"
             phoneGameCli = "scripts/openclaw-phone-game.mjs"
@@ -368,6 +427,10 @@ function Write-CleanRuntimeConfig {
                 available = $true
                 controlPolicy = "wrapper-only"
                 agentCli = "npm run phone:agent"
+                fleetCli = "npm run phone:fleet"
+                multiDevice = $true
+                defaultDeviceId = $null
+                deviceCliArg = "--device-id <device-id>"
                 imageCli = "npm run phone:image"
                 imageEditCli = "npm run phone:image:edit -- --reference-image <path> --prompt `"<edit instruction>`""
                 visionCli = "npm run phone:vision"
@@ -380,6 +443,7 @@ function Write-CleanRuntimeConfig {
                 verifiedVersionCode = $phoneAgentVersionInfo.VersionCode
                 maxRoundsPerTask = 60
                 tokenSource = "data/.openclaw/launcher/phone-agent.json"
+                fleetTokenSource = "data/.openclaw/launcher/phone-agents.json"
                 tokenPolicy = "never expose token; use launcher CLI helpers only"
             }
             portableRuntime = [ordered]@{
@@ -394,6 +458,9 @@ function Write-CleanRuntimeConfig {
             baseUrl = $null
             tokenAvailable = $false
             configPath = "data/.openclaw/launcher/phone-agent.json"
+            fleetConfigPath = "data/.openclaw/launcher/phone-agents.json"
+            devices = @()
+            defaultDeviceId = $null
             lastStatus = $null
         }
         policies = [ordered]@{
@@ -491,14 +558,20 @@ function Install-PythonBridgeDependencies {
 function Copy-PhoneAgentApks {
     param([string]$PackageDir)
 
+    $targetDir = Join-Path $PackageDir "releases\agent-phone"
+    Remove-SafePath $targetDir
+
+    if (-not $IncludePhoneAgentApk) {
+        Write-Host "Skipping bundled AgentPhone APK. Use -IncludePhoneAgentApk only for internal test packages." -ForegroundColor Yellow
+        return
+    }
+
     $latestApk = Join-Path $LauncherDir "AgentPhone_latest.apk"
     if (-not (Test-Path -LiteralPath $latestApk)) {
         Write-Warning "AgentPhone_latest.apk not found; portable package will not include phone agent APK."
         return
     }
 
-    $targetDir = Join-Path $PackageDir "releases\agent-phone"
-    Remove-SafePath $targetDir
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
 
     Copy-Item -LiteralPath $latestApk -Destination (Join-Path $targetDir "AgentPhone_latest.apk") -Force
@@ -529,9 +602,16 @@ function Copy-WebView2Redist {
 function Copy-DesktopAgentSidecar {
     param([string]$PackageDir)
 
-    $sourceRoot = Join-Path $Root "sightflow-desktop-agent-main"
-    if (-not (Test-Path -LiteralPath $sourceRoot)) {
-        Write-Warning "SightFlow Desktop Agent source not found; portable package will not include desktop sidecar."
+    $sourceRoots = @(
+        (Join-Path $Root "sightflow-desktop-agent-main\sightflow-desktop-agent-main"),
+        (Join-Path $Root "sightflow-desktop-agent-main")
+    )
+    $sourceRoot = $sourceRoots |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_ "package.json") } |
+        Select-Object -First 1
+
+    if (-not $sourceRoot) {
+        Write-Warning "Luminode Desktop Agent source not found; portable package will not include desktop sidecar."
         return
     }
 
@@ -541,13 +621,31 @@ function Copy-DesktopAgentSidecar {
     )
     $source = $unpackedCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $source) {
-        Write-Warning "SightFlow win-unpacked output not found. Run npm run build:unpack in sightflow-desktop-agent-main before packaging."
+        Write-Warning "Luminode win-unpacked output not found. Run npm run build:unpack in $sourceRoot before packaging."
         return
     }
 
-    $target = Join-Path $PackageDir "agents\sightflow-desktop"
-    Remove-SafePath $target
+    foreach ($stale in @(
+        "agents\luminode-desktop",
+        "agents\sightflow-desktop",
+        "agents\sightflow-desktop-agent",
+        "sightflow-desktop-agent"
+    )) {
+        Remove-SafePath (Join-Path $PackageDir $stale)
+    }
+
+    $target = Join-Path $PackageDir "agents\luminode-desktop"
     Copy-Directory -Source $source -Destination $target
+
+    $lumiNodeExe = Join-Path $target "LumiNode.exe"
+    $luminodeExe = Join-Path $target "Luminode.exe"
+    if ((Test-Path -LiteralPath $lumiNodeExe) -and -not (Test-Path -LiteralPath $luminodeExe)) {
+        Copy-Item -LiteralPath $lumiNodeExe -Destination $luminodeExe
+    }
+    $sightFlowExe = Join-Path $target "SightFlow.exe"
+    if ((Test-Path -LiteralPath $sightFlowExe) -and -not (Test-Path -LiteralPath $luminodeExe)) {
+        Copy-Item -LiteralPath $sightFlowExe -Destination $luminodeExe
+    }
 }
 
 function Expand-PortablePayloadForBuild {
@@ -612,7 +710,7 @@ OpenClaw offline portable package
 2. Run OpenClaw.exe.
 3. Activate with a valid license code on first use.
 4. Configure API settings in the launcher before using image/video features.
-5. Install the bundled phone agent from OpenClawFiles\releases\agent-phone\AgentPhone_latest.apk when phone control is needed.
+5. Phone Agent APK is not bundled in public portable packages; install APKClaw separately from the release channel before using phone control.
 
 Bundled Node.js: $NodeVersion
 Bundled OpenClaw: $OpenClawVersion
@@ -709,12 +807,21 @@ function Install-BundledBotPlugins {
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    $Version = Get-LauncherVersion
+    $Version = Assert-SourceVersionConsistency
+}
+else {
+    $sourceVersion = Assert-SourceVersionConsistency
+    if ($Version -ne $sourceVersion) {
+        throw "Requested version does not match launcher source versions: requested=$Version, source=$sourceVersion"
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($PackageName)) {
     $date = Get-Date -Format "yyyy.MM.dd"
     $PackageName = "OpenClaw-Portable-v$Version-$date"
+}
+else {
+    Assert-PackageNameVersionConsistency -ResolvedVersion $Version -ResolvedPackageName $PackageName
 }
 
 New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null

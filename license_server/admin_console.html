@@ -1,0 +1,1146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="logo.ico" />
+  <title>OpenClaw 授权管理</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #111a2e;
+      --panel-2: #162238;
+      --panel-3: #0f1729;
+      --line: #22324d;
+      --text: #e7eefc;
+      --muted: #8e9bb7;
+      --accent: #6ea8fe;
+      --accent-2: #9c7ef8;
+      --ok: #3ddc97;
+      --warn: #f7c948;
+      --danger: #ff6b6b;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .28);
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(110, 168, 254, .12), transparent 28%),
+        radial-gradient(circle at top right, rgba(156, 126, 248, .12), transparent 24%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    .app { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      border-right: 1px solid var(--line);
+      background: rgba(10, 16, 31, .82);
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand img { width: 40px; height: 40px; border-radius: 10px; box-shadow: var(--shadow); }
+    .brand-title { font-size: 20px; font-weight: 800; line-height: 1.2; }
+    .brand-sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .nav { display: flex; flex-direction: column; gap: 8px; }
+    .nav button {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      padding: 11px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .nav button.active { color: var(--text); background: rgba(110, 168, 254, .12); border-color: rgba(110, 168, 254, .35); }
+    .sidebar-card {
+      margin-top: auto;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+    .sidebar-kv { display: grid; gap: 10px; font-size: 13px; }
+    .sidebar-kv .row { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); }
+    .sidebar-kv .row strong { color: var(--text); font-weight: 700; }
+    .content { padding: 22px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(17, 26, 46, .96), rgba(15, 23, 41, .96));
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .headline h1 { margin: 0; font-size: 26px; }
+    .headline p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .top-actions, .toolbar, .actions, .status-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, .03);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .pill.ok { color: var(--ok); border-color: rgba(61, 220, 151, .25); }
+    .pill.warn { color: var(--warn); border-color: rgba(247, 201, 72, .25); }
+    .pill.danger { color: var(--danger); border-color: rgba(255, 107, 107, .25); }
+    .grid-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .stat { border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+    .stat strong { display: block; font-size: 24px; line-height: 1.1; }
+    .stat span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+    .workspace { display: grid; grid-template-columns: minmax(360px, 440px) minmax(0, 1fr); gap: 16px; align-items: start; }
+    .panel { border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+    .panel-hd { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px 12px; border-bottom: 1px solid rgba(34, 50, 77, .7); }
+    .panel-hd h2 { margin: 0; font-size: 16px; }
+    .panel-bd { padding: 18px; }
+    .field { margin-bottom: 12px; }
+    label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: var(--panel-3);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 11px 12px;
+      outline: none;
+    }
+    textarea { min-height: 84px; resize: vertical; }
+    input:focus, select:focus, textarea:focus { border-color: rgba(110, 168, 254, .7); box-shadow: 0 0 0 3px rgba(110, 168, 254, .12); }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .btn {
+      border: 1px solid transparent;
+      background: var(--accent);
+      color: #06101f;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .btn.secondary { background: var(--panel-2); color: var(--text); border-color: var(--line); }
+    .btn.danger { background: rgba(255, 107, 107, .14); color: #ffc3c3; border-color: rgba(255, 107, 107, .25); }
+    .btn.warn { background: rgba(247, 201, 72, .16); color: #ffe39d; border-color: rgba(247, 201, 72, .25); }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .table-wrap { overflow: auto; max-height: 620px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px 8px; border-bottom: 1px solid rgba(34, 50, 77, .7); vertical-align: top; text-align: left; font-size: 13px; }
+    th { position: sticky; top: 0; background: var(--panel); z-index: 2; color: var(--muted); font-size: 12px; }
+    code { color: #ffd166; }
+    .subtle { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .toast { min-height: 22px; color: var(--muted); font-size: 13px; margin-top: 10px; }
+    .codes { display: none; margin-top: 14px; border: 1px solid var(--line); background: var(--panel-3); border-radius: 10px; padding: 12px; }
+    .codes pre { margin: 0; white-space: pre-wrap; word-break: break-all; color: #ffd166; }
+    dialog {
+      width: min(920px, calc(100vw - 28px));
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0;
+      box-shadow: var(--shadow);
+    }
+    dialog::backdrop { background: rgba(0, 0, 0, .6); }
+    .dialog-hd { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid rgba(34, 50, 77, .7); }
+    .dialog-hd h3 { margin: 0; font-size: 16px; }
+    .dialog-bd { padding: 18px; }
+    .hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 6px; }
+    .nav-target { scroll-margin-top: 18px; }
+    .docs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .doc-card { border: 1px solid var(--line); background: var(--panel-3); border-radius: 12px; padding: 14px; }
+    .doc-card strong { display: block; margin-bottom: 6px; }
+    .doc-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    @media (max-width: 1080px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; }
+      .workspace, .grid-stats, .docs-grid { grid-template-columns: 1fr; }
+      .row2, .row3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="logo.ico" alt="OpenClaw" />
+        <div>
+          <div class="brand-title">OpenClaw</div>
+          <div class="brand-sub">授权与会员控制台</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="active" data-nav-target="licenseSection">授权中心</button>
+        <button data-nav-target="plansSection">会员套餐</button>
+        <button data-nav-target="gatewaySection">网关配置</button>
+        <button data-nav-target="auditSection">操作审计</button>
+        <button data-nav-target="docsSection">文档</button>
+      </nav>
+      <div class="sidebar-card">
+        <div class="sidebar-kv">
+          <div class="row"><span>服务状态</span><strong id="serverState">未连接</strong></div>
+          <div class="row"><span>已选授权</span><strong id="selectedCountSidebar">0</strong></div>
+          <div class="row"><span>版本</span><strong>2026.05.22</strong></div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <section class="topbar">
+        <div class="headline">
+          <h1>授权中心</h1>
+          <p>生成月卡、批量改套餐、编辑网关、查看激活状态。已激活客户端在下一次刷新会员状态后会拿到最新配置。</p>
+        </div>
+        <div class="top-actions">
+          <span class="pill" id="serverBadge">未授权</span>
+          <button class="btn secondary" id="refresh">刷新</button>
+          <button class="btn secondary" id="btnExportAll">导出全部</button>
+          <button class="btn warn" id="btnBulkEdit" disabled>批量改月卡</button>
+          <button class="btn danger" id="btnClearAll">清空全部</button>
+        </div>
+      </section>
+
+      <section class="grid-stats" id="stats"></section>
+
+      <section class="panel nav-target" id="plansSection" tabindex="-1">
+        <div class="panel-hd">
+          <h2>套餐模板</h2>
+          <button class="btn secondary" id="btnNewPlan">新增模板</button>
+        </div>
+        <div class="panel-bd">
+          <div class="status-line" id="plansBox">
+            <span class="pill">请输入管理员 Token 后刷新。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel nav-target" id="gatewaySection" tabindex="-1">
+        <div class="panel-hd">
+          <h2>网关配置</h2>
+          <button class="btn secondary" id="btnEditMonthlyGateway">编辑月卡网关</button>
+        </div>
+        <div class="panel-bd">
+          <div class="status-line" id="gatewaySummary">
+            <span class="pill">请输入管理员 Token 后刷新。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace nav-target" id="licenseSection" tabindex="-1">
+        <div class="panel">
+          <div class="panel-hd">
+            <h2>生成 / 编辑授权</h2>
+            <span class="pill" id="tokenState">Token 未保存</span>
+          </div>
+          <div class="panel-bd">
+            <div class="field">
+              <label>管理员 Token</label>
+              <div class="row2">
+                <input id="token" type="password" placeholder="管理员 Token" autocomplete="current-password" />
+                <button class="btn secondary" id="saveToken">保存 Token</button>
+              </div>
+            </div>
+
+            <div class="row2">
+              <div class="field"><label>客户名称</label><input id="licensee" value="客户" /></div>
+              <div class="field">
+                <label>版本</label>
+                <select id="edition">
+                  <option value="pro">pro</option>
+                  <option value="standard">standard</option>
+                  <option value="trial">trial</option>
+                </select>
+              </div>
+            </div>
+            <div class="row3">
+              <div class="field"><label>生成数量</label><input id="count" type="number" min="1" max="999" value="1" /></div>
+              <div class="field"><label>到期日期</label><input id="expires" type="date" /></div>
+              <div class="field"><label>最大激活次数</label><input id="maxActivations" type="number" min="1" max="999" value="1" /></div>
+            </div>
+            <div class="field"><label>功能列表</label><input id="features" value="openclaw,image,video,storyboard" /></div>
+            <div class="row2">
+              <div class="field">
+                <label>会员模式</label>
+                <select id="memberMode">
+                  <option value="">普通授权</option>
+                  <option value="1" selected>会员 / 月卡</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>套用套餐模板</label>
+                <select id="planTemplate"><option value="">不套用模板</option></select>
+              </div>
+            </div>
+            <div class="field"><label>套餐标识</label><input id="plan" value="monthly" /></div>
+            <div class="field"><label>网关 Base URL</label><input id="gatewayBaseUrl" placeholder="https://api.example.com/v1" /></div>
+            <div class="field"><label>通用 Token / API Key</label><input id="gatewayToken" type="password" placeholder="用于文本对话；留空则使用套餐模板或保留已有 Token" /></div>
+            <div class="row2">
+              <div class="field"><label>图像 API Key</label><input id="gatewayImageToken" type="password" placeholder="留空继承通用 Token" /></div>
+              <div class="field"><label>视频 API Key</label><input id="gatewayVideoToken" type="password" placeholder="留空继承通用 Token" /></div>
+            </div>
+            <div class="row2">
+              <div class="field"><label>默认模型</label><input id="gatewayDefaultModel" placeholder="gpt-4.1-mini" /></div>
+              <div class="field"><label>图像模型</label><input id="gatewayImageModel" placeholder="gpt-image-2" /></div>
+            </div>
+            <div class="row2">
+              <div class="field"><label>视频模型</label><input id="gatewayVideoModel" placeholder="happyhorse-1.0-t2v" /></div>
+              <div class="field"><label>模型列表</label><input id="gatewayModels" placeholder="gpt-4.1-mini,gpt-4.1" /></div>
+            </div>
+            <div class="field"><label>配额 JSON</label><textarea id="quotas">{"image":100,"video":20}</textarea></div>
+            <div class="actions">
+              <button class="btn" id="createCode">生成授权码</button>
+              <button class="btn secondary" id="btnExportCurrent">导出当前</button>
+            </div>
+            <div class="toast" id="toast"></div>
+            <div class="codes" id="codesBox">
+              <pre id="codes"></pre>
+              <div class="actions" style="margin-top:10px">
+                <button class="btn" id="btnExport" style="display:none">导出当前</button>
+                <button class="btn danger" id="btnDelete" style="display:none">删除刚生成的</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-hd">
+            <h2>授权码列表</h2>
+            <div class="toolbar">
+              <input id="selectAll" type="checkbox" />
+              <span class="subtle">全选</span>
+            </div>
+          </div>
+          <div class="panel-bd">
+            <div class="row3">
+              <div class="field"><label>搜索</label><input id="searchCodes" placeholder="客户 / 授权码 / 套餐" /></div>
+              <div class="field">
+                <label>状态</label>
+                <select id="statusFilter">
+                  <option value="">全部</option>
+                  <option value="enabled">启用</option>
+                  <option value="disabled">停用</option>
+                  <option value="activated">已激活</option>
+                  <option value="unused">未使用</option>
+                  <option value="member">会员</option>
+                  <option value="normal">普通</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>已选</label>
+                <input id="selectedCountInline" value="0" disabled />
+              </div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>授权码</th>
+                  <th>客户</th>
+                  <th>功能 / 配额</th>
+                  <th>会员网关</th>
+                  <th>激活</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="rows"><tr><td colspan="8">暂无数据</td></tr></tbody>
+            </table>
+          </div>
+          <div class="panel-bd">
+            <div class="toolbar">
+              <button class="btn secondary" id="prevPage">上一页</button>
+              <span class="pill" id="pageInfo">0 条</span>
+              <button class="btn secondary" id="nextPage">下一页</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel nav-target" id="auditSection" tabindex="-1">
+        <div class="panel-hd"><h2>操作审计</h2><button class="btn secondary" id="refreshAudit">刷新审计</button></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>动作</th><th>目标</th><th>变更摘要</th><th>备份</th></tr></thead>
+            <tbody id="auditRows"><tr><td colspan="5">暂无审计记录。</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel nav-target" id="docsSection" tabindex="-1">
+        <div class="panel-hd"><h2>文档</h2><span class="pill">生产操作提示</span></div>
+        <div class="panel-bd docs-grid">
+          <div class="doc-card"><strong>生成授权</strong><p>先保存管理员 Token，再填写客户、到期日期、激活次数、功能和会员网关配置。生成后可直接导出给客户。</p></div>
+          <div class="doc-card"><strong>月卡套餐</strong><p>套餐模板保存网关、模型、功能和配额。生成授权或批量修改时选择模板即可继承配置。</p></div>
+          <div class="doc-card"><strong>安全建议</strong><p>服务端包不要覆盖 license.db、private_key.b64、admin_token.txt。上线前先备份数据库。</p></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="editDialog">
+    <div class="dialog-hd">
+      <h3>编辑授权码</h3>
+      <button class="btn secondary" id="closeEdit">关闭</button>
+    </div>
+    <div class="dialog-bd">
+      <input id="editCodeHash" type="hidden" />
+      <div class="row2">
+        <div class="field"><label>客户名称</label><input id="editLicensee" /></div>
+        <div class="field"><label>版本</label><input id="editEdition" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>到期日期</label><input id="editExpires" type="date" /></div>
+        <div class="field"><label>最大激活次数</label><input id="editMaxActivations" type="number" min="1" max="999" /></div>
+      </div>
+      <div class="field"><label>功能列表</label><input id="editFeatures" /></div>
+      <div class="row2">
+        <div class="field"><label>会员模式</label><select id="editMemberMode"><option value="">普通授权</option><option value="1">会员 / 月卡</option></select></div>
+        <div class="field"><label>套餐标识</label><input id="editPlan" /></div>
+      </div>
+      <div class="field"><label>网关 Base URL</label><input id="editGatewayBaseUrl" /></div>
+      <div class="field"><label>通用 Token / API Key</label><input id="editGatewayToken" type="password" placeholder="留空保留原 Token" /></div>
+      <div class="row2">
+        <div class="field"><label>图像 API Key</label><input id="editGatewayImageToken" type="password" placeholder="留空保留原图像 Key 或继承通用 Token" /></div>
+        <div class="field"><label>视频 API Key</label><input id="editGatewayVideoToken" type="password" placeholder="留空保留原视频 Key 或继承通用 Token" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>默认模型</label><input id="editGatewayDefaultModel" /></div>
+        <div class="field"><label>图像模型</label><input id="editGatewayImageModel" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>视频模型</label><input id="editGatewayVideoModel" /></div>
+        <div class="field"><label>模型列表</label><input id="editGatewayModels" /></div>
+      </div>
+      <div class="field"><label>配额 JSON</label><textarea id="editQuotas"></textarea></div>
+      <div class="hint">保存后不会清空历史激活。客户端下次刷新会员状态或重启后，会读取这里的最新配置。</div>
+      <div class="actions" style="margin-top:14px">
+        <button class="btn warn" id="saveEdit">保存修改</button>
+        <button class="btn secondary" id="cancelEdit">取消</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="bulkDialog">
+    <div class="dialog-hd">
+      <h3>批量改成月卡</h3>
+      <button class="btn secondary" id="closeBulk">关闭</button>
+    </div>
+    <div class="dialog-bd">
+      <div class="hint" id="bulkHint">将会修改已选择的授权码。</div>
+      <div class="row2">
+        <div class="field"><label>套用套餐模板</label><select id="bulkPlanTemplate"><option value="">不套用模板</option></select></div>
+        <div class="field"><label>到期日期</label><input id="bulkExpires" type="date" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>最大激活次数</label><input id="bulkMaxActivations" type="number" min="1" max="999" placeholder="留空不改" /></div>
+        <div class="field"><label>会员模式</label><select id="bulkMemberMode"><option value="1">会员 / 月卡</option><option value="">普通授权</option></select></div>
+      </div>
+      <div class="field"><label>功能列表</label><input id="bulkFeatures" value="openclaw,image,video,storyboard" /></div>
+      <div class="field"><label>套餐标识</label><input id="bulkPlan" value="monthly" /></div>
+      <div class="field"><label>网关 Base URL</label><input id="bulkGatewayBaseUrl" /></div>
+      <div class="field"><label>通用 Token / API Key</label><input id="bulkGatewayToken" type="password" placeholder="留空保留原 Token" /></div>
+      <div class="row2">
+        <div class="field"><label>图像 API Key</label><input id="bulkGatewayImageToken" type="password" placeholder="留空保留原图像 Key 或继承通用 Token" /></div>
+        <div class="field"><label>视频 API Key</label><input id="bulkGatewayVideoToken" type="password" placeholder="留空保留原视频 Key 或继承通用 Token" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>默认模型</label><input id="bulkGatewayDefaultModel" /></div>
+        <div class="field"><label>图像模型</label><input id="bulkGatewayImageModel" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>视频模型</label><input id="bulkGatewayVideoModel" /></div>
+        <div class="field"><label>模型列表</label><input id="bulkGatewayModels" /></div>
+      </div>
+      <div class="field"><label>配额 JSON</label><textarea id="bulkQuotas">{"image":100,"video":20}</textarea></div>
+      <div class="actions" style="margin-top:14px">
+        <button class="btn warn" id="saveBulk">批量保存</button>
+        <button class="btn secondary" id="cancelBulk">取消</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="planDialog">
+    <div class="dialog-hd">
+      <h3>编辑套餐模板</h3>
+      <button class="btn secondary" id="closePlan">关闭</button>
+    </div>
+    <div class="dialog-bd">
+      <div class="row2">
+        <div class="field"><label>套餐标识</label><input id="planKey" placeholder="monthly" /></div>
+        <div class="field"><label>显示名称</label><input id="planDisplayName" placeholder="月卡会员" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>有效天数</label><input id="planDurationDays" type="number" min="1" max="3660" value="31" /></div>
+        <div class="field"><label>状态</label><select id="planDisabled"><option value="">启用</option><option value="1">停用</option></select></div>
+      </div>
+      <div class="field"><label>功能列表</label><input id="planFeatures" value="openclaw,image,video,storyboard" /></div>
+      <div class="field"><label>网关 Base URL</label><input id="planGatewayBaseUrl" placeholder="https://api.example.com/v1" /></div>
+      <div class="field"><label>通用 Token / API Key</label><input id="planGatewayToken" type="password" placeholder="留空保留原 Token" /></div>
+      <div class="row2">
+        <div class="field"><label>图像 API Key</label><input id="planGatewayImageToken" type="password" placeholder="留空继承通用 Token" /></div>
+        <div class="field"><label>视频 API Key</label><input id="planGatewayVideoToken" type="password" placeholder="留空继承通用 Token" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>默认模型</label><input id="planGatewayDefaultModel" placeholder="gpt-4.1-mini" /></div>
+        <div class="field"><label>图像模型</label><input id="planGatewayImageModel" placeholder="gpt-image-2" /></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>视频模型</label><input id="planGatewayVideoModel" placeholder="happyhorse-1.0-t2v" /></div>
+        <div class="field"><label>模型列表</label><input id="planGatewayModels" placeholder="gpt-4.1-mini,gpt-4.1" /></div>
+      </div>
+      <div class="field"><label>配额 JSON</label><textarea id="planQuotas">{"image":100,"video":20}</textarea></div>
+      <div class="actions" style="margin-top:14px">
+        <button class="btn warn" id="savePlan">保存模板</button>
+        <button class="btn secondary" id="cancelPlan">取消</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="activationDialog">
+    <div class="dialog-hd">
+      <h3>激活详情</h3>
+      <button class="btn secondary" id="closeActivations">关闭</button>
+    </div>
+    <div class="dialog-bd table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>激活时间</th>
+            <th>Install ID</th>
+            <th>Device ID</th>
+            <th>套餐</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="activationRows"><tr><td colspan="5">暂无激活记录。</td></tr></tbody>
+      </table>
+    </div>
+  </dialog>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const must = (id) => {
+      const el = $(id);
+      if (!el) throw new Error(`页面缺少元素 #${id}`);
+      return el;
+    };
+    const adminBase = "/admin";
+    const tokenInput = must("token");
+    tokenInput.value = localStorage.getItem("openclawAdminToken") || "";
+
+    let allCodes = [];
+    let auditLogs = [];
+    let allPlans = [];
+    let lastGenerated = [];
+    let selectedHashes = new Set();
+    let currentPage = 1;
+    const pageSize = 50;
+    let currentActivationCodeHash = "";
+
+    function token() { return tokenInput.value.trim(); }
+    function setToast(text, bad = false) {
+      must("toast").textContent = text;
+      must("toast").style.color = bad ? "var(--danger)" : "var(--muted)";
+    }
+    function escapeHtml(text) {
+      return String(text ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+    }
+    function csv(value) { return Array.isArray(value) ? value.join(",") : String(value || ""); }
+    function findPlan(key) { return allPlans.find((plan) => plan.planKey === key); }
+    function getValue(id) { return must(id).value.trim(); }
+    function setValue(id, value) { must(id).value = value ?? ""; }
+    function dateAfterDays(days) {
+      const date = new Date();
+      date.setDate(date.getDate() + Number(days || 31));
+      return date.toISOString().slice(0, 10);
+    }
+    function defaultExpiry() {
+      setValue("expires", dateAfterDays(31));
+    }
+    function scrollToSection(id) {
+      const target = must(id);
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      target.focus({ preventScroll: true });
+      document.querySelectorAll(".nav button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.navTarget === id);
+      });
+    }
+    function bindNavigation() {
+      document.querySelectorAll(".nav button[data-nav-target]").forEach((button) => {
+        button.onclick = () => scrollToSection(button.dataset.navTarget);
+      });
+    }
+    async function api(path, options = {}) {
+      if (!token()) throw new Error("请先填写管理员 Token");
+      const response = await fetch(`${adminBase}/${path.replace(/^\/+/, "")}`, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Token": token(),
+          ...(options.headers || {}),
+        },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      return data;
+    }
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+    function renderStats(items) {
+      const total = items.length;
+      const used = items.filter((item) => item.activations > 0).length;
+      const disabled = items.filter((item) => item.disabled).length;
+      const available = items.filter((item) => !item.disabled && item.activations < item.maxActivations).length;
+      must("stats").innerHTML = [
+        [total, "授权码"],
+        [used, "已激活"],
+        [available, "可用"],
+        [disabled, "停用"],
+      ].map(([number, label]) => `<div class="stat"><strong>${number}</strong><span>${label}</span></div>`).join("");
+    }
+    function renderPlanOptions() {
+      const options = [`<option value="">不套用模板</option>`].concat(
+        allPlans
+          .filter((plan) => !plan.disabled)
+          .map((plan) => `<option value="${escapeHtml(plan.planKey)}">${escapeHtml(plan.displayName)} / ${escapeHtml(plan.planKey)}</option>`)
+      ).join("");
+      must("planTemplate").innerHTML = options;
+      must("bulkPlanTemplate").innerHTML = options;
+    }
+    function renderPlans() {
+      must("plansBox").innerHTML = allPlans.length ? allPlans.map((plan) => `
+        <span class="pill ${plan.disabled ? "danger" : "ok"}">
+          ${escapeHtml(plan.displayName)} / ${escapeHtml(plan.planKey)} / ${plan.durationDays}天 / 通用:${plan.gatewayConfigured ? "已配置" : "未配置"} / 图像Key:${plan.gatewayImageConfigured ? "可用" : "未配置"} / 视频Key:${plan.gatewayVideoConfigured ? "可用" : "未配置"} / 图像:${escapeHtml(plan.gatewayImageModel || "-")} / 视频:${escapeHtml(plan.gatewayVideoModel || "-")}
+        </span>
+        <button class="btn secondary" onclick="openPlanEdit('${escapeHtml(plan.planKey)}')">编辑</button>
+        <button class="btn danger" onclick="disablePlan('${escapeHtml(plan.planKey)}')">停用</button>
+      `).join("") : `<span class="pill">暂无套餐</span>`;
+    }
+    function renderGatewaySummary() {
+      const activePlans = allPlans.filter((plan) => !plan.disabled);
+      if (!activePlans.length) {
+        must("gatewaySummary").innerHTML = `<span class="pill">暂无启用套餐</span>`;
+        return;
+      }
+      must("gatewaySummary").innerHTML = activePlans.map((plan) => `
+        <span class="pill ${plan.gatewayConfigured ? "ok" : "danger"}">
+          ${escapeHtml(plan.displayName)} / ${escapeHtml(plan.planKey)} / 通用:${plan.gatewayConfigured ? "已配置" : "未配置"} / 图像Key:${plan.gatewayImageConfigured ? "可用" : "未配置"} / 视频Key:${plan.gatewayVideoConfigured ? "可用" : "未配置"} / 默认:${escapeHtml(plan.gatewayDefaultModel || "-")} / 图像:${escapeHtml(plan.gatewayImageModel || "-")} / 视频:${escapeHtml(plan.gatewayVideoModel || "-")}
+        </span>
+        <button class="btn secondary" onclick="openPlanEdit('${escapeHtml(plan.planKey)}')">编辑</button>
+      `).join("");
+    }
+    async function loadPlans() {
+      try {
+        const data = await api("api/plans");
+        allPlans = data.plans || [];
+        renderPlanOptions();
+        renderPlans();
+        renderGatewaySummary();
+      } catch (error) {
+        must("plansBox").innerHTML = `<span class="pill danger">${escapeHtml(error.message)}</span>`;
+        must("gatewaySummary").innerHTML = `<span class="pill danger">${escapeHtml(error.message)}</span>`;
+      }
+    }
+    function applyPlanToFields(plan, prefix = "") {
+      if (!plan) { setToast("未找到套餐模板", true); return; }
+      const idFor = (name) => prefix ? `${prefix}${name}` : name.charAt(0).toLowerCase() + name.slice(1);
+      const set = (name, value) => { const el = $(idFor(name)); if (el) el.value = value ?? ""; };
+      set("Features", csv(plan.features));
+      set("Plan", plan.planKey);
+      set("GatewayBaseUrl", plan.gatewayBaseUrl || "");
+      set("GatewayDefaultModel", plan.gatewayDefaultModel || "");
+      set("GatewayImageModel", plan.gatewayImageModel || "");
+      set("GatewayVideoModel", plan.gatewayVideoModel || "");
+      set("GatewayModels", csv(plan.gatewayModels));
+      set("Quotas", JSON.stringify(plan.quotas || {}, null, 2));
+      const expires = $(idFor("Expires"));
+      if (expires) expires.value = dateAfterDays(plan.durationDays);
+      const memberMode = $(idFor("MemberMode"));
+      if (memberMode) memberMode.value = "1";
+      setToast(`已加载模板：${plan.displayName}`);
+    }
+    function updateSelectedCount() {
+      selectedHashes = new Set([...selectedHashes].filter((hash) => allCodes.some((item) => item.codeHash === hash)));
+      ["selectedCountSidebar", "selectedCountInline"].forEach((id) => { must(id).value !== undefined ? must(id).value = String(selectedHashes.size) : must(id).textContent = String(selectedHashes.size); });
+      must("btnBulkEdit").disabled = selectedHashes.size === 0;
+      const selectAll = must("selectAll");
+      selectAll.checked = allCodes.length > 0 && allCodes.every((item) => selectedHashes.has(item.codeHash));
+      selectAll.indeterminate = selectedHashes.size > 0 && !selectAll.checked;
+    }
+    function bindSelection() {
+      document.querySelectorAll(".rowSelect").forEach((input) => {
+        input.onchange = () => {
+          const hash = input.dataset.codeHash;
+          if (input.checked) selectedHashes.add(hash); else selectedHashes.delete(hash);
+          updateSelectedCount();
+        };
+      });
+      updateSelectedCount();
+    }
+    function filteredCodes() {
+      const query = getValue("searchCodes").toLowerCase();
+      const status = must("statusFilter").value;
+      return allCodes.filter((item) => {
+        const haystack = `${item.fullCode || ""} ${item.codeLabel || ""} ${item.licensee || ""} ${item.edition || ""} ${item.plan || ""}`.toLowerCase();
+        if (query && !haystack.includes(query)) return false;
+        if (status === "enabled" && item.disabled) return false;
+        if (status === "disabled" && !item.disabled) return false;
+        if (status === "activated" && item.activations <= 0) return false;
+        if (status === "unused" && item.activations > 0) return false;
+        if (status === "member" && !item.memberMode) return false;
+        if (status === "normal" && item.memberMode) return false;
+        return true;
+      });
+    }
+    function renderCodeTable() {
+      const items = filteredCodes();
+      const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+      currentPage = Math.min(Math.max(1, currentPage), pageCount);
+      const start = (currentPage - 1) * pageSize;
+      renderRows(items.slice(start, start + pageSize));
+      must("pageInfo").textContent = `${items.length} 条 / 第 ${currentPage}/${pageCount} 页`;
+      must("prevPage").disabled = currentPage <= 1;
+      must("nextPage").disabled = currentPage >= pageCount;
+    }
+    function renderRows(items) {
+      must("rows").innerHTML = items.length ? items.map((item) => `
+        <tr>
+          <td><input class="rowSelect" type="checkbox" data-code-hash="${escapeHtml(item.codeHash)}" ${selectedHashes.has(item.codeHash) ? "checked" : ""} /></td>
+          <td><code>${escapeHtml(item.fullCode || item.codeLabel)}</code><div class="subtle">${escapeHtml(item.codeLabel || "")}</div></td>
+          <td>${escapeHtml(item.licensee)}<div class="subtle">版本：${escapeHtml(item.edition)}</div><div class="subtle">到期：${escapeHtml(item.expires)}</div></td>
+          <td>${escapeHtml(csv(item.features))}<div class="subtle">套餐：${escapeHtml(item.plan || "-")}</div><div class="subtle">配额：${escapeHtml(JSON.stringify(item.quotas || {}))}</div></td>
+          <td>${item.memberMode ? `<span class="pill ok">会员</span><div class="subtle">地址：${escapeHtml(item.gatewayBaseUrl || "未配置")}</div><div class="subtle">默认：${escapeHtml(item.gatewayDefaultModel || "-")}</div><div class="subtle">图像：${escapeHtml(item.gatewayImageModel || "-")} / Key ${item.gatewayImageConfigured ? "可用" : "未配置"}</div><div class="subtle">视频：${escapeHtml(item.gatewayVideoModel || "-")} / Key ${item.gatewayVideoConfigured ? "可用" : "未配置"}</div><div class="subtle">通用 Token ${item.gatewayConfigured ? "已保存" : "未保存"}</div>` : `<span class="pill">普通</span>`}</td>
+          <td>${item.activations}/${item.maxActivations}<div class="subtle"><button class="btn secondary" onclick="openActivations('${escapeHtml(item.codeHash)}')">详情</button></div></td>
+          <td><span class="pill ${item.disabled ? "danger" : "ok"}">${item.disabled ? "停用" : "启用"}</span></td>
+          <td>
+            <div class="actions">
+              <button class="btn warn" onclick="openEdit('${escapeHtml(item.codeHash)}')">编辑</button>
+              <button class="btn ${item.disabled ? "secondary" : "danger"}" onclick="toggleCode('${escapeHtml(item.codeHash)}', ${item.disabled ? "false" : "true"})">${item.disabled ? "启用" : "停用"}</button>
+              <button class="btn danger" onclick="deleteCode('${escapeHtml(item.codeHash)}')">删除</button>
+            </div>
+          </td>
+        </tr>
+      `).join("") : `<tr><td colspan="8">暂无授权码</td></tr>`;
+      bindSelection();
+    }
+    function summarizeAuditValue(value) {
+      if (value === null || value === undefined) return "-";
+      if (Array.isArray(value)) return `${value.length} 项`;
+      if (typeof value === "object") {
+        if ("codeCount" in value) return `授权码 ${value.codeCount} 个，激活 ${value.activationCount} 条`;
+        if ("count" in value) return `${value.count} 个授权码`;
+        if ("codeLabel" in value) return `${value.codeLabel} / ${value.licensee || "-"} / ${value.expires || "-"}`;
+        return JSON.stringify(value).slice(0, 160);
+      }
+      return String(value).slice(0, 160);
+    }
+    function renderAuditRows(logs) {
+      const actionNames = {
+        "codes.create": "生成授权码",
+        "codes.update": "编辑授权码",
+        "codes.bulk_update": "批量改套餐",
+        "codes.toggle": "启用/停用",
+        "codes.delete": "删除授权码",
+        "codes.clear": "清空授权码",
+        "plans.update": "保存套餐模板",
+        "plans.delete": "停用套餐模板",
+        "activations.delete": "解绑激活",
+      };
+      must("auditRows").innerHTML = logs.length ? logs.map((log) => `
+        <tr>
+          <td>${escapeHtml(log.createdAt || "-")}<div class="subtle">${escapeHtml(log.requestIp || "-")}</div></td>
+          <td>${escapeHtml(actionNames[log.action] || log.action)}<div class="subtle">${escapeHtml(log.actor || "-")}</div></td>
+          <td>${escapeHtml(log.targetType || "-")}<div class="subtle">${escapeHtml(log.targetId || "-")}</div></td>
+          <td>${escapeHtml(summarizeAuditValue(log.before))}<div class="subtle">→ ${escapeHtml(summarizeAuditValue(log.after))}</div></td>
+          <td>${log.backupFile ? `<code>${escapeHtml(log.backupFile)}</code>` : "-"}</td>
+        </tr>
+      `).join("") : `<tr><td colspan="5">暂无审计记录。</td></tr>`;
+    }
+    async function loadAuditLogs() {
+      try {
+        const data = await api("api/audit-logs?limit=100");
+        auditLogs = data.logs || [];
+        renderAuditRows(auditLogs);
+      } catch (error) {
+        must("auditRows").innerHTML = `<tr><td colspan="5">${escapeHtml(error.message)}</td></tr>`;
+      }
+    }
+    async function loadCodes() {
+      try {
+        must("serverState").textContent = "加载中";
+        must("serverBadge").textContent = "加载中";
+        const data = await api("api/codes");
+        allCodes = data.codes || [];
+        renderStats(allCodes);
+        renderCodeTable();
+        must("serverState").textContent = "在线";
+        must("serverBadge").textContent = "在线";
+      } catch (error) {
+        must("serverState").textContent = "未授权";
+        must("serverBadge").textContent = "未授权";
+        setToast(error.message, true);
+      }
+    }
+    async function refreshAdmin() {
+      await loadPlans();
+      await loadCodes();
+      await loadAuditLogs();
+    }
+    function formPayload(prefix = "") {
+      const id = (name) => `${prefix}${name}`;
+      return {
+        licensee: getValue(id("Licensee")),
+        edition: getValue(id("Edition")),
+        expires: must(id("Expires")).value,
+        maxActivations: Number(must(id("MaxActivations")).value || 1),
+        features: getValue(id("Features")),
+        memberMode: must(id("MemberMode")).value === "1",
+        plan: getValue(id("Plan")),
+        gatewayBaseUrl: getValue(id("GatewayBaseUrl")),
+        gatewayToken: getValue(id("GatewayToken")),
+        gatewayImageToken: getValue(id("GatewayImageToken")),
+        gatewayVideoToken: getValue(id("GatewayVideoToken")),
+        gatewayDefaultModel: getValue(id("GatewayDefaultModel")),
+        gatewayImageModel: getValue(id("GatewayImageModel")),
+        gatewayVideoModel: getValue(id("GatewayVideoModel")),
+        gatewayModels: getValue(id("GatewayModels")),
+        quotas: getValue(id("Quotas")),
+      };
+    }
+    function createPayload() {
+      return {
+        licensee: getValue("licensee"),
+        edition: must("edition").value,
+        count: Number(must("count").value || 1),
+        expires: must("expires").value,
+        maxActivations: Number(must("maxActivations").value || 1),
+        features: getValue("features"),
+        memberMode: must("memberMode").value === "1",
+        planTemplate: must("planTemplate").value,
+        plan: getValue("plan"),
+        gatewayBaseUrl: getValue("gatewayBaseUrl"),
+        gatewayToken: getValue("gatewayToken"),
+        gatewayImageToken: getValue("gatewayImageToken"),
+        gatewayVideoToken: getValue("gatewayVideoToken"),
+        gatewayDefaultModel: getValue("gatewayDefaultModel"),
+        gatewayImageModel: getValue("gatewayImageModel"),
+        gatewayVideoModel: getValue("gatewayVideoModel"),
+        gatewayModels: getValue("gatewayModels"),
+        quotas: getValue("quotas"),
+      };
+    }
+    async function createCode() {
+      try {
+        must("createCode").disabled = true;
+        const data = await api("api/codes", { method: "POST", body: JSON.stringify(createPayload()) });
+        lastGenerated = data.codes || [];
+        must("codesBox").style.display = "block";
+        must("codes").textContent = lastGenerated.join("\n");
+        must("btnExport").style.display = "inline-block";
+        must("btnDelete").style.display = "inline-block";
+        setToast(`已生成 ${lastGenerated.length} 条授权码`);
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+      finally { must("createCode").disabled = false; }
+    }
+    window.openEdit = function openEdit(codeHash) {
+      const item = allCodes.find((code) => code.codeHash === codeHash);
+      if (!item) return;
+      setValue("editCodeHash", item.codeHash);
+      setValue("editLicensee", item.licensee || "");
+      setValue("editEdition", item.edition || "pro");
+      setValue("editExpires", item.expires || "");
+      setValue("editMaxActivations", item.maxActivations || 1);
+      setValue("editFeatures", csv(item.features));
+      must("editMemberMode").value = item.memberMode ? "1" : "";
+      setValue("editPlan", item.plan || "");
+      setValue("editGatewayBaseUrl", item.gatewayBaseUrl || "");
+      setValue("editGatewayToken", "");
+      setValue("editGatewayImageToken", "");
+      setValue("editGatewayVideoToken", "");
+      setValue("editGatewayDefaultModel", item.gatewayDefaultModel || "");
+      setValue("editGatewayImageModel", item.gatewayImageModel || "");
+      setValue("editGatewayVideoModel", item.gatewayVideoModel || "");
+      setValue("editGatewayModels", csv(item.gatewayModels));
+      setValue("editQuotas", JSON.stringify(item.quotas || {}, null, 2));
+      must("editDialog").showModal();
+    };
+    async function saveEdit() {
+      try {
+        must("saveEdit").disabled = true;
+        const payload = formPayload("edit");
+        payload.codeHash = getValue("editCodeHash");
+        await api("api/codes/update", { method: "POST", body: JSON.stringify(payload) });
+        must("editDialog").close();
+        setToast("授权已更新，客户端刷新会员状态后生效。");
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+      finally { must("saveEdit").disabled = false; }
+    }
+    function openBulkEdit() {
+      if (!selectedHashes.size) { setToast("请先选择至少一条授权码", true); return; }
+      const selected = allCodes.filter((item) => selectedHashes.has(item.codeHash));
+      must("bulkHint").textContent = `将修改 ${selected.length} 条已选授权码。`;
+      const first = selected[0] || {};
+      must("bulkPlanTemplate").value = "";
+      setValue("bulkExpires", first.expires || "");
+      setValue("bulkMaxActivations", "");
+      setValue("bulkFeatures", csv(first.features) || "openclaw,image,video,storyboard");
+      setValue("bulkPlan", first.plan || "monthly");
+      must("bulkMemberMode").value = "1";
+      setValue("bulkGatewayBaseUrl", first.gatewayBaseUrl || "");
+      setValue("bulkGatewayToken", "");
+      setValue("bulkGatewayImageToken", "");
+      setValue("bulkGatewayVideoToken", "");
+      setValue("bulkGatewayDefaultModel", first.gatewayDefaultModel || "");
+      setValue("bulkGatewayImageModel", first.gatewayImageModel || "");
+      setValue("bulkGatewayVideoModel", first.gatewayVideoModel || "");
+      setValue("bulkGatewayModels", csv(first.gatewayModels));
+      setValue("bulkQuotas", JSON.stringify(first.quotas || { image: 100, video: 20 }, null, 2));
+      must("bulkDialog").showModal();
+    }
+    async function saveBulk() {
+      try {
+        must("saveBulk").disabled = true;
+        const payload = {
+          codeHashes: [...selectedHashes],
+          expires: must("bulkExpires").value,
+          maxActivations: must("bulkMaxActivations").value ? Number(must("bulkMaxActivations").value) : null,
+          features: getValue("bulkFeatures"),
+          memberMode: must("bulkMemberMode").value === "1",
+          planTemplate: must("bulkPlanTemplate").value,
+          plan: getValue("bulkPlan"),
+          gatewayBaseUrl: getValue("bulkGatewayBaseUrl"),
+          gatewayToken: getValue("bulkGatewayToken"),
+          gatewayImageToken: getValue("bulkGatewayImageToken"),
+          gatewayVideoToken: getValue("bulkGatewayVideoToken"),
+          gatewayDefaultModel: getValue("bulkGatewayDefaultModel"),
+          gatewayImageModel: getValue("bulkGatewayImageModel"),
+          gatewayVideoModel: getValue("bulkGatewayVideoModel"),
+          gatewayModels: getValue("bulkGatewayModels"),
+          quotas: getValue("bulkQuotas"),
+        };
+        const data = await api("api/codes/bulk-update", { method: "POST", body: JSON.stringify(payload) });
+        must("bulkDialog").close();
+        setToast(`已批量更新 ${data.updated || payload.codeHashes.length} 条授权码。`);
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+      finally { must("saveBulk").disabled = false; }
+    }
+    window.openPlanEdit = function openPlanEdit(planKey = "") {
+      const plan = findPlan(planKey) || {};
+      setValue("planKey", plan.planKey || "");
+      must("planKey").disabled = Boolean(plan.planKey);
+      setValue("planDisplayName", plan.displayName || "");
+      setValue("planDurationDays", plan.durationDays || 31);
+      must("planDisabled").value = plan.disabled ? "1" : "";
+      setValue("planFeatures", csv(plan.features) || "openclaw,image,video,storyboard");
+      setValue("planGatewayBaseUrl", plan.gatewayBaseUrl || "");
+      setValue("planGatewayToken", "");
+      setValue("planGatewayImageToken", "");
+      setValue("planGatewayVideoToken", "");
+      setValue("planGatewayDefaultModel", plan.gatewayDefaultModel || "");
+      setValue("planGatewayImageModel", plan.gatewayImageModel || "");
+      setValue("planGatewayVideoModel", plan.gatewayVideoModel || "");
+      setValue("planGatewayModels", csv(plan.gatewayModels));
+      setValue("planQuotas", JSON.stringify(plan.quotas || { image: 100, video: 20 }, null, 2));
+      must("planDialog").showModal();
+    };
+    async function savePlan() {
+      try {
+        must("savePlan").disabled = true;
+        const payload = {
+          planKey: getValue("planKey"),
+          displayName: getValue("planDisplayName"),
+          durationDays: Number(must("planDurationDays").value || 31),
+          disabled: must("planDisabled").value === "1",
+          features: getValue("planFeatures"),
+          gatewayBaseUrl: getValue("planGatewayBaseUrl"),
+          gatewayToken: getValue("planGatewayToken"),
+          gatewayImageToken: getValue("planGatewayImageToken"),
+          gatewayVideoToken: getValue("planGatewayVideoToken"),
+          gatewayDefaultModel: getValue("planGatewayDefaultModel"),
+          gatewayImageModel: getValue("planGatewayImageModel"),
+          gatewayVideoModel: getValue("planGatewayVideoModel"),
+          gatewayModels: getValue("planGatewayModels"),
+          quotas: getValue("planQuotas"),
+        };
+        await api("api/plans/update", { method: "POST", body: JSON.stringify(payload) });
+        must("planDialog").close();
+        setToast("套餐模板已保存。");
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+      finally { must("savePlan").disabled = false; }
+    }
+    window.disablePlan = async function disablePlan(planKey) {
+      if (!confirm(`确认停用套餐模板 ${planKey}？`)) return;
+      try {
+        await api("api/plans/delete", { method: "POST", body: JSON.stringify({ planKey }) });
+        setToast("套餐模板已停用。");
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+    };
+    window.toggleCode = async function toggleCode(codeHash, disabled) {
+      try {
+        await api("api/codes/toggle", { method: "POST", body: JSON.stringify({ codeHash, disabled }) });
+        setToast(disabled ? "授权码已停用。" : "授权码已启用。");
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+    };
+    window.deleteCode = async function deleteCode(codeHash) {
+      if (!confirm("确认删除这个授权码？此操作会同时删除激活记录。")) return;
+      try {
+        await api("api/codes/delete", { method: "POST", body: JSON.stringify({ codeHash }) });
+        selectedHashes.delete(codeHash);
+        setToast("授权码已删除。");
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+    };
+    async function deleteGenerated() {
+      if (!lastGenerated.length) return;
+      if (!confirm(`确认删除刚生成的 ${lastGenerated.length} 个授权码？`)) return;
+      try {
+        for (const code of lastGenerated) {
+          const hashResp = await api("api/codes/hash", { method: "POST", body: JSON.stringify({ code }) });
+          await api("api/codes/delete", { method: "POST", body: JSON.stringify({ codeHash: hashResp.codeHash }) });
+        }
+        lastGenerated = [];
+        must("codesBox").style.display = "none";
+        setToast("刚生成的授权码已删除。");
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+    }
+    async function clearAll() {
+      if (!confirm("确认清空全部授权码和激活记录？服务端会先自动备份数据库。")) return;
+      try {
+        await api("api/codes/clear", { method: "POST", body: "{}" });
+        selectedHashes.clear();
+        setToast("授权码已清空。");
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+    }
+    window.openActivations = async function openActivations(codeHash) {
+      currentActivationCodeHash = codeHash;
+      must("activationRows").innerHTML = `<tr><td colspan="5">加载中...</td></tr>`;
+      must("activationDialog").showModal();
+      try {
+        const data = await api(`api/codes/activations?codeHash=${encodeURIComponent(codeHash)}`);
+        const rows = data.activations || [];
+        must("activationRows").innerHTML = rows.length ? rows.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.activatedAt || "-")}</td>
+            <td><code>${escapeHtml(row.installId || "-")}</code></td>
+            <td><code>${escapeHtml(row.deviceId || "-")}</code></td>
+            <td>${escapeHtml(row.plan || "-")}<div class="subtle">${escapeHtml(row.memberId || row.licenseId || "")}</div></td>
+            <td><button class="btn danger" onclick="deleteActivation(${Number(row.id) || 0})">解绑</button></td>
+          </tr>
+        `).join("") : `<tr><td colspan="5">暂无激活记录。</td></tr>`;
+      } catch (error) {
+        must("activationRows").innerHTML = `<tr><td colspan="5">${escapeHtml(error.message)}</td></tr>`;
+      }
+    };
+    window.deleteActivation = async function deleteActivation(id) {
+      if (!id || !confirm("确认解绑这条激活记录？")) return;
+      try {
+        await api("api/activations/delete", { method: "POST", body: JSON.stringify({ id }) });
+        setToast("激活记录已解绑。");
+        await openActivations(currentActivationCodeHash);
+        await refreshAdmin();
+      } catch (error) { setToast(error.message, true); }
+    };
+    function exportCurrent() {
+      const text = lastGenerated.length ? lastGenerated.join("\n") : allCodes.map((item) => item.fullCode || item.codeLabel).join("\n");
+      if (!text.trim()) { setToast("暂无可导出的授权码", true); return; }
+      downloadText(`openclaw-codes-${Date.now()}.txt`, text);
+    }
+    function exportAll() {
+      const lines = allCodes.map((item) => [
+        item.fullCode || item.codeLabel,
+        item.licensee,
+        item.edition,
+        item.expires,
+        item.memberMode ? "member" : "normal",
+        item.plan || "",
+      ].map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","));
+      downloadText(`openclaw-codes-${Date.now()}.csv`, ["code,licensee,edition,expires,type,plan"].concat(lines).join("\n"));
+    }
+    function bindEvents() {
+      bindNavigation();
+      must("saveToken").onclick = () => {
+        localStorage.setItem("openclawAdminToken", token());
+        must("tokenState").textContent = token() ? "Token 已保存" : "Token 未保存";
+        refreshAdmin();
+      };
+      must("refresh").onclick = refreshAdmin;
+      must("refreshAudit").onclick = loadAuditLogs;
+      must("createCode").onclick = createCode;
+      must("btnExport").onclick = exportCurrent;
+      must("btnExportCurrent").onclick = exportCurrent;
+      must("btnExportAll").onclick = exportAll;
+      must("btnDelete").onclick = deleteGenerated;
+      must("btnClearAll").onclick = clearAll;
+      must("btnBulkEdit").onclick = openBulkEdit;
+      must("btnNewPlan").onclick = () => openPlanEdit("");
+      must("btnEditMonthlyGateway").onclick = () => openPlanEdit("monthly");
+      must("saveEdit").onclick = saveEdit;
+      must("cancelEdit").onclick = () => must("editDialog").close();
+      must("closeEdit").onclick = () => must("editDialog").close();
+      must("saveBulk").onclick = saveBulk;
+      must("cancelBulk").onclick = () => must("bulkDialog").close();
+      must("closeBulk").onclick = () => must("bulkDialog").close();
+      must("savePlan").onclick = savePlan;
+      must("cancelPlan").onclick = () => must("planDialog").close();
+      must("closePlan").onclick = () => must("planDialog").close();
+      must("closeActivations").onclick = () => must("activationDialog").close();
+      must("searchCodes").oninput = () => { currentPage = 1; renderCodeTable(); };
+      must("statusFilter").onchange = () => { currentPage = 1; renderCodeTable(); };
+      must("prevPage").onclick = () => { currentPage -= 1; renderCodeTable(); };
+      must("nextPage").onclick = () => { currentPage += 1; renderCodeTable(); };
+      must("selectAll").onchange = (event) => {
+        if (event.target.checked) allCodes.forEach((item) => selectedHashes.add(item.codeHash));
+        else selectedHashes.clear();
+        renderCodeTable();
+      };
+      must("planTemplate").onchange = (event) => {
+        const plan = findPlan(event.target.value);
+        if (plan) applyPlanToFields(plan);
+      };
+      must("bulkPlanTemplate").onchange = (event) => {
+        const plan = findPlan(event.target.value);
+        if (plan) applyPlanToFields(plan, "bulk");
+      };
+      if (token()) must("tokenState").textContent = "Token 已保存";
+    }
+    defaultExpiry();
+    bindEvents();
+    if (token()) refreshAdmin();
+  </script>
+</body>
+</html>

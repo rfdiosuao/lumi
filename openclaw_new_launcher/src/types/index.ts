@@ -21,7 +21,13 @@ export interface License {
   gatewayBaseUrl?: string;
   gatewayAccessToken?: string;
   gatewayToken?: string;
+  gatewayImageAccessToken?: string;
+  gatewayVideoAccessToken?: string;
+  gatewayImageToken?: string;
+  gatewayVideoToken?: string;
   gatewayDefaultModel?: string;
+  gatewayImageModel?: string;
+  gatewayVideoModel?: string;
   activationCodeLabel?: string;
   activationCodeLast8?: string;
   codeLabel?: string;

@@ -189,10 +189,17 @@ def _sync_openclaw_models_from_api_profiles() -> None:
         profiles["models"]["providers"]["member_gateway"] = {
             "id": "member_gateway",
             "name": "会员托管",
+            "authMode": "member",
+            "mode": "member",
+            "providerId": provider_id,
             "baseUrl": base_url,
             "apiKey": api_key,
+            "api": "openai-completions",
             "models": model_ids,
             "defaultModel": primary_model,
+            "gatewayDefaultModel": primary_model,
+            "gatewayImageModel": str(gateway_profile.get("imageModel") or "").strip(),
+            "gatewayVideoModel": str(gateway_profile.get("videoModel") or "").strip(),
         }
         profiles["models"]["primary"] = "member_gateway"
         write_json(paths.auth_profiles, profiles)

@@ -95,10 +95,11 @@ export const DashboardPage: React.FC = () => {
         setApiConfigured(true);
       } else {
         const licenseResp = await licenseApi.current();
-        const license = licenseResp.license as any;
+        const license = ((licenseResp as any).gatewayProfile || licenseResp.license || (licenseResp as any).member) as any;
+        const gateway = license?.gateway || {};
         setApiConfigured(Boolean(
-          String(license?.gatewayBaseUrl || license?.gatewayUrl || '').trim()
-          && String(license?.gatewayAccessToken || license?.gatewayToken || '').trim(),
+          String(license?.gatewayBaseUrl || license?.gatewayUrl || license?.baseUrl || gateway?.baseUrl || gateway?.url || '').trim()
+          && String(license?.gatewayAccessToken || license?.gatewayToken || license?.apiKey || license?.memberToken || gateway?.apiKey || gateway?.token || '').trim(),
         ));
       }
     } catch {

@@ -86,14 +86,15 @@ Preferred safe order:
 2. Use `npm run phone:agent -- run --prompt "..." --mode safe` for ordinary user-requested phone actions.
 3. Use `npm run phone:agent -- run --prompt "..." --mode full` only when the user explicitly requests broad automation.
 4. Use `npm run phone:fleet -- list` to inspect configured devices, and `npm run phone:fleet -- run --target <id|id,id|all> --prompt "..." --mode observe|safe|full` for multi-device dispatch.
-5. Use `npm run phone:vision` or `npm run phone:game` only for vision/game fallback and debugging.
-6. Low-level phone APIs are implementation details of the launcher wrappers, not model-facing tools.
+5. Use `npm run phone:agent -- history --limit 20` after long, timed-out, or unclear tasks to inspect the launcher-side task trail before sending a follow-up.
+6. Use `npm run phone:vision` or `npm run phone:game` only for vision/game fallback and debugging.
+7. Low-level phone APIs are implementation details of the launcher wrappers, not model-facing tools.
 
 The launcher and bundled CLIs pair automatically and sign advanced requests. Do not call advanced phone endpoints without a launcher wrapper.
 
 For collection or demonstrations, OpenClaw should plan the task and APKClaw should execute on the phone. Do not let OpenClaw become a manual phone remote unless the task is debugging or APKClaw has already failed enough to justify intervention.
 
-APKClaw Agent has a hard 60-round budget per task. For long product searches, jobs, feeds, or game tasks, ask for one bounded batch and return results to OpenClaw. Then OpenClaw decides whether to send a follow-up task.
+APKClaw Agent has a hard 60-round budget per task. The launcher wrapper sends this as `--max-rounds 60` by default. For long product searches, jobs, feeds, or game tasks, ask for one bounded batch and return results to OpenClaw. Then OpenClaw decides whether to send a follow-up task.
 
 For jobs, products, comments, search results, and other visible list tasks, ask the phone Agent to use `collect_list_items` instead of manually repeating `get_screen_info` plus `swipe`. Use `target=job` for jobs, `target=product` for products, and `target=generic` for other lists.
 

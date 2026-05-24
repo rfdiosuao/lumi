@@ -180,6 +180,7 @@ Connection and budget rules:
 - `runtime-context.json` intentionally does not expose the phone URL or raw token to model-facing context.
 - Bundled phone CLIs read the launcher config automatically, so normal commands do not need `--phone-token`.
 - Use `npm run phone:agent` for APKClaw Agent tasks. Raw APKClaw task APIs are not model-facing tools.
+- Use `npm run phone:agent -- history --limit 20` to inspect recent APKClaw task outcomes, timeout classes, and launcher-side failure summaries before retrying.
 - APKClaw Agent can run at most 60 rounds per task. Split long tasks into bounded batches and follow-ups.
 
 ## Trust Rules

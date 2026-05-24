@@ -24,6 +24,7 @@ For CLI commands, rely on the launcher-saved Phone Control config:
 
 ```powershell
 npm run phone:agent -- run --prompt "inspect the current phone screen safely" --mode observe
+npm run phone:agent -- history --limit 20
 npm run phone:fleet -- list
 npm run phone:fleet -- run --target all --prompt "inspect each current phone screen safely" --mode observe
 npm run phone:vision -- status
@@ -41,6 +42,8 @@ APKClaw has a hard per-task planning budget of 60 rounds.
 - For long shopping/search/research flows, ask APKClaw to collect a bounded batch, return results, then let OpenClaw decide the next task.
 - If a task seems likely to exceed 60 rounds, split it before starting.
 - If APKClaw returns `needs_vision`, `needs_followup`, timeout, or partial results, treat that as a handoff point, not a failure.
+- After timeout, crash, unauthorized, accessibility-off, task-busy, or unclear results, inspect `npm run phone:agent -- history --limit 20` before retrying.
+- `npm run phone:agent` sends a 60-round budget by default; use `--max-rounds <n>` only when the user explicitly asks for a different bounded budget.
 - Do not instruct APKClaw to keep trying indefinitely.
 
 ## Preferred Control Path

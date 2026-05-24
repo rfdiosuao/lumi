@@ -5,6 +5,8 @@ export type GatewayMode = 'member' | 'manual';
 export interface GatewayDefaults {
   baseUrl: string;
   apiKey: string;
+  imageApiKey: string;
+  videoApiKey: string;
   defaultModel: string;
   imageModel: string;
   videoModel: string;
@@ -19,6 +21,18 @@ export interface GatewayStoredConfig {
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' ? value as Record<string, any> : {};
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = normalizeText(value);
+    if (text) return text;
+  }
+  return '';
 }
 
 export function normalizeGatewayMode(value: unknown): GatewayMode | null {
@@ -43,16 +57,94 @@ export function readGatewayStoredConfig(data: unknown): GatewayStoredConfig {
 
 export async function readMemberGatewayDefaults(): Promise<GatewayDefaults> {
   const resp = await licenseApi.current();
-  const license = resp.license as any;
-  const baseUrl = normalizeText(license?.gatewayBaseUrl || license?.gatewayUrl);
-  const apiKey = normalizeText(license?.gatewayAccessToken || license?.gatewayToken);
+  const sources = [
+    asRecord((resp as any).member),
+    asRecord((resp as any).gatewayProfile),
+    asRecord(resp.license),
+  ];
+  const gateways = sources.map((source) => asRecord(source.gateway));
+  const baseUrl = firstText(
+    ...sources.flatMap((source, index) => [
+      source.gatewayBaseUrl,
+      source.gatewayUrl,
+      source.baseUrl,
+      source.url,
+      gateways[index].gatewayBaseUrl,
+      gateways[index].baseUrl,
+      gateways[index].url,
+    ]),
+  );
+  const apiKey = firstText(
+    ...sources.flatMap((source, index) => [
+      source.gatewayAccessToken,
+      source.gatewayToken,
+      source.apiKey,
+      source.memberToken,
+      source.token,
+      gateways[index].gatewayAccessToken,
+      gateways[index].gatewayToken,
+      gateways[index].accessToken,
+      gateways[index].apiKey,
+      gateways[index].token,
+    ]),
+  );
+  const imageApiKey = firstText(
+    ...sources.flatMap((source, index) => [
+      source.gatewayImageAccessToken,
+      source.gatewayImageToken,
+      source.imageApiKey,
+      source.imageToken,
+      gateways[index].gatewayImageAccessToken,
+      gateways[index].gatewayImageToken,
+      gateways[index].imageAccessToken,
+      gateways[index].imageToken,
+      gateways[index].imageApiKey,
+    ]),
+    apiKey,
+  );
+  const videoApiKey = firstText(
+    ...sources.flatMap((source, index) => [
+      source.gatewayVideoAccessToken,
+      source.gatewayVideoToken,
+      source.videoApiKey,
+      source.videoToken,
+      gateways[index].gatewayVideoAccessToken,
+      gateways[index].gatewayVideoToken,
+      gateways[index].videoAccessToken,
+      gateways[index].videoToken,
+      gateways[index].videoApiKey,
+    ]),
+    apiKey,
+  );
+  const defaultModel = firstText(...sources.flatMap((source, index) => [
+    source.gatewayDefaultModel,
+    source.defaultModel,
+    source.model,
+    gateways[index].gatewayDefaultModel,
+    gateways[index].defaultModel,
+    gateways[index].model,
+  ]));
+  const imageModel = firstText(...sources.flatMap((source, index) => [
+    source.gatewayImageModel,
+    source.imageModel,
+    gateways[index].gatewayImageModel,
+    gateways[index].imageModel,
+  ]));
+  const videoModel = firstText(...sources.flatMap((source, index) => [
+    source.gatewayVideoModel,
+    source.videoModel,
+    gateways[index].gatewayVideoModel,
+    gateways[index].videoModel,
+  ]));
 
   return {
     baseUrl,
     apiKey,
-    defaultModel: normalizeText(license?.gatewayDefaultModel || license?.defaultModel),
-    imageModel: normalizeText(license?.gatewayImageModel || license?.imageModel),
-    videoModel: normalizeText(license?.gatewayVideoModel || license?.videoModel),
+    imageApiKey,
+    videoApiKey,
+    defaultModel,
+    imageModel,
+    videoModel,
     hasGateway: Boolean(baseUrl && apiKey),
   };
 }

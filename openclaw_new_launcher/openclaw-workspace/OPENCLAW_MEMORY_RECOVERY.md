@@ -45,6 +45,8 @@ Registered launcher command map to verify from package.json:
 Phone capabilities:
 - Run one bounded Android Agent task:
   npm run phone:agent -- run --prompt "..." --mode observe|safe|full
+- Inspect recent Android Agent outcomes:
+  npm run phone:agent -- history --limit 20
 - Multi-device dispatch:
   npm run phone:fleet -- list
   npm run phone:fleet -- status --target all
@@ -69,7 +71,8 @@ Phone operating rules:
 - Use safe mode for ordinary user-approved phone actions.
 - Use full mode only when the user explicitly asks for broad automation.
 - APKClaw is the executor; OpenClaw plans, sends bounded tasks, inspects results, and sends follow-up tasks.
-- APKClaw tasks have a 60-round budget. Split long jobs into batches.
+- APKClaw tasks have a 60-round budget. `npm run phone:agent` sends `max_rounds=60` by default; split long jobs into batches.
+- Check `npm run phone:agent -- history --limit 20` before retrying a failed, timed-out, or ambiguous phone task.
 - Prefer collect_list_items for jobs, products, comments, search results, and feed/list screens.
 - If device profile recommends vision mode, do not force accessibility-tree scraping.
 - Images should appear under Pictures/<album>.

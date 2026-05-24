@@ -80,6 +80,8 @@ export interface ProcessStatus {
   startupElapsedSec?: number;
   startupTimeoutSec?: number;
   startupError?: string;
+  startupStage?: string | null;
+  startupDurationMs?: number | null;
   pid: number | null;
   portReady?: boolean;
   status?: string;
@@ -141,7 +143,7 @@ export const logApi = {
 
 // === License API ===
 export const licenseApi = {
-  current: (): Promise<{ license: object | null }> => api('/api/license/current'),
+  current: (): Promise<{ license: object | null; gatewayProfile?: object | null; member?: object | null }> => api('/api/license/current'),
   activate: (code: string): Promise<{ license: object }> => api('/api/license/activate', 'POST', { code }),
   authorized: (feature?: string): Promise<{ authorized: boolean }> => api('/api/license/authorized', 'POST', { feature }),
 };
@@ -234,6 +236,13 @@ export interface DiagnosticReport {
   basePath: string;
   serviceRunning: boolean;
   servicePid: number | null;
+  startupState?: string;
+  startupElapsedSec?: number;
+  startupTimeoutSec?: number;
+  startupError?: string;
+  startupDurationMs?: number | null;
+  startupStage?: string | null;
+  startupSnapshotPath?: string;
   checks: DiagnosticCheck[];
   summary: DiagnosticSummary;
   repairAvailable: boolean;

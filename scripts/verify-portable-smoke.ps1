@@ -85,6 +85,7 @@ Invoke-Checked "Bundled Node CLI syntax" {
     foreach ($script in @(
         "scripts\openclaw-context.mjs",
         "scripts\openclaw-phone-agent.mjs",
+        "scripts\openclaw-phone-fleet.mjs",
         "scripts\openclaw-phone-secure.mjs",
         "scripts\openclaw-phone-vision.mjs",
         "scripts\openclaw-phone-game.mjs",
@@ -113,6 +114,9 @@ Invoke-Checked "Runtime context hard guard" {
     }
     if ($context.capabilities.phoneAgent.agentCli -ne "npm run phone:agent") {
         throw "phoneAgent.agentCli must be npm run phone:agent"
+    }
+    if ($context.capabilities.phoneAgent.fleetCli -ne "npm run phone:fleet") {
+        throw "phoneAgent.fleetCli must be npm run phone:fleet"
     }
 }
 

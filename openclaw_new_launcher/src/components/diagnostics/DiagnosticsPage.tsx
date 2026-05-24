@@ -204,6 +204,12 @@ export const DiagnosticsPage: React.FC = () => {
 
   const summaryTone = toneMap[report?.summary?.status || 'warn'];
   const canRepair = Boolean(report?.repairAvailable) || sortedChecks.some((item) => item.repairable);
+  const startupDurationText = typeof report?.startupDurationMs === 'number'
+    ? `${(report.startupDurationMs / 1000).toFixed(1)}s`
+    : '-';
+  const startupElapsedText = typeof report?.startupElapsedSec === 'number'
+    ? `${report.startupElapsedSec}s`
+    : '-';
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent">
@@ -264,6 +270,44 @@ export const DiagnosticsPage: React.FC = () => {
                 <span className="text-text-muted">服务 PID</span>
                 <span className="font-mono text-text">{report?.servicePid || '未运行'}</span>
               </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-surface-alt/70 p-5">
+              <h2 className="text-sm font-bold text-text">启动耗时</h2>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-border bg-black/10 p-3">
+                  <div className="text-[11px] text-text-subtle">最近完成</div>
+                  <div className="mt-1 font-mono text-base font-bold text-text">{startupDurationText}</div>
+                </div>
+                <div className="rounded-xl border border-border bg-black/10 p-3">
+                  <div className="text-[11px] text-text-subtle">当前等待</div>
+                  <div className="mt-1 font-mono text-base font-bold text-text">{startupElapsedText}</div>
+                </div>
+              </div>
+              <div className="mt-3 space-y-2 text-xs text-text-muted">
+                <div className="flex items-center justify-between gap-3">
+                  <span>状态</span>
+                  <span className="font-mono text-text">{report?.startupState || '-'}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>阶段</span>
+                  <span className="font-mono text-text">{report?.startupStage || '-'}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>超时</span>
+                  <span className="font-mono text-text">{report?.startupTimeoutSec ? `${report.startupTimeoutSec}s` : '-'}</span>
+                </div>
+              </div>
+              {report?.startupError && (
+                <div className="mt-3 break-all rounded-lg border border-border bg-black/10 px-3 py-2 font-mono text-xs text-text-subtle">
+                  {report.startupError}
+                </div>
+              )}
+              {report?.startupSnapshotPath && (
+                <div className="mt-3 break-all rounded-lg border border-border bg-black/10 px-3 py-2 font-mono text-xs text-text-subtle">
+                  {report.startupSnapshotPath}
+                </div>
+              )}
             </section>
 
             {exportInfo && (

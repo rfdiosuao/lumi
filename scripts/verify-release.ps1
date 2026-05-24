@@ -14,6 +14,7 @@ $requiredFiles = @(
     "scripts/openclaw-context.mjs",
     "scripts/openclaw-image-phone.mjs",
     "scripts/openclaw-phone-agent.mjs",
+    "scripts/openclaw-phone-fleet.mjs",
     "scripts/openclaw-phone-game.mjs",
     "scripts/openclaw-phone-secure.mjs",
     "scripts/openclaw-phone-video.mjs",
@@ -34,7 +35,6 @@ $requiredFiles = @(
     "data/launcher_runtime.json",
     "data/themes/default/theme.json",
     "data/themes/default/logo.png",
-    "releases/agent-phone/AgentPhone_latest.apk",
     "redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
     "imgapi_config.json",
     "video_config.json",
@@ -51,8 +51,13 @@ $forbiddenPatterns = @(
     "(?i)(^|/)data/license\.json$",
     "(?i)(^|/)data/install_id\.txt$",
     "(?i)(^|/)data/\.openclaw/launcher/phone-agent\.json$",
+    "(?i)(^|/)data/\.openclaw/launcher/phone-agents\.json$",
     "(?i)(^|/)data/theme\.json$",
     "(?i)(^|/)OpenClawFiles/(Lumi|YongHao|yonghao_tech)(/|$)",
+    "(?i)(^|/)OpenClawFiles/agents/sightflow-desktop(/|$)",
+    "(?i)(^|/)OpenClawFiles/agents/sightflow-desktop-agent(/|$)",
+    "(?i)(^|/)OpenClawFiles/releases/agent-phone/.*\.apk$",
+    "(?i)(^|/)releases/agent-phone/.*\.apk$",
     "(?i)(^|/)__pycache__(/|$)",
     "(?i)\.pyc$",
     "(?i)(^|/)\.npm-cache-update(/|$)",
@@ -86,6 +91,11 @@ $emptyJsonConfigSuffixes = @(
 $openClawRuntimeConfigSuffix = "/data/.openclaw/openclaw.json"
 $openClawRuntimeContextSuffix = "/data/.openclaw/workspace/runtime-context.json"
 $brandProfileSuffix = "/data/brand_profile.json"
+
+$script:PackageJsonVersion = $null
+$script:LauncherRuntimeVersion = $null
+$script:LauncherRuntimePackageName = $null
+$script:RuntimeContextLauncherVersion = $null
 
 $sensitiveContentPattern = '(?i)\b(sk-[A-Za-z0-9_\-]{24,}|(?:OPENAI|DASHSCOPE|ANTHROPIC|GOOGLE|GITHUB|AZURE|COHERE)_API_KEY\s*[:=]\s*["'']?[A-Za-z0-9_\-]{16,})\b'
 
@@ -254,11 +264,16 @@ function Add-ContentFindings {
             $agentCli = [string]$phoneAgent.agentCli
             $verifiedVersion = [string]$phoneAgent.verifiedVersion
             $verifiedVersionCode = [int]$phoneAgent.verifiedVersionCode
+            $launcherVersion = [string]$json.launcher.version
             if ($controlPolicy -ne "wrapper-only") {
                 $Errors.Add("Runtime context phoneAgent.controlPolicy must be wrapper-only: $RelativePath")
             }
             if ($agentCli -ne "npm run phone:agent") {
                 $Errors.Add("Runtime context phoneAgent.agentCli must be npm run phone:agent: $RelativePath")
+            }
+            $fleetCli = [string]$phoneAgent.fleetCli
+            if ($fleetCli -ne "npm run phone:fleet") {
+                $Errors.Add("Runtime context phoneAgent.fleetCli must be npm run phone:fleet: $RelativePath")
             }
             foreach ($forbiddenProperty in @("preferredTaskApi", "legacyTaskApi", "galleryImportEndpoint", "visionActionEndpoint", "visionFrameEndpoint")) {
                 if ($phoneAgent.PSObject.Properties.Name -contains $forbiddenProperty) {
@@ -270,6 +285,12 @@ function Add-ContentFindings {
             }
             if ($verifiedVersionCode -le 0) {
                 $Errors.Add("Runtime context phoneAgent.verifiedVersionCode must be greater than zero: $RelativePath")
+            }
+            if ([string]::IsNullOrWhiteSpace($launcherVersion)) {
+                $Errors.Add("Runtime context launcher.version must be set: $RelativePath")
+            }
+            else {
+                $script:RuntimeContextLauncherVersion = $launcherVersion
             }
         }
         catch {
@@ -290,6 +311,45 @@ function Add-ContentFindings {
         }
         catch {
             $Errors.Add("Brand profile is not valid JSON: $RelativePath")
+        }
+    }
+
+    if ($RelativePath -ieq "OpenClawFiles/package.json") {
+        try {
+            $json = $Content | ConvertFrom-Json
+            $version = [string]$json.version
+            if ([string]::IsNullOrWhiteSpace($version)) {
+                $Errors.Add("package.json version is missing: $RelativePath")
+            }
+            else {
+                $script:PackageJsonVersion = $version
+            }
+        }
+        catch {
+            $Errors.Add("package.json is not valid JSON: $RelativePath")
+        }
+    }
+
+    if ($RelativePath -ieq "OpenClawFiles/data/launcher_runtime.json") {
+        try {
+            $json = $Content | ConvertFrom-Json
+            $version = [string]$json.version
+            $packageName = [string]$json.packageName
+            if ([string]::IsNullOrWhiteSpace($version)) {
+                $Errors.Add("launcher_runtime.json version is missing: $RelativePath")
+            }
+            else {
+                $script:LauncherRuntimeVersion = $version
+            }
+            if ([string]::IsNullOrWhiteSpace($packageName)) {
+                $Errors.Add("launcher_runtime.json packageName is missing: $RelativePath")
+            }
+            else {
+                $script:LauncherRuntimePackageName = $packageName
+            }
+        }
+        catch {
+            $Errors.Add("launcher_runtime.json is not valid JSON: $RelativePath")
         }
     }
 }
@@ -422,6 +482,34 @@ if ($brandProfileEntry.Count -gt 0) {
         if (-not (Test-RequiredPath -AllPaths $payloadPaths -RequiredPath $requiredTheme)) {
             $errors.Add("Brand profile theme missing: $requiredTheme")
         }
+    }
+}
+
+if ($null -ne $script:PackageJsonVersion -and $null -ne $script:LauncherRuntimeVersion) {
+    if ($script:PackageJsonVersion -ne $script:LauncherRuntimeVersion) {
+        $errors.Add("Package version mismatch: package.json=$($script:PackageJsonVersion), launcher_runtime.json=$($script:LauncherRuntimeVersion)")
+    }
+}
+
+if ($null -ne $script:PackageJsonVersion -and $null -ne $script:RuntimeContextLauncherVersion) {
+    if ($script:PackageJsonVersion -ne $script:RuntimeContextLauncherVersion) {
+        $errors.Add("Runtime context launcher version mismatch: package.json=$($script:PackageJsonVersion), runtime-context.json=$($script:RuntimeContextLauncherVersion)")
+    }
+}
+
+if ($null -ne $script:LauncherRuntimePackageName) {
+    $packageName = [System.IO.Path]::GetFileNameWithoutExtension($item.Name)
+    if ($script:LauncherRuntimePackageName -ne $packageName) {
+        $errors.Add("launcher_runtime.json packageName mismatch: launcher_runtime.json=$($script:LauncherRuntimePackageName), archive=$packageName")
+    }
+    if ($packageName -match '^OpenClaw-Portable-v(?<version>\d+(?:\.\d+){1,3})-') {
+        $packageNameVersion = [string]$Matches.version
+        if ($script:PackageJsonVersion -and $packageNameVersion -ne $script:PackageJsonVersion) {
+            $errors.Add("Package name version mismatch: packageName=$packageName, package.json=$($script:PackageJsonVersion)")
+        }
+    }
+    else {
+        $errors.Add("Portable package name must encode version: $packageName")
     }
 }
 

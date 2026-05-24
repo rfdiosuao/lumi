@@ -13,7 +13,16 @@ def register_license_routes(app, ctx) -> None:
         if error := ctx.auth_error(request):
             return error
         license_data = ctx.get_license_mgr().current_license()
-        return ctx.fastapi_json({"license": license_data})
+        gateway_profile = ctx.get_license_mgr().current_gateway_profile()
+        try:
+            member = ctx.get_member_mgr().current()
+        except Exception:
+            member = None
+        return ctx.fastapi_json({
+            "license": license_data,
+            "gatewayProfile": gateway_profile,
+            "member": member,
+        })
 
     @app.post("/api/license/authorized")
     async def license_authorized(request: Request):

@@ -32,6 +32,8 @@ class OpenClawProcessService:
         self._last_start_command: list[str] = []
         self.startup_state = "idle"
         self.startup_started_at: float | None = None
+        self._startup_started_perf: float | None = None
+        self._startup_timeline: list[dict] = []
         self.startup_error = ""
         self.startup_timeout_sec = int(os.environ.get("OPENCLAW_STARTUP_TIMEOUT_SEC", "420") or "420")
         self._startup_lock = threading.Lock()
@@ -93,6 +95,8 @@ class OpenClawProcessService:
             "startupElapsedSec": elapsed,
             "startupTimeoutSec": self.startup_timeout_sec,
             "startupError": self.startup_error,
+            "startupStage": self._startup_timeline[-1]["stage"] if self._startup_timeline else None,
+            "startupDurationMs": int((time.perf_counter() - self._startup_started_perf) * 1000) if self._startup_started_perf else None,
             "pid": self.process.pid if process_alive else None,
             "portReady": bool(port_ready),
         }
@@ -102,6 +106,8 @@ class OpenClawProcessService:
             raise RuntimeError("服务已在运行中")
         self.startup_state = "starting"
         self.startup_started_at = time.time()
+        self._startup_started_perf = time.perf_counter()
+        self._startup_timeline = []
         self.startup_error = ""
         node_exe = self.paths.node_exe
         if not os.path.exists(node_exe):
@@ -110,7 +116,8 @@ class OpenClawProcessService:
         if not os.path.exists(start_js):
             raise FileNotFoundError(f"找不到启动脚本：\n{start_js}")
 
-        storage_check = self._storage_health_check(write_test=True)
+        self._mark_startup_stage("preflight", "检查运行环境和启动脚本")
+        storage_check = self._storage_health_check(write_test=self._startup_storage_write_test_enabled())
         if storage_check["status"] == "fail":
             raise RuntimeError(
                 "运行磁盘/U盘检测失败："
@@ -122,13 +129,16 @@ class OpenClawProcessService:
                 "[OpenClaw] Storage warning: "
                 f"{storage_check['message']} | {storage_check.get('detail', '')}\n"
             )
+        self._mark_startup_stage("storage_check", storage_check["message"])
 
-        killed = self._stop_registered_gateway()
-        killed += self._kill_clawpanel_processes()
-        killed += self._kill_openclaw_gateway_processes()
-        killed += self._kill_port_processes(APP_PORT)
+        killed = self._kill_port_processes(APP_PORT)
+        if self._startup_deep_clean_enabled():
+            killed += self._stop_registered_gateway()
+            killed += self._kill_clawpanel_processes()
+            killed += self._kill_openclaw_gateway_processes()
         if killed:
             self.append_log(f"[OpenClaw] Cleared {killed} stale gateway/listener process(es).\n")
+        self._mark_startup_stage("cleanup", f"killed={killed}")
 
         config_changed, config_backup = self._ensure_openclaw_config()
         if config_changed:
@@ -136,9 +146,12 @@ class OpenClawProcessService:
                 self.append_log(f"[OpenClaw] Rebuilt invalid openclaw.json, backup: {config_backup}\n")
             else:
                 self.append_log("[OpenClaw] Rebuilt or normalized openclaw.json.\n")
+        self._mark_startup_stage("config", "openclaw.json ready" if not config_changed else "openclaw.json repaired")
 
         self._ensure_openclaw_workspace()
+        self._mark_startup_stage("workspace", "portable workspace ready")
         self._write_runtime_context()
+        self._mark_startup_stage("runtime_context", "runtime-context.json written")
 
         env = self.paths.process_env()
         command = [node_exe, start_js]
@@ -161,10 +174,12 @@ class OpenClawProcessService:
         )
         self.running = True
         self.append_log(f"[OpenClaw] PID: {self.process.pid}\n")
+        self._mark_startup_stage("spawn", f"pid={self.process.pid}")
         threading.Thread(target=self._read_output, args=(self.process, on_exit), daemon=True).start()
         try:
             self._wait_until_ready(APP_PORT, timeout=float(self.startup_timeout_sec))
             self.append_log(f"[OpenClaw] Ready: http://127.0.0.1:{APP_PORT}\n")
+            self._mark_startup_stage("ready", f"port={APP_PORT}")
             self.startup_state = "running"
             self.startup_error = ""
             self._write_startup_snapshot(
@@ -312,10 +327,23 @@ class OpenClawProcessService:
             "repairable": False,
         })
 
+        status = self.status()
+        snapshot = self._read_startup_snapshot()
+        startup_duration_ms = snapshot.get("startupDurationMs") if isinstance(snapshot, dict) else None
+        startup_timeline = snapshot.get("startupTimeline") if isinstance(snapshot, dict) and isinstance(snapshot.get("startupTimeline"), list) else []
+        startup_stage = startup_timeline[-1].get("stage") if startup_timeline and isinstance(startup_timeline[-1], dict) else None
+
         return {
             "basePath": self.paths.base_path,
-            "serviceRunning": self.status().get("running", False),
+            "serviceRunning": status.get("running", False),
             "servicePid": self.process.pid if self.process and self.process.poll() is None else None,
+            "startupState": status.get("startupState"),
+            "startupElapsedSec": status.get("startupElapsedSec"),
+            "startupTimeoutSec": status.get("startupTimeoutSec"),
+            "startupError": status.get("startupError"),
+            "startupDurationMs": startup_duration_ms if isinstance(startup_duration_ms, int) else None,
+            "startupStage": startup_stage,
+            "startupSnapshotPath": self._startup_snapshot_path(),
             "checks": checks,
         }
 
@@ -570,6 +598,7 @@ class OpenClawProcessService:
         image_config = self._read_json_if_exists(self.paths.image_config)
         video_config = self._read_json_if_exists(self.paths.video_config)
         member_license = self._read_json_if_exists(self.paths.license_file)
+        member_session = self._read_json_if_exists(self.paths.member_session_file)
         member_gateway_configured = False
         member_gateway_base = ""
         member_gateway_token = ""
@@ -577,21 +606,64 @@ class OpenClawProcessService:
         member_gateway_default_model = ""
         member_gateway_image_model = ""
         member_gateway_video_model = ""
-        if isinstance(member_license, dict):
-            member_gateway_base = str(member_license.get("gatewayBaseUrl") or member_license.get("gatewayUrl") or "").strip()
-            member_gateway_token = str(member_license.get("gatewayAccessToken") or member_license.get("gatewayToken") or "").strip()
-            raw_models = member_license.get("gatewayModels") if isinstance(member_license.get("gatewayModels"), list) else member_license.get("models")
-            if isinstance(raw_models, list):
-                for item in raw_models:
-                    model_id = item.get("id") if isinstance(item, dict) else item
-                    if isinstance(model_id, str):
-                        clean = model_id.strip()
-                        if clean and clean not in member_gateway_models:
-                            member_gateway_models.append(clean)
-            member_gateway_default_model = str(member_license.get("gatewayDefaultModel") or member_license.get("defaultModel") or "").strip()
-            member_gateway_image_model = str(member_license.get("gatewayImageModel") or member_license.get("imageModel") or "").strip()
-            member_gateway_video_model = str(member_license.get("gatewayVideoModel") or member_license.get("videoModel") or "").strip()
+        for gateway_source in (member_license, member_session):
+            if not isinstance(gateway_source, dict):
+                continue
+            gateway = gateway_source.get("gateway") if isinstance(gateway_source.get("gateway"), dict) else {}
+            member_gateway_base = str(
+                gateway_source.get("gatewayBaseUrl")
+                or gateway_source.get("gatewayUrl")
+                or gateway_source.get("baseUrl")
+                or gateway.get("baseUrl")
+                or gateway.get("url")
+                or ""
+            ).strip()
+            member_gateway_token = str(
+                gateway_source.get("gatewayAccessToken")
+                or gateway_source.get("gatewayToken")
+                or gateway_source.get("memberToken")
+                or gateway_source.get("apiKey")
+                or gateway.get("apiKey")
+                or gateway.get("token")
+                or ""
+            ).strip()
+            raw_models = (
+                gateway_source.get("gatewayModels")
+                if isinstance(gateway_source.get("gatewayModels"), list)
+                else gateway_source.get("models")
+            )
+            if not isinstance(raw_models, list):
+                raw_models = gateway.get("models") if isinstance(gateway.get("models"), list) else []
+            member_gateway_models = []
+            for item in raw_models:
+                model_id = item.get("id") if isinstance(item, dict) else item
+                if isinstance(model_id, str):
+                    clean = model_id.strip()
+                    if clean and clean not in member_gateway_models:
+                        member_gateway_models.append(clean)
+            member_gateway_default_model = str(
+                gateway_source.get("gatewayDefaultModel")
+                or gateway_source.get("defaultModel")
+                or gateway_source.get("model")
+                or gateway.get("defaultModel")
+                or gateway.get("model")
+                or ""
+            ).strip()
+            member_gateway_image_model = str(
+                gateway_source.get("gatewayImageModel")
+                or gateway_source.get("imageModel")
+                or gateway.get("imageModel")
+                or ""
+            ).strip()
+            member_gateway_video_model = str(
+                gateway_source.get("gatewayVideoModel")
+                or gateway_source.get("videoModel")
+                or gateway.get("videoModel")
+                or ""
+            ).strip()
             member_gateway_configured = bool(member_gateway_base and member_gateway_token)
+            if member_gateway_configured:
+                break
         phone_store = self._read_json_if_exists(os.path.join(self.paths.launcher_dir, "phone-agents.json"))
         phone_config = self._read_json_if_exists(os.path.join(self.paths.launcher_dir, "phone-agent.json"))
         desktop_config = self._read_json_if_exists(os.path.join(self.paths.launcher_dir, "desktop-agent.json"))
@@ -830,7 +902,24 @@ class OpenClawProcessService:
         if len(self._output_tail) > 120:
             self._output_tail = self._output_tail[-120:]
 
+    def _mark_startup_stage(self, stage: str, detail: str = "") -> None:
+        if self._startup_started_perf is None:
+            return
+        elapsed_ms = int((time.perf_counter() - self._startup_started_perf) * 1000)
+        entry = {
+            "stage": stage,
+            "elapsedMs": elapsed_ms,
+        }
+        if detail:
+            entry["detail"] = detail
+        self._startup_timeline.append(entry)
+        if len(self._startup_timeline) > 24:
+            self._startup_timeline = self._startup_timeline[-24:]
+        detail_text = f" {detail}" if detail else ""
+        self.append_log(f"[OpenClaw] startup stage={stage} elapsed={elapsed_ms}ms{detail_text}\n")
+
     def _write_startup_snapshot(self, status: str, error: str, exit_code: int | None, port_ready: bool) -> None:
+        elapsed_ms = int((time.perf_counter() - self._startup_started_perf) * 1000) if self._startup_started_perf else None
         snapshot = {
             "schema": "openclaw.launcher.core-startup-snapshot.v1",
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -844,6 +933,8 @@ class OpenClawProcessService:
             "portReady": port_ready,
             "node": self.paths.node_exe,
             "startJs": self.paths.find_file("start.js", ("back", "backup", "")),
+            "startupDurationMs": elapsed_ms,
+            "startupTimeline": self._startup_timeline[-16:],
             "outputTail": self._output_tail[-80:],
         }
         try:
@@ -861,22 +952,26 @@ class OpenClawProcessService:
         port_ready = self._is_port_listening(APP_PORT)
         snapshot = self._read_startup_snapshot()
         if running and port_ready:
+            duration_ms = snapshot.get("startupDurationMs")
+            duration_text = f"；startup={duration_ms}ms" if isinstance(duration_ms, int) else ""
             return {
                 "id": "core_service_snapshot",
                 "label": "OpenClaw 核心服务状态",
                 "status": "ok",
-                "message": f"核心服务正在运行，端口 {APP_PORT} 可访问",
+                "message": f"核心服务正在运行，端口 {APP_PORT} 可访问{duration_text}",
                 "detail": f"pid={self.process.pid if self.process else '-'}；snapshot={self._startup_snapshot_path()}",
                 "repairable": False,
             }
 
         if running and self.startup_state == "starting":
             elapsed = int(time.time() - self.startup_started_at) if self.startup_started_at else 0
+            timeline = snapshot.get("startupTimeline") if isinstance(snapshot.get("startupTimeline"), list) else []
+            last_stage = timeline[-1].get("stage") if timeline and isinstance(timeline[-1], dict) else "starting"
             return {
                 "id": "core_service_snapshot",
                 "label": "OpenClaw 核心服务状态",
                 "status": "warn",
-                "message": f"核心服务仍在启动中，已等待 {elapsed}s，端口 {APP_PORT} 尚未就绪",
+                "message": f"核心服务仍在启动中，已等待 {elapsed}s，当前阶段：{last_stage}，端口 {APP_PORT} 尚未就绪",
                 "detail": (
                     f"pid={self.process.pid if self.process else '-'}；"
                     f"timeout={self.startup_timeout_sec}s；"
@@ -888,11 +983,14 @@ class OpenClawProcessService:
         if snapshot.get("status") == "fail":
             output_tail = snapshot.get("outputTail") if isinstance(snapshot.get("outputTail"), list) else []
             output_text = "\n".join(str(line) for line in output_tail[-12:])
+            duration_ms = snapshot.get("startupDurationMs")
+            duration_text = f"startup={duration_ms}ms；" if isinstance(duration_ms, int) else ""
             detail = (
                 f"error={snapshot.get('error') or '-'}；"
                 f"exitCode={snapshot.get('exitCode')}; "
                 f"pid={snapshot.get('pid')}; "
                 f"portReady={snapshot.get('portReady')}; "
+                f"{duration_text}"
                 f"command={' '.join(str(item) for item in snapshot.get('command', []))}; "
                 f"snapshot={self._startup_snapshot_path()}"
             )
@@ -1426,6 +1524,16 @@ class OpenClawProcessService:
         if drive:
             return f"{drive}\\"
         return absolute
+
+    @staticmethod
+    def _env_truthy(name: str) -> bool:
+        return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _startup_deep_clean_enabled(self) -> bool:
+        return self._env_truthy("OPENCLAW_STARTUP_DEEP_CLEAN")
+
+    def _startup_storage_write_test_enabled(self) -> bool:
+        return self._env_truthy("OPENCLAW_STARTUP_STORAGE_WRITE_TEST")
 
     @staticmethod
     def _drive_type_label(root: str) -> str:

@@ -16,7 +16,7 @@ OpenClaw is the commander. APKClaw is the Android-side executor and phone-local 
 - When multiple APKClaw devices are configured, list them with `npm run phone:fleet -- list`. Use `--device-id <id>` for single-device helpers, or `npm run phone:fleet -- run --target <id|id,id|all> --prompt "..." --mode observe|safe|full` for batch dispatch.
 - For image-to-image or reference-image editing, use `npm run phone:image:edit -- --reference-image <path> --prompt "<edit instruction>"`; do not report that this CLI is unavailable when image generation is configured.
 - When `phone.tokenAvailable=true`, do not ask the user for the token. If a helper still reports missing token, ask the user to save/test the Phone Control config once.
-- APKClaw Agent tasks have a hard 60-round budget. Split long tasks into stages and ask APKClaw to return bounded partial results instead of looping indefinitely.
+- APKClaw Agent tasks have a hard 60-round budget. The launcher wrapper sends `max_rounds=60` by default. Split long tasks into stages and ask APKClaw to return bounded partial results instead of looping indefinitely.
 
 Default phone work should flow like this:
 

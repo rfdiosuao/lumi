@@ -1,6 +1,6 @@
 # OpenClaw Launcher 文档索引
 
-> 更新日期：2026-05-13  
+> 更新日期：2026-05-24
 > 用途：作为启动器、APKClaw、交付、发布和技术债文档的唯一入口。旧的 handoff 和历史测试记录可以保留，但不要再作为当前事实源。
 
 ## 当前必读
@@ -35,6 +35,7 @@
 | 文档 | 用途 |
 | --- | --- |
 | `OPENCLAW_PORTABLE_WORKSPACE.md` | 便携包内 OpenClaw 工作区、skills、runtime context 说明 |
+| `OPENCLAW_MEMORY_RECOVERY.md` | OpenClaw 丢失上下文后的恢复提示与回链规则 |
 | `BRIDGE_MIGRATION_GUARD.md` | Bridge/FastAPI 迁移保护和 smoke 检查 |
 | `RUNTIME_PATHS.md` | Windows/Mac runtime 路径规则 |
 | `MODULE_BOUNDARIES.md` | 模块职责边界 |
@@ -58,12 +59,34 @@
 | `GITEE_SETUP.md` | Gitee 同步和发布说明 |
 | `2026-05-10更新日志.md` | 2026-05-10 中文更新日志 |
 | `2026-05-11更新日志.md` | 2026-05-11 中文更新日志 |
+| `2026-05-23-v2.0.6-更新日志.md` | 2026-05-23 v2.0.6 更新日志 |
+
+## 授权后台
+
+| 文档 | 用途 |
+| --- | --- |
+| `LICENSE_SERVER_SAAS_ADMIN_GUIDE.md` | 授权后台月卡、套餐、网关、批量编辑的保姆级操作手册 |
+| `LICENSE_SERVER_PRODUCTION_DEBT.md` | 授权后台生产级技术债台账 |
+| `LICENSE_ADMIN_SITE_AUDIT_2026-05-21.md` | 线上授权后台站点问题记录和后续修复建议 |
 
 ## 桌面 Agent / SightFlow
 
 | 文档 | 状态 |
 | --- | --- |
-| `SIGHTFLOW_DESKTOP_AGENT_INTEGRATION.md` | 本地已有设计和实验，暂不进入本批 GitHub 推送范围 |
+| `LUMINODE_DESKTOP_AGENT_INTEGRATION.md` | 本地已有设计和实验，暂不进入本批 GitHub 推送范围 |
+
+## 历史 / 待归档
+
+这些文件仅作为历史记录，不作为当前事实源。后续清理时优先保留有验收价值的记录，删除备份和重复稿。
+
+| 文档 | 状态 |
+| --- | --- |
+| `DOCS_INDEX.md.bak-20260523173905` | 备份文件，待删除或移出仓库 |
+| `openclaw能力恢复文档.md` | 与 `OPENCLAW_MEMORY_RECOVERY.md` 重复，待合并 |
+| `APKCLAW_LUMI_INTEGRATION_HANDOFF.md` | 长历史流水账，仅用于追溯版本演进 |
+| `2026-05-10更新日志.md` | 历史更新日志 |
+| `2026-05-11更新日志.md` | 历史更新日志 |
+| `CYBER_DIARY_2026-05-11.md` | 历史记录，当前交付不依赖 |
 
 ## 文档维护规则
 

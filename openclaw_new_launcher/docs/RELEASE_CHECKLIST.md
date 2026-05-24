@@ -40,13 +40,35 @@ powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\build-porta
   - `data/install_id.txt`
   - `*.zip`
 
-## 二、打包后
+## 二、变更规则
+
+- 每次改 APKClaw / Phone Agent / OpenClaw workspace 接口时，必须同步更新：
+  - `docs/PHONE_CONNECTOR_API_CONTRACT.md`
+  - `scripts/verify-phone-agent.ps1`
+  - `scripts/verify-portable-smoke.ps1`
+- 每次改发包流程、包内目录、运行时依赖或 Release 附件时，必须同步更新：
+  - `scripts/build-portable.ps1`
+  - `scripts/verify-release.ps1`
+  - `scripts/verify-portable-smoke.ps1`
+  - `docs/RELEASE_CHECKLIST.md`
+
+## 三、打包后
 
 - 对离线包执行交付校验：
 
 ```powershell
 $zip = Get-ChildItem D:\Axiangmu\AUSTART\release\OpenClaw-Portable-v*.zip | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\verify-release.ps1 -Path $zip.FullName
+```
+
+- 对解压后的离线目录执行 smoke 验收，确认内置 Python、Node CLI、runtime-context 硬约束可用：
+
+```powershell
+$zip = Get-ChildItem D:\Axiangmu\AUSTART\release\OpenClaw-Portable-v*.zip | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$extract = Join-Path $env:TEMP ("openclaw-smoke-" + [System.IO.Path]::GetFileNameWithoutExtension($zip.Name))
+if (Test-Path $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extract -Force
+powershell -ExecutionPolicy Bypass -File D:\Axiangmu\AUSTART\scripts\verify-portable-smoke.ps1 -Path $extract
 ```
 
 - 生成 SHA256，作为交付记录：
@@ -67,7 +89,7 @@ Get-FileHash -Algorithm SHA256 $zip.FullName
   - `data/brand_profile.json`
   - `data/themes/<brand_profile.themeId>/theme.json`
 
-## 三、手动验收
+## 四、手动验收
 
 - 在一个全新目录解压离线包，不依赖源码目录启动。
 - 启动后进入授权页，未授权时应阻止启动 OpenClaw 服务。
@@ -78,7 +100,7 @@ Get-FileHash -Algorithm SHA256 $zip.FullName
 - AI 生图、AI 视频页面能读取配置并开始任务。
 - 核对应用内品牌、窗口标题、Logo 是否符合本次 `BrandProfile`。
 
-## 四、交付记录
+## 五、交付记录
 
 每次交付至少记录：
 

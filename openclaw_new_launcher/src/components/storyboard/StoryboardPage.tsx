@@ -389,7 +389,7 @@ export const StoryboardPage: React.FC = () => {
       const memberGateway = await readMemberGatewayDefaults();
       if (memberGateway.hasGateway) {
         baseUrl = memberGateway.baseUrl;
-        apiKey = memberGateway.apiKey;
+        apiKey = memberGateway.imageApiKey || memberGateway.apiKey;
       }
     }
 
@@ -466,7 +466,7 @@ export const StoryboardPage: React.FC = () => {
     }
 
     const memberGateway = await readMemberGatewayDefaults();
-    const cleanApiKey = videoApiKey.trim() || memberGateway.apiKey;
+    const cleanApiKey = videoApiKey.trim() || memberGateway.videoApiKey || memberGateway.apiKey;
     const cleanApiBase = videoApiBase.trim() || memberGateway.baseUrl;
     const cleanModel = videoModel.trim() || memberGateway.videoModel || memberGateway.defaultModel;
     if (!cleanApiKey) {

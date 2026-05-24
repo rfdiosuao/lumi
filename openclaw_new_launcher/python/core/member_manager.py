@@ -191,6 +191,26 @@ class MemberManager:
                 member.get("gatewayVideoModel") if isinstance(member, dict) else "",
                 gateway.get("videoModel") if isinstance(gateway, dict) else "",
             ) or None,
+            "gatewayImageAccessToken": self._pick_text(
+                data.get("gatewayImageAccessToken"),
+                data.get("gatewayImageToken"),
+                license_data.get("gatewayImageAccessToken") if isinstance(license_data, dict) else "",
+                license_data.get("gatewayImageToken") if isinstance(license_data, dict) else "",
+                member.get("gatewayImageAccessToken") if isinstance(member, dict) else "",
+                member.get("gatewayImageToken") if isinstance(member, dict) else "",
+                gateway.get("imageAccessToken") if isinstance(gateway, dict) else "",
+                gateway.get("imageToken") if isinstance(gateway, dict) else "",
+            ) or None,
+            "gatewayVideoAccessToken": self._pick_text(
+                data.get("gatewayVideoAccessToken"),
+                data.get("gatewayVideoToken"),
+                license_data.get("gatewayVideoAccessToken") if isinstance(license_data, dict) else "",
+                license_data.get("gatewayVideoToken") if isinstance(license_data, dict) else "",
+                member.get("gatewayVideoAccessToken") if isinstance(member, dict) else "",
+                member.get("gatewayVideoToken") if isinstance(member, dict) else "",
+                gateway.get("videoAccessToken") if isinstance(gateway, dict) else "",
+                gateway.get("videoToken") if isinstance(gateway, dict) else "",
+            ) or None,
             "gatewayModels": (
                 license_data.get("gatewayModels")
                 if isinstance(license_data, dict) and isinstance(license_data.get("gatewayModels"), list)
@@ -269,6 +289,12 @@ class MemberManager:
         token = self._pick_text(provider.get("memberToken"), provider.get("apiKey"), provider.get("token"))
         if not gateway_base and not token:
             return None
+        gateway_default_model = self._pick_text(provider.get("gatewayDefaultModel"), provider.get("defaultModel"), provider.get("model"))
+        gateway_image_model = self._pick_text(provider.get("gatewayImageModel"), provider.get("imageModel"), provider.get("image_model"))
+        gateway_video_model = self._pick_text(provider.get("gatewayVideoModel"), provider.get("videoModel"), provider.get("video_model"))
+        gateway_models = provider.get("gatewayModels") if isinstance(provider.get("gatewayModels"), list) else provider.get("models")
+        if not isinstance(gateway_models, list):
+            gateway_models = []
 
         return self._normalize_session(
             {
@@ -280,15 +306,24 @@ class MemberManager:
                 "leaseExpiresAt": provider.get("leaseExpiresAt"),
                 "gatewayBaseUrl": gateway_base,
                 "memberToken": token,
-                "gatewayImageModel": self._pick_text(provider.get("gatewayImageModel"), provider.get("imageModel"), provider.get("image_model")),
-                "gatewayVideoModel": self._pick_text(provider.get("gatewayVideoModel"), provider.get("videoModel"), provider.get("video_model")),
+                "gatewayImageAccessToken": self._pick_text(provider.get("gatewayImageAccessToken"), provider.get("gatewayImageToken")),
+                "gatewayVideoAccessToken": self._pick_text(provider.get("gatewayVideoAccessToken"), provider.get("gatewayVideoToken")),
+                "gatewayDefaultModel": gateway_default_model,
+                "gatewayImageModel": gateway_image_model,
+                "gatewayVideoModel": gateway_video_model,
+                "gatewayModels": gateway_models,
                 "features": provider.get("features") or [],
                 "usage": provider.get("usage") or {},
                 "lease": provider.get("lease") if isinstance(provider.get("lease"), dict) else {},
                 "gateway": {
                     "baseUrl": gateway_base,
-                    "imageModel": self._pick_text(provider.get("gatewayImageModel"), provider.get("imageModel"), provider.get("image_model")),
-                    "videoModel": self._pick_text(provider.get("gatewayVideoModel"), provider.get("videoModel"), provider.get("video_model")),
+                    "accessToken": token,
+                    "imageAccessToken": self._pick_text(provider.get("gatewayImageAccessToken"), provider.get("gatewayImageToken"), token),
+                    "videoAccessToken": self._pick_text(provider.get("gatewayVideoAccessToken"), provider.get("gatewayVideoToken"), token),
+                    "defaultModel": gateway_default_model,
+                    "imageModel": gateway_image_model,
+                    "videoModel": gateway_video_model,
+                    "models": gateway_models,
                 },
                 "source": "profiles",
             }

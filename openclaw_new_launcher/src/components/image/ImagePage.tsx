@@ -48,7 +48,7 @@ export const ImagePage: React.FC = () => {
       if (storedMode === 'member') {
         setGatewayMode('member');
         setBaseUrl(memberGateway.baseUrl || storedBaseUrl);
-        setApiKey(memberGateway.apiKey || storedApiKey);
+        setApiKey(memberGateway.imageApiKey || memberGateway.apiKey || storedApiKey);
         return;
       }
 
@@ -69,7 +69,7 @@ export const ImagePage: React.FC = () => {
       if (memberGateway.hasGateway) {
         setGatewayMode('member');
         setBaseUrl(memberGateway.baseUrl);
-        setApiKey(memberGateway.apiKey);
+        setApiKey(memberGateway.imageApiKey || memberGateway.apiKey);
       }
     } catch {
       if (storedBaseUrl || storedApiKey) {
@@ -103,7 +103,7 @@ export const ImagePage: React.FC = () => {
       const memberGateway = await readMemberGatewayDefaults();
       if (memberGateway.hasGateway) {
         setBaseUrl(memberGateway.baseUrl);
-        setApiKey(memberGateway.apiKey);
+        setApiKey(memberGateway.imageApiKey || memberGateway.apiKey);
       }
     } catch {
       // keep current manual values if the license lookup fails

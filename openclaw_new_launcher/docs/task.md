@@ -1,6 +1,6 @@
 # OpenClaw Launcher 当前任务清单
 
-> 更新日期：2026-05-21
+> 更新日期：2026-05-24
 > 当前分支重点：手机端硬约束、离线包发包稳定性、文档收口。  
 > 桌面客服 / SightFlow 相关工作本地保留，暂不纳入当前 GitHub 推送批次。
 
@@ -12,6 +12,7 @@
 - 手机端 runtime context：不暴露手机 IP、端口、token 和底层 `/api/lumi/*` 任务端点
 - 发包校验：`verify-release.ps1` 已强制检查 phone wrapper、workspace、runtime context、APK 附件和敏感配置
 - 新增离线包 smoke：`scripts/verify-portable-smoke.ps1`
+- 版本一致性：`build-portable.ps1` 与 `verify-release.ps1` 已自动检查 package / Tauri / 包名版本一致，以及 `AgentPhone_latest.apk` 与版本化 APK 的 hash 一致性
 
 ## P0 交付稳定性
 
@@ -24,15 +25,17 @@
 - [x] `verify-portable-smoke.ps1` 检查 Python 依赖 `fastapi/uvicorn`
 - [x] `verify-portable-smoke.ps1` 检查 Node CLI 脚本语法
 - [x] `build-portable.ps1` 接入 smoke 验收
-- [ ] 下一次正式 zip 打包后跑完整目录 + zip 双验收
+- [x] 下一次正式 zip 打包后跑完整目录 + zip 双验收
 
 ### 2. 低配一体机启动稳定性
 
 - [x] 启动超时放宽，低配机器启动慢时保留进程继续等待
 - [x] 启动失败快照写入 `data/logs/openclaw-startup-snapshot.json`
 - [x] Bridge 服务日志落盘到 `data/logs/bridge-service.log`
-- [ ] 继续减少启动首屏阻塞检查
-- [ ] 将非关键检查懒加载到环境诊断页
+- [x] 继续减少启动首屏阻塞检查
+- [x] 将非关键检查懒加载到环境诊断页
+- [x] 启动阶段耗时时间线写入启动快照和诊断页
+- [x] 环境诊断显示最近一次启动耗时、当前阶段和快照路径
 - [ ] 在 500 元级一体机上做真实冷启动计时
 
 ### 3. 环境诊断闭环
@@ -53,15 +56,15 @@
 - [x] `AGENTS.md` 写入硬规则：不得硬编码、推断、打印、请求手机 IP/端口/token
 - [x] `runtime-context.json` 改为 `endpoint: launcher-cli-wrapper`
 - [x] 打包脚本写入 wrapper-only runtime context
-- [ ] 给 `phone:agent` 增加任务历史落盘
-- [ ] 给 `phone:agent` 增加失败分类：离线、未授权、无障碍关闭、任务超时、APKClaw 崩溃
+- [x] 给 `phone:agent` 增加任务历史落盘
+- [x] 给 `phone:agent` 增加失败分类：离线、未授权、无障碍关闭、任务超时、APKClaw 崩溃、任务占用
 
 ### 5. APKClaw 稳定性
 
-- [ ] APKClaw 端增加崩溃日志导出
-- [ ] APKClaw 端 Agent worker 异常兜底，避免 HTTP 服务一起挂掉
-- [ ] 任务超过 60 轮时返回部分结果和 follow-up 建议
-- [ ] 针对购物/搜索类任务固化 `collect_list_items target=product`
+- [x] APKClaw 端增加崩溃日志导出
+- [x] APKClaw 端 Agent worker 异常兜底，避免 HTTP 服务一起挂掉
+- [x] 任务超过 60 轮时返回部分结果和 follow-up 建议
+- [x] 针对购物/搜索类任务固化 `collect_list_items target=product`
 
 ### 6. 手机演示场景
 
@@ -78,15 +81,15 @@
 - [x] 提交 `26f52ab Add portable package smoke verification`
 - [x] Release notes 默认中文
 - [ ] 正式 tag release 跑一次完整 GitHub Actions
-- [ ] Release 附件确认包含 portable zip、sha256、安装器
-- [ ] Release 页面展示中文更新摘要和校验值
+- [x] Release 附件确认包含 portable zip、sha256、安装器
+- [x] Release 页面展示中文更新摘要和校验值
 
 ### 8. 版本号一致性
 
 - [x] 启动器基线统一到 `2.0.6`
 - [x] `package.json` / `package-lock.json` 已同步
-- [ ] 每次发包前自动检查 Tauri 版本、package 版本、包名版本一致
-- [ ] APKClaw latest 与版本化 APK 文件 hash 一致性自动检查
+- [x] 每次发包前自动检查 Tauri 版本、package 版本、包名版本一致
+- [x] APKClaw latest 与版本化 APK 文件 hash 一致性自动检查
 
 ## P1 文档债
 
@@ -94,16 +97,16 @@
 
 - [x] 重写 `DOCS_INDEX.md` 为当前文档入口
 - [x] 重写 `task.md` 为当前可执行任务清单
-- [ ] 清理或标记乱码历史文档
-- [ ] 把 `TECH_DEBT_LAUNCHER_AND_APKCLAW.md` 改成精简债务台账
-- [ ] 更新 `RELEASE_CHECKLIST.md`，加入 `verify-portable-smoke.ps1`
-- [ ] 更新 `CUSTOMER_GUIDE.md`，加入 WebView2 和环境诊断说明
+- [x] 清理或标记乱码历史文档
+- [x] 把 `TECH_DEBT_LAUNCHER_AND_APKCLAW.md` 改成精简债务台账
+- [x] 更新 `RELEASE_CHECKLIST.md`，加入 `verify-portable-smoke.ps1`
+- [x] 更新 `CUSTOMER_GUIDE.md`，加入 WebView2 和环境诊断说明
 
 ### 10. 文档规则
 
 - [x] `DOCS_INDEX.md` 明确事实源优先级
-- [ ] 新增“每次改接口必须同步契约 + 验收脚本”的检查项
-- [ ] 新增“每次改发包流程必须同步 release checklist”的检查项
+- [x] 新增“每次改接口必须同步契约 + 验收脚本”的检查项
+- [x] 新增“每次改发包流程必须同步 release checklist”的检查项
 
 ## P2 桌面 Agent / SightFlow
 
@@ -134,7 +137,13 @@
 - [x] 补激活详情和单条设备解绑
 - [x] 修复授权后台左侧导航无响应
 - [x] 修复授权后台移动端顶部按钮溢出
-- [ ] 继续把 `TECH_DEBT_LAUNCHER_AND_APKCLAW.md` 精简成真正的执行台账
+- [x] 继续把 `TECH_DEBT_LAUNCHER_AND_APKCLAW.md` 精简成真正的执行台账
 ## 当前收尾
 - [x] 已把 `gatewayImageModel` 和 `gatewayVideoModel` 接入到网关字段
 - [x] 已把相关界面补齐到统一的模型配置流里
+- [x] 已把会员网关配置读取收口到 `license / gatewayProfile / member`，OpenClaw 启动配置和 runtime-context 使用同一套有效网关画像
+- [x] 已把 `phone:agent -- history` 写入 OpenClaw 工具、能力和记忆恢复文档，避免任务历史能力不可见
+- [x] `phone:agent` 默认发送 `max_rounds=60`，OpenClaw 工作区文档同步说明轮次预算
+- [x] 默认启动路径改成快速清理：跳过 U 盘强制写测、计划任务结束和 PowerShell CIM 残留扫描，相关慢检查保留在环境诊断/一键修复
+- [x] 云端会员网关支持生图 / 视频独立 API Key，客户端生图优先图像 key、视频优先视频 key，留空回退通用 key
+- [x] 客户端会员网关读取改成事实源优先 `gatewayProfile` / 会员会话，避免 license 旧值覆盖最新专用 key

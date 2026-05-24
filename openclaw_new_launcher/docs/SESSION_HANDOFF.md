@@ -1,360 +1,190 @@
-# 新会话对接文档
+# OpenClaw / Lumi 交接文档
+> 更新时间：2026-05-21
+> 作用：给下一位接手者快速定位当前状态、已完成事项、产物路径、已知问题和下一步。
 
-> 更新时间：2026-05-09
-> 目的：给新的 Codex/GPT 会话快速接手当前项目，避免重复踩旧坑。  
-> 注意：本文不包含服务器密码、API Key、授权码等敏感信息。
+## 1. 当前定位
 
-## 1. 当前项目定位
+- 主工作区：`D:\Axiangmu\AUSTART`
+- 主启动器：`D:\Axiangmu\AUSTART\openclaw_new_launcher`
+- 授权服务：`D:\Axiangmu\AUSTART\license_server`
+- 旧的 `openclaw_launcher/` Tkinter 线已废弃，不要再回头做这条线
+- 不要把 `D:\Axiangmu\U盘启动器` 当成主工作区，它只是当前会话的外层目录
 
-这个仓库是 `Lumi / OpenClaw` 便携式桌面启动器项目。
+## 2. 当前已完成
 
-当前主线不是旧版 Tkinter 启动器，而是：
+### 启动器侧
 
-```text
-D:\Axiangmu\AUSTART\openclaw_new_launcher
-```
+- 已继续推进 `OpenClaw / Lumi` 新启动器主线
+- 已打通授权页、会员模式、AI 生图、AI 视频、分镜页、手机控制、桌面控制等主流程
+- 已把授权成功后的展示补成“授权码后八位”
+- 已把生图 / 视频的 `gatewayMode` 兼容成 `member / manual`
+- 已加了会员网关默认值读取逻辑，避免空配置时直接卡死
 
-当前仓库根目录是：
+### 授权服务侧
 
-```text
-D:\Axiangmu\AUSTART
-```
+- 已推进 SaaS 风格授权后台
+- 已支持月卡套餐、网关配置、操作审计、授权编辑等方向
+- 已生成可部署的服务端包
 
-不要把 `D:\Axiangmu\U盘启动器` 当成主工作区，除非用户明确说那是某个测试包路径。
+### 打包产物
 
-核心目标：
+- 启动器包：`D:\Axiangmu\AUSTART\release\OpenClaw-Portable-v2.0.6-2026.05.21-code8.zip`
+- 启动器 SHA256：`D8A125E6B278C83DBD799294D37B169443E33F44927EE7F15B7ECCF1E04820F8`
+- 服务端包：`D:\Axiangmu\AUSTART\release\openclaw-license-server-v2026.05.21.zip`
+- 服务端 SHA256：`A19711E710595DCF08F2AA24822196BC9D5BD92EBD83A100C1966A6B5C61AA7C`
 
-- 封装 OpenClaw 本体和离线依赖，做成客户可直接运行的 Windows 便携包。
-- 支持授权码激活、U盘绑定、AI 生图、AI 视频、广告视频工作台、飞书/微信机器人绑定、Skills。
-- 后续往 Lumi 个人版、多 Agent 工作台、CLI、Skill 平台方向演进。
-
-## 2. 当前仓库结构
-
-```text
-D:\Axiangmu\AUSTART
-├─ openclaw_new_launcher/      # 当前主力启动器：Tauri + React + Python Bridge
-├─ license_server/             # 在线授权服务器
-├─ scripts/                    # 检查、打包、发布脚本
-├─ docs/                       # 项目级文档
-├─ release/                    # 本地构建产物，已被 .gitignore 忽略
-└─ README.md
-```
-
-旧版 `openclaw_launcher/` 已经删除。不要再恢复它，也不要再围绕旧 Tkinter 架构做分析。
-
-## 3. 最近刚完成的清理
-
-已删除：
-
-- `openclaw_launcher/`
-- `launcher.py`
-- `OpenClaw.spec`
-- `OpenClaw-USB.spec`
-- `clean_portable_package.ps1`
-- `DEVELOPMENT.md`
-- `项目二次开发说明.md`
-- `logo_square.ico`
-- `openclaw_new_launcher/api.md`
-- `openclaw_new_launcher/REWRITE_SPEC.md`
-- `openclaw_new_launcher/重构文档.md`
-- 旧的 API / 架构 / Agent 任务文档：
-  - `openclaw_new_launcher/docs/AGENT_TASKS.md`
-  - `openclaw_new_launcher/docs/API_SPEC.md`
-  - `openclaw_new_launcher/docs/api-reference.md`
-  - `openclaw_new_launcher/docs/ARCHITECTURE.md`
-  - `openclaw_new_launcher/docs/ARCHITECTURE_REVIEW_2026-05-05.md`
-  - `openclaw_new_launcher/docs/server_patched.py`
-  - `openclaw_new_launcher/docs/license-server-merchant-patch.py`
-
-已更新：
-
-- `README.md`
-- `README.en.md`
-- `openclaw_new_launcher/docs/DOCS_INDEX.md`
-
-已清理构建缓存：
-
-- `openclaw_new_launcher/dist`
-- `openclaw_new_launcher/src-tauri/target`
-- `openclaw_new_launcher/src-tauri/target2`
-- Python `__pycache__`
-
-## 4. 最近重要修复
-
-### U盘授权一致性
-
-用户说国产模型已经修过“U盘拔插后重新授权”的问题。随后检查发现一个现役一致性问题：
-
-- Python 激活端：已经使用 U盘卷序列号生成 `deviceId`。
-- Rust 启动前校验端：之前还在使用 `盘符 + 卷序列号`。
-
-已修复：
-
-```text
-openclaw_new_launcher/src-tauri/src/license.rs
-```
-
-现在 Rust 使用和 Python 一致的 `volume:{serial}|openclaw-launcher` 逻辑，并保留旧格式兼容。
-
-验证过：
-
-```powershell
-cargo check
-python -m py_compile openclaw_new_launcher\python\core\license_manager.py
-powershell -ExecutionPolicy Bypass -File scripts\verify-source-text.ps1
-powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1 -SkipRust
-```
-
-以上都通过。
-
-注意：还没有重新打包，也没有做真实 U盘拔插验收。后续交付前必须测：
-
-- 同一 U盘激活后拔插，授权仍有效。
-- 同一 U盘换盘符，授权仍有效。
-- 复制到另一块 U盘，不能直接继承授权。
-- 交付包内不包含 `data/license.json` 和 `data/install_id.txt`。
-
-## 5. 2026-05-09 已同步状态
-
-当前主线已收束并推送到 GitHub `master`。本地继续开发前仍要先看 `git status --short`，但上一轮混在一起的 P1 改动已经拆分提交。
-
-最新 GitHub Release:
-
-```text
-https://github.com/rfdiosuao/lumi/releases/tag/v2.0.2-github-2026.05.09
-```
-
-最近关键提交：
-
-1. `238345e chore: sync vite optional runtime deps`
-2. `9f25376 chore: upgrade frontend build dependencies`
-3. `de5f3c9 refactor: retire legacy bridge routing`
-4. `2d9def0 chore: add brand profile release checks`
-5. `17d4149 feat: add launcher storage diagnostics`
-
-已验证：
-
-- 本地完整 `scripts\ci-check.ps1` 通过。
-- 本地 `scripts\smoke-bridge.ps1` 和 `scripts\smoke-bridge.ps1 -RequireFastApi` 通过。
-- GitHub CI run `25601441504` 通过。
-- GitHub Release run `25601531758` 通过，并生成 exe/msi 安装产物。
-
-## 6. 当前有效文档入口
-
-优先看：
-
-```text
-openclaw_new_launcher/docs/DOCS_INDEX.md
-openclaw_new_launcher/docs/BRIDGE_MIGRATION_GUARD.md
-openclaw_new_launcher/docs/RUNTIME_PATHS.md
-openclaw_new_launcher/docs/RELEASE_CHECKLIST.md
-openclaw_new_launcher/docs/UI_CUSTOMIZATION_DESIGN.md
-openclaw_new_launcher/docs/MODULE_EXTENSION_GUIDE.md
-openclaw_new_launcher/docs/MODULE_BOUNDARIES.md
-openclaw_new_launcher/docs/PRODUCT_ROADMAP.md
-openclaw_new_launcher/docs/LUMI_AGENT_PLATFORM_ROADMAP.md
-openclaw_new_launcher/docs/LUMI_PERSONAL_UI_DESIGN.md
-openclaw_new_launcher/docs/广告视频使用文档.md
-```
-
-旧 `API_SPEC.md`、旧 `api-reference.md`、旧 `ARCHITECTURE.md` 已删除，不要再依赖。
-
-## 7. 当前代码主线
+## 3. 当前主代码入口
 
 ### 前端
 
-```text
-openclaw_new_launcher/src/App.tsx
-openclaw_new_launcher/src/features/registry.ts
-openclaw_new_launcher/src/features/pages.tsx
-openclaw_new_launcher/src/components/common/index.tsx
-openclaw_new_launcher/src/components/sidebar/Sidebar.tsx
-openclaw_new_launcher/src/components/terminal/TerminalPage.tsx
-openclaw_new_launcher/src/components/window/WindowTitlebar.tsx
-openclaw_new_launcher/src/components/license/LicensePage.tsx
-openclaw_new_launcher/src/components/image/ImagePage.tsx
-openclaw_new_launcher/src/components/video/VideoPage.tsx
-openclaw_new_launcher/src/components/storyboard/StoryboardPage.tsx
-openclaw_new_launcher/src/components/skills/SkillsPage.tsx
-```
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\App.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\features\registry.ts`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\features\pages.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\license\LicensePage.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\image\ImagePage.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\video\VideoPage.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\storyboard\StoryboardPage.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\dialogs\ApiConfigDialog.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\services\gatewayConfig.ts`
 
-### API 调用
+### Python / Bridge
 
-```text
-openclaw_new_launcher/src/services/api.ts
-openclaw_new_launcher/src/stores/appStore.ts
-openclaw_new_launcher/src/stores/logStore.ts
-```
-
-### Python Bridge
-
-```text
-openclaw_new_launcher/python/bridge.py
-openclaw_new_launcher/python/api/*.py
-openclaw_new_launcher/python/core/*.py
-openclaw_new_launcher/python/services/*.py
-```
-
-FastAPI 已成为主实现，旧 Handler 的完整 API 路由实现已移除。`bridge.py` 现在只保留启动入口、共享上下文和 FastAPI 缺依赖时的 dependency-error 503 服务。
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\bridge.py`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\core\license_manager.py`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\core\paths.py`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\services\image_api.py`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\services\process.py`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\api\fastapi_routes.py`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\api\routes_media.py`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\api\routes_member.py`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\python\api\routes_desktop_agent.py`
 
 ### Rust / Tauri
 
-```text
-openclaw_new_launcher/src-tauri/src/lib.rs
-openclaw_new_launcher/src-tauri/src/license.rs
-openclaw_new_launcher/src-tauri/tauri.conf.json
-```
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src-tauri\src\lib.rs`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src-tauri\src\license.rs`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src-tauri\tauri.conf.json`
 
-Rust 负责：
+### 授权服务
 
-- 启动 Python Bridge。
-- 转发请求。
-- 启动前授权校验。
-- 保护关键接口：启动 OpenClaw、AI 生图、AI 视频。
+- `D:\Axiangmu\AUSTART\license_server\server.py`
+- `D:\Axiangmu\AUSTART\license_server\admin_console.html`
+- `D:\Axiangmu\AUSTART\license_server\deploy_member_update.py`
+- `D:\Axiangmu\AUSTART\license_server\openclaw-license.service`
 
-## 8. 当前真实技术债
+## 4. 当前最要紧的问题
 
-按优先级排序：
+### 4.1 网站 / 启动器里出现大量问号
 
-### P0：交付前必须处理或确认
+这是当前最明显的高优先级问题，不是浏览器渲染问题，源码里已经有大量 `????` 和编码损坏内容。
 
-1. `v2.0.2-github-2026.05.09` 的 exe/msi 需要在真实机器上安装、启动、卸载验收。
-2. U盘授权修复仍需要真实拔插测试。
-3. 客户交付前必须确认不带授权文件、安装 ID、API Key、用户机器人缓存。
-4. 客户版 portable zip 仍需按目标 `BrandProfile` 跑 `verify-release.ps1`。
+已确认的坏点：
 
-### P1：当前架构债
+- `D:\Axiangmu\AUSTART\license_server\admin_console.html`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\features\registry.ts`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\image\ImagePage.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\video\VideoPage.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\dashboard\DashboardPage.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\src\components\dialogs\ApiConfigDialog.tsx`
+- `D:\Axiangmu\AUSTART\openclaw_new_launcher\docs\task.md`
 
-已完成：
+典型现象：
 
-1. Bridge `_meta` 返回契约已落地。
-2. `bridge.py` 旧 Handler API 路由已退场，主路由走 FastAPI native routes。
-3. 品牌 profile 已接入打包脚本和 release 校验。
-4. Vite / npm audit / GitHub Node 22 CI 已收束。
-5. 存储诊断已覆盖运行磁盘/U盘读写和 `openclaw.json` 基础修复。
+- 按钮文案直接显示 `????`
+- 授权后台页面报 `Cannot set properties of null (setting 'innerHTML')`
+- 部分页面 DOM id 也有脏字符，导致脚本找不到元素
 
-仍待处理：
+处理建议：
 
-1. 授权激活仍在 Python，Rust 只负责启动前校验。以后可以把激活也搬到 Rust，或至少统一安全边界。
-2. Feishu / WeChat 插件绑定逻辑偏脚本驱动，需要状态机化。
-3. Skills 有基础功能，但 manifest、版本兼容、签名校验还没产品化。
-4. GitHub Release 已能出 Tauri installer/msi；本地 portable zip 仍需针对客户 profile 做交付验收。
+1. 先统一把相关文件重存为正常 UTF-8
+2. 替换所有占位 `????`
+3. 校正 admin 页 DOM id 和脚本绑定
+4. 再跑一次前端 build 和服务端 smoke
 
-### P2：增强债
+### 4.2 API Key 需要收口到统一设置页
 
-1. 广告视频工作台可以继续 Agent 化，做步骤可观察、结果可复盘。
-2. CLI 还没做，未来可以让电脑上的 Agent 调用启动器能力。
-3. 多 Agent 协作目前是路线规划，还没落地执行框架。
-4. 自动化测试仍偏少，尤其是打包清洁度、授权、机器人绑定、广告视频工作流。
+目前生图、视频、分镜页各自都有 API 配置入口，后续应该合并成一个独立设置页：
 
-## 9. 常用命令
+- 统一管理 `baseUrl / apiKey / model`
+- 统一管理 `member / manual` 模式
+- 预留“激活会员链接”位置，后面再接真实地址
 
-从仓库根目录运行：
+### 4.3 授权后台需要继续 SaaS 化
 
-```powershell
-cd D:\Axiangmu\AUSTART
-```
+当前后台已经有方向，但还不算完整生产级：
 
-轻量 CI：
+- 会员套餐可配置
+- 网关配置可配置
+- 生图模型可配置
+- 视频模型可配置
+- 操作审计要更清楚
+- 文档入口要更直观
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1 -SkipRust
-```
+## 5. 当前已知技术债
 
-完整 CI：
+### P0
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1
-```
+- UI 文案和编码损坏导致的问号
+- 授权后台页面部分模块渲染失败
+- 设置入口分散，API 配置不够集中
 
-只检查源码文本：
+### P1
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\verify-source-text.ps1
-```
+- 授权后台 SaaS 化还没做完
+- 会员套餐、网关、审计、文档还要补齐
+- 桌面控制 / SightFlow 集成还在演进
+- 打包前的自动校验还可以再收紧
 
-清理缓存：
+### P2
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\clean-workspace.ps1
-```
+- 文档里还有历史遗留的乱码和旧说明，需要持续清理
+- 需要把 release / smoke / 验证流程再固化一层
 
-清理 Rust 构建缓存：
+## 6. 当前建议顺序
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\clean-workspace.ps1 -RemoveBuildOutputs
-```
+1. 先修 `????` 和编码损坏
+2. 再把 API Key 和网关配置收口到一个设置页
+3. 再补会员激活链接预留位
+4. 再继续完善授权后台 SaaS 能力
+5. 最后再继续做 GitHub Release 和生产包验证
 
-前端构建：
+## 7. 常用命令
+
+### 启动器
 
 ```powershell
 cd D:\Axiangmu\AUSTART\openclaw_new_launcher
 npm run build
 ```
 
-Rust 检查：
+### Rust 检查
 
 ```powershell
 cd D:\Axiangmu\AUSTART\openclaw_new_launcher\src-tauri
 cargo check
 ```
 
-打包：
+### Python 语法检查
+
+```powershell
+python -m py_compile D:\Axiangmu\AUSTART\license_server\server.py D:\Axiangmu\AUSTART\openclaw_new_launcher\python\core\license_manager.py
+```
+
+### 打包
 
 ```powershell
 cd D:\Axiangmu\AUSTART
-powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -Version 2.0.2 -PackageName OpenClaw-Portable-v2.0.2-YYYY.MM.DD -BrandProfile customer
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -PackageName "OpenClaw-Portable-v2.0.6-2026.05.21-code8"
 ```
 
-## 10. Git 注意事项
-
-仓库根目录是：
-
-```text
-D:\Axiangmu\AUSTART
-```
-
-远端情况之前比较复杂：
-
-- Gitee 是用户主要想用的国内仓库。
-- GitHub 也可能要上传，CI/CD 可以走 GitHub Actions。
-- 本地分支和 Gitee 可能存在历史分叉，不要盲目 rebase/merge。
-
-提交前建议先：
+### 服务端部署
 
 ```powershell
-git status --short
-git diff --stat
+python D:\Axiangmu\AUSTART\license_server\deploy_member_update.py
 ```
 
-不要提交：
+## 8. 交接提醒
 
-- `release/`
-- `node_modules/`
-- `openclaw_new_launcher/dist/`
-- `openclaw_new_launcher/src-tauri/target/`
-- `data/license.json`
-- `data/install_id.txt`
-- API Key、授权码、服务器密码、私钥、数据库。
-
-## 11. 新会话建议第一步
-
-新会话接手后，建议先做这三件事：
-
-1. 读取本文。
-2. 运行：
-
-   ```powershell
-   cd D:\Axiangmu\AUSTART
-   git status --short
-   ```
-
-3. 如果用户要继续开发，先问清楚当前目标是：
-
-   - 打包交付版；
-   - 完成 Lumi 个人 UI 版；
-   - 继续还技术债；
-   - 推送 Gitee/GitHub；
-   - 继续做 Agent / Skills / CLI。
-
-不要一上来就重构授权或主题系统。当前项目已经能跑，Bridge 和品牌 profile 的 P1 已基本收束，下一步优先做 Release 产物验收、真实 U盘测试或剩余 P1 小步推进。
+- 当前工作区是脏的，里面有很多历史实验文件和临时脚本，别无脑清理、别回滚用户改动
+- 不要把 `release/`、`dist/`、`target/`、`license.db`、`private_key.b64` 当成需要提交的内容
+- 后续如果继续做后台和设置页，优先以“可维护、可配置、可部署”为目标，不要再把逻辑拆散到多个页面里

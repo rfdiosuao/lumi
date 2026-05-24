@@ -89,10 +89,11 @@ export default function App() {
         return;
       }
       const licenseResp = await licenseApi.current();
-      const license = licenseResp.license as any;
+      const license = ((licenseResp as any).gatewayProfile || licenseResp.license || (licenseResp as any).member) as any;
+      const gateway = license?.gateway || {};
       setApiConfigured(Boolean(
-        String(license?.gatewayBaseUrl || license?.gatewayUrl || '').trim()
-        && String(license?.gatewayAccessToken || license?.gatewayToken || '').trim(),
+        String(license?.gatewayBaseUrl || license?.gatewayUrl || license?.baseUrl || gateway?.baseUrl || gateway?.url || '').trim()
+        && String(license?.gatewayAccessToken || license?.gatewayToken || license?.apiKey || license?.memberToken || gateway?.apiKey || gateway?.token || '').trim(),
       ));
     } catch {
       setApiConfigured(false);
@@ -163,9 +164,10 @@ export default function App() {
         intervalMs: 1500,
         onProgress: (progress) => {
           const elapsed = progress.startupElapsedSec || 0;
+          const stage = progress.startupStage || 'starting';
           if (elapsed - lastNotice >= 20) {
             lastNotice = elapsed;
-            appendLog(`[启动] 核心服务仍在启动中：${elapsed}s / ${progress.startupTimeoutSec || 420}s，低配机器可能需要更久。\n`);
+            appendLog(`[启动] 核心服务仍在启动中：${elapsed}s / ${progress.startupTimeoutSec || 420}s，当前阶段=${stage}，低配机器可能需要更久。\n`);
           }
         }
       });

@@ -140,7 +140,7 @@ export const VideoPage: React.FC = () => {
           setGatewayMode('member');
           setProviderId('custom');
           setApiBase(memberGateway.baseUrl || storedApiBase);
-          setApiKey(memberGateway.apiKey || storedApiKey);
+          setApiKey(memberGateway.videoApiKey || memberGateway.apiKey || storedApiKey);
           setModel(memberGateway.videoModel || memberGateway.defaultModel || storedModel || getDefaultVideoModel('custom', 't2v'));
           return;
         }
@@ -210,7 +210,7 @@ export const VideoPage: React.FC = () => {
       if (memberGateway.hasGateway) {
         setProviderId('custom');
         setApiBase(memberGateway.baseUrl);
-        setApiKey(memberGateway.apiKey);
+        setApiKey(memberGateway.videoApiKey || memberGateway.apiKey);
         setModel(memberGateway.videoModel || memberGateway.defaultModel || getDefaultVideoModel('custom', mode));
       }
     } catch {
