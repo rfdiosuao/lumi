@@ -8,7 +8,7 @@ import { usePreviewStore } from '../store/appStore';
 export function LicensePage() {
   const settings = usePreviewStore((state) => state.settings);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const [licenseCode, setLicenseCode] = React.useState('OC-PRO-7A2C-11F9');
+  const [licenseCode, setLicenseCode] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const { data, loading, error, refresh } = useAsync(async () => {
     const [bundle, clientConfig] = await Promise.all([loadLicenseBundle(settings), loadClientConfig(settings)]);

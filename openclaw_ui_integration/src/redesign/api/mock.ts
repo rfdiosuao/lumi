@@ -36,38 +36,7 @@ function clone<T>(value: T): T {
 }
 
 function buildLicense() {
-  return {
-    licensee: 'OpenClaw Studio',
-    edition: 'Pro',
-    expires: '2099-12-31',
-    features: ['process', 'image', 'video', 'phone', 'desktop', 'skills', 'diagnostics'],
-    installId: 'install-4D8A-9C21',
-    deviceId: 'device-8F2A',
-    signature: 'mock-signature',
-    memberId: 'member-001',
-    plan: 'enterprise-monthly',
-    memberMode: true,
-    issuedAt: '2026-05-20T08:30:00.000Z',
-    leaseExpiresAt: '2026-06-20T08:30:00.000Z',
-    gatewayBaseUrl: 'https://api.heang.top/v1',
-    gatewayImageBaseUrl: 'https://api.heang.top/v1',
-    gatewayVideoBaseUrl: 'https://api.heang.top/v1',
-    gatewayAccessToken: 'mock-gateway-token',
-    gatewayToken: 'mock-gateway-token',
-    gatewayImageAccessToken: 'mock-image-token',
-    gatewayVideoAccessToken: 'mock-video-token',
-    gatewayImageToken: 'mock-image-token',
-    gatewayVideoToken: 'mock-video-token',
-    gatewayDefaultModel: 'gpt-4o',
-    gatewayImageModel: 'gpt-image-2',
-    gatewayVideoModel: 'happyhorse-1.0-t2v',
-    activationCodeLabel: 'OC-PRO-7A2C',
-    activationCodeLast8: '7A2C-11F9',
-    codeLabel: 'OC-PRO-7A2C',
-    gatewayModels: ['gpt-4o', 'gpt-image-2', 'happyhorse-1.0-t2v'],
-    quotas: { llm: 120000, image: 120, video: 60, month: 1 },
-    usage: { llm: 8200, image: 4, video: 1 },
-  };
+  return {};
 }
 
 function buildMember() {
@@ -457,7 +426,12 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return createDefaultState();
     const parsed = JSON.parse(raw);
-    return { ...createDefaultState(), ...parsed };
+    const state = { ...createDefaultState(), ...parsed };
+    const license = state.license || {};
+    if (license.signature === 'mock-signature') {
+      state.license = buildLicense();
+    }
+    return state;
   } catch {
     return createDefaultState();
   }
