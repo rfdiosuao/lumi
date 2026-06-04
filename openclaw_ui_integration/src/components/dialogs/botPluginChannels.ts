@@ -1,0 +1,66 @@
+import type { BotChannel, BotChannelKey } from './botPluginTypes';
+
+export const CHANNELS: Record<BotChannelKey, BotChannel> = {
+  feishu: {
+    key: 'feishu',
+    configKey: 'feishu',
+    legacyConfigKey: 'openclaw-lark',
+    title: '飞书机器人',
+    description: '安装 OpenClaw 飞书插件，并写入飞书开放平台应用配置。',
+    pluginName: 'openclaw-lark',
+    packageName: '@larksuite/openclaw-lark',
+    packagePaths: [
+      'node_modules/@larksuite/openclaw-lark/package.json',
+      'SystemData/.core/node_modules/@larksuite/openclaw-lark/package.json',
+      'data/.openclaw/extensions/openclaw-lark/package.json',
+      'data/.openclaw/extensions/lark/package.json',
+    ],
+    installSteps: [
+      {
+        label: '飞书扫码配置',
+        displayCommand: 'node scripts/bot-plugin-helper.mjs login-feishu',
+        commandName: 'bot-plugin-login-feishu',
+        fallbackCommandName: 'bot-plugin-login-feishu-node-exe',
+        args: ['scripts/bot-plugin-helper.mjs', 'login-feishu'],
+        successMessage: '飞书扫码配置已完成。重启核心服务后生效。',
+      },
+    ],
+    idLabel: 'App ID',
+    idPlaceholder: 'cli_xxx',
+    secretLabel: 'App Secret',
+    secretPlaceholder: '请输入 App Secret',
+    docsUrl: 'https://open.feishu.cn/app',
+    docsLabel: '打开飞书开放平台',
+    manualConfig: true,
+  },
+  weixin: {
+    key: 'weixin',
+    configKey: 'openclaw-weixin',
+    title: '微信机器人',
+    description: '安装 OpenClaw 微信绑定插件。微信绑定只能通过命令行输出中的二维码扫码完成。',
+    pluginName: 'openclaw-weixin',
+    packageName: '@tencent-weixin/openclaw-weixin',
+    packagePaths: [
+      'node_modules/@tencent-weixin/openclaw-weixin/package.json',
+      'SystemData/.core/node_modules/@tencent-weixin/openclaw-weixin/package.json',
+      'data/.openclaw/extensions/openclaw-weixin/package.json',
+      'data/.openclaw/extensions/weixin/package.json',
+      'data/.openclaw/extensions/wechat/package.json',
+    ],
+    installSteps: [
+      {
+        label: '微信扫码绑定',
+        displayCommand: 'node scripts/bot-plugin-helper.mjs login-weixin',
+        commandName: 'bot-plugin-login-weixin',
+        fallbackCommandName: 'bot-plugin-login-weixin-node-exe',
+        args: ['scripts/bot-plugin-helper.mjs', 'login-weixin'],
+        successMessage: '微信扫码绑定命令已结束。绑定完成后，请重启核心服务生效。',
+      },
+    ],
+    idLabel: '',
+    idPlaceholder: '',
+    secretLabel: '',
+    secretPlaceholder: '',
+    manualConfig: false,
+  },
+};

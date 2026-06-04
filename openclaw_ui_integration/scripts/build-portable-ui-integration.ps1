@@ -1,6 +1,7 @@
 param(
     [string]$Version = "",
     [string]$PackageName = "",
+    [string]$OpenClawRuntimeVersion = "2026.6.1",
     [string]$SeedPortableDir = "",
     [string]$BrandProfile = "openclaw",
     [string]$PhoneAgentVerifiedVersion = "",
@@ -12,15 +13,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Root = Split-Path -Parent $PSScriptRoot
-$LauncherDir = Join-Path $Root "openclaw_new_launcher"
+$SandboxDir = Split-Path -Parent $PSScriptRoot
+$Root = Split-Path -Parent $SandboxDir
+$LauncherDir = $SandboxDir
 $TauriDir = Join-Path $LauncherDir "src-tauri"
 $ReleaseDir = Join-Path $Root "release"
-$CleanScript = Join-Path $PSScriptRoot "clean-workspace.ps1"
-$VerifyScript = Join-Path $PSScriptRoot "verify-release.ps1"
-$SmokeVerifyScript = Join-Path $PSScriptRoot "verify-portable-smoke.ps1"
-$VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
-$OpenClawRuntimeVersion = "2026.6.1"
+$ToolScriptsDir = Join-Path $Root "scripts"
+$VerifyScript = Join-Path $ToolScriptsDir "verify-release.ps1"
+$SmokeVerifyScript = Join-Path $ToolScriptsDir "verify-portable-smoke.ps1"
 
 function Invoke-Step {
     param(
@@ -290,7 +290,7 @@ function Copy-PythonRuntime {
 function Write-PortableStartJs {
     param([string]$PackageDir)
 
-    $content = @"
+    $content = @'
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -326,7 +326,7 @@ child.on('error', (error) => {
   console.error('[OpenClaw] failed to start gateway:', error);
   process.exit(1);
 });
-"@
+'@
 
     Set-Content -LiteralPath (Join-Path $PackageDir "start.js") -Value $content -Encoding UTF8
 }
@@ -339,6 +339,19 @@ function Write-PortableRuntimePackageJson {
         version = $Version
         scripts = [ordered]@{
             start = "node start.js"
+            "verify:phone" = "powershell -ExecutionPolicy Bypass -File scripts/verify-phone-agent.ps1"
+            "phone:image" = "node scripts/openclaw-image-phone.mjs"
+            "phone:image:edit" = "node scripts/openclaw-image-phone.mjs --mode edit"
+            "phone:agent" = "node scripts/openclaw-phone-agent.mjs"
+            "phone:fleet" = "node scripts/openclaw-phone-fleet.mjs"
+            "phone:video" = "node scripts/openclaw-phone-video.mjs"
+            "phone:vision" = "node scripts/openclaw-phone-vision.mjs"
+            "phone:game" = "node scripts/openclaw-phone-game.mjs"
+            "phone:publish" = "node scripts/openclaw-publish-phone.mjs"
+            "phone:relay" = "node scripts/openclaw-publish-relay.mjs"
+            "phone:relay:check" = "node scripts/openclaw-publish-relay-check.mjs"
+            "phone:relay:smoke" = "node scripts/openclaw-publish-relay-smoke.mjs"
+            "openclaw:context" = "node scripts/openclaw-context.mjs"
         }
         dependencies = [ordered]@{
             "@larksuite/openclaw-lark" = "2026.5.20"
@@ -392,13 +405,6 @@ function Initialize-PortableBootstrap {
 }
 
 function Find-TauriExe {
-    if ($SkipBuild -and -not [string]::IsNullOrWhiteSpace($seedDir)) {
-        $seedExe = Join-Path $seedDir "OpenClaw.exe"
-        if (Test-Path -LiteralPath $seedExe) {
-            return $seedExe
-        }
-    }
-
     $candidatePaths = @(
         (Join-Path $TauriDir "target\release\app.exe"),
         (Join-Path $TauriDir "target\release\OpenClaw.exe")
@@ -1116,19 +1122,18 @@ Write-Host "Package name: $PackageName"
 Write-Host "Seed portable dir: $seedDir"
 Write-Host "Brand profile: $($brand.Profile) -> theme $($brand.ThemeId) [$($brand.Edition)]"
 
-Invoke-Step "Clean source workspace" {
-    & powershell -ExecutionPolicy Bypass -File $CleanScript
-}
-
-Invoke-Step "Verify source text" {
-    & powershell -ExecutionPolicy Bypass -File $VerifySourceTextScript
+Invoke-Step "Clean integration sandbox runtime artifacts" {
+    Remove-SafePath (Join-Path $LauncherDir "dist")
+    Remove-SafePath (Join-Path $LauncherDir "data\.openclaw")
+    Remove-SafePath (Join-Path $LauncherDir "data\logs")
+    Remove-PythonCacheFiles -PackageDir $LauncherDir
 }
 
 if (-not $SkipBuild) {
     Invoke-Step "Install frontend dependencies" {
         Push-Location $LauncherDir
         try {
-            npm ci
+            npm install
         } finally {
             Pop-Location
         }
@@ -1165,7 +1170,11 @@ Invoke-Step "Create portable directory" {
     } else {
         Initialize-PortableBootstrap -PackageDir $packageDir
     }
+    Write-PortableRuntimePackageJson -PackageDir $packageDir
+    Write-PortableStartJs -PackageDir $packageDir
     Expand-PortablePayloadForBuild -PackageDir $packageDir
+    Write-PortableRuntimePackageJson -PackageDir $packageDir
+    Write-PortableStartJs -PackageDir $packageDir
     Remove-LegacyNestedLaunchers -PackageDir $packageDir
     Copy-Item -LiteralPath $tauriExe -Destination (Join-Path $packageDir "OpenClaw.exe") -Force
 
@@ -1192,7 +1201,8 @@ Invoke-Step "Create portable directory" {
 
     Copy-Directory `
         -Source (Join-Path $LauncherDir "scripts") `
-        -Destination (Join-Path $packageDir "scripts")
+        -Destination (Join-Path $packageDir "scripts") `
+        -ExcludeFiles @("build-portable-ui-integration.ps1", "packaged-bridge-contract-smoke.ps1", "packaged-settings-write-smoke.ps1")
 
     Copy-PhoneAgentApks -PackageDir $packageDir
     Copy-WebView2Redist -PackageDir $packageDir

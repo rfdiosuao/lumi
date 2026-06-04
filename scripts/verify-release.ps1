@@ -1,9 +1,12 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Path
+    [string]$Path,
+    [switch]$AllowPhoneAgentApk
 )
 
 $ErrorActionPreference = "Stop"
+$allowPhoneAgentApkEnv = if ([string]::IsNullOrWhiteSpace($env:OPENCLAW_ALLOW_PHONE_AGENT_APK)) { '' } else { $env:OPENCLAW_ALLOW_PHONE_AGENT_APK.Trim().ToLowerInvariant() }
+$allowPhoneAgentApkEffective = $AllowPhoneAgentApk.IsPresent -or @('1', 'true', 'yes', 'on') -contains $allowPhoneAgentApkEnv
 
 $requiredFiles = @(
     "OpenClaw.exe",
@@ -56,14 +59,19 @@ $forbiddenPatterns = @(
     "(?i)(^|/)OpenClawFiles/(Lumi|YongHao|yonghao_tech)(/|$)",
     "(?i)(^|/)OpenClawFiles/agents/sightflow-desktop(/|$)",
     "(?i)(^|/)OpenClawFiles/agents/sightflow-desktop-agent(/|$)",
-    "(?i)(^|/)OpenClawFiles/releases/agent-phone/.*\.apk$",
-    "(?i)(^|/)releases/agent-phone/.*\.apk$",
     "(?i)(^|/)__pycache__(/|$)",
     "(?i)\.pyc$",
     "(?i)(^|/)\.npm-cache-update(/|$)",
     "(?i)(^|/)(license\.db|private_key\.b64|admin_token\.txt)$",
     "(?i)(^|/)node_modules/\.cache(/|$)"
 )
+
+if (-not $allowPhoneAgentApkEffective) {
+    $forbiddenPatterns += @(
+        "(?i)(^|/)OpenClawFiles/releases/agent-phone/.*\.apk$",
+        "(?i)(^|/)releases/agent-phone/.*\.apk$"
+    )
+}
 
 $contentScanSuffixes = @(
     "/.npmrc",
