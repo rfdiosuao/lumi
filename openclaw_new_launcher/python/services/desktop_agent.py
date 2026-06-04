@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import signal
 import secrets
 import subprocess
 import threading
@@ -175,7 +176,7 @@ class DesktopAgentService:
             env["LUMINODE_API_KEY"] = api_key
 
         self.append_log(f"[DesktopAgent] Starting Luminode: {' '.join(command)}\n")
-        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        popen_kwargs = self._popen_platform_kwargs()
         self.process = subprocess.Popen(
             command,
             cwd=agent_dir,
@@ -185,7 +186,7 @@ class DesktopAgentService:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            creationflags=creation_flags,
+            **popen_kwargs,
         )
         self.append_log(f"[DesktopAgent] PID: {self.process.pid}\n")
         self._output_thread = threading.Thread(target=self._read_output, args=(self.process,), daemon=True)
@@ -196,15 +197,11 @@ class DesktopAgentService:
         if self.process and self.process.poll() is None:
             pid = self.process.pid
             self.append_log(f"[DesktopAgent] Stopping PID {pid}\n")
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True,
-                text=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            self._terminate_process_tree(pid)
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                self._kill_process_tree(pid)
                 pass
         self.process = None
         return self.status()
@@ -258,6 +255,8 @@ class DesktopAgentService:
             str(config.get("agentDir") or "").strip(),
             os.environ.get("OPENCLAW_DESKTOP_AGENT_DIR", ""),
             os.path.join(self.paths.base_path, "agents", "luminode-desktop"),
+            os.path.join(self.paths.base_path, "agents", "luminode-desktop", "Luminode.app"),
+            os.path.join(self.paths.base_path, "agents", "luminode-desktop", "LumiNode.app"),
             os.path.join(self.paths.base_path, "agents", "sightflow-desktop"),
             os.path.join(self.paths.base_path, "sightflow-desktop-agent"),
             os.path.join(
@@ -275,6 +274,10 @@ class DesktopAgentService:
     def resolve_command(self, agent_dir: str) -> list[str]:
         if not agent_dir:
             return []
+        app_command = self._mac_app_command(agent_dir)
+        if app_command:
+            return app_command
+
         electron = os.path.join(agent_dir, "electron-dist", "electron.exe")
         package_json = os.path.join(agent_dir, "package.json")
         out_main = os.path.join(agent_dir, "out", "main", "index.js")
@@ -291,10 +294,73 @@ class DesktopAgentService:
             if os.path.exists(exe):
                 return [exe]
 
+        app_candidates = [
+            os.path.join(agent_dir, "Luminode.app"),
+            os.path.join(agent_dir, "LumiNode.app"),
+            os.path.join(agent_dir, "SightFlow.app"),
+        ]
+        app_candidates.extend(glob.glob(os.path.join(agent_dir, "dist", "mac*", "*.app")))
+        for app_path in app_candidates:
+            app_command = self._mac_app_command(app_path)
+            if app_command:
+                return app_command
+
         dev_launch = os.path.join(agent_dir, "scripts", "dev-launch.mjs")
         if os.path.exists(dev_launch) and os.path.exists(self.paths.node_exe):
             return [self.paths.node_exe, dev_launch]
         return []
+
+    def _mac_app_command(self, app_path: str) -> list[str]:
+        if not app_path.endswith(".app") or not os.path.isdir(app_path):
+            return []
+        macos_dir = os.path.join(app_path, "Contents", "MacOS")
+        executable_names = ["Luminode", "LumiNode", "SightFlow", "sightflow-desktop-agent"]
+        executable_names.extend(os.path.basename(path) for path in glob.glob(os.path.join(macos_dir, "*")))
+        for name in executable_names:
+            executable = os.path.join(macos_dir, name)
+            if os.path.isfile(executable) and os.access(executable, os.X_OK):
+                return [executable]
+        return []
+
+    def _popen_platform_kwargs(self) -> dict:
+        if os.name == "nt":
+            return {
+                "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            }
+        return {"start_new_session": True}
+
+    def _terminate_process_tree(self, pid: int) -> None:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+
+    def _kill_process_tree(self, pid: int) -> None:
+        if os.name == "nt":
+            return
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
 
     def _deep_merge(self, base: dict, updates: dict) -> dict:
         merged = dict(base)
