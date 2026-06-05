@@ -1,7 +1,9 @@
 import React from 'react';
-import { RefreshCcw, Save } from 'lucide-react';
+import { Command } from '@tauri-apps/plugin-shell';
+import { Copy, ExternalLink, RefreshCcw, Save } from 'lucide-react';
 import { Button, Chip, Field, Input, Panel, SectionHeader, Select, TextArea } from '../components/ui';
 import { loadSettingsSnapshot, readConfigValue, saveAuthProfiles, writeConfigValue } from '../api/adapters';
+import { makeCommandOptions, resolvePortableBasePath } from '../api/runtimeCommand';
 import { maskSecret } from '../lib/format';
 import { displayPhoneBaseUrl, normalizeOrCleanPhoneBaseUrl } from '../lib/phoneUrl';
 import { useAsync } from '../lib/useAsync';
@@ -30,6 +32,16 @@ const AUTH_PROFILES_PATH = 'data/.openclaw/agents/main/agent/auth-profiles.json'
 const IMAGE_CONFIG_PATH = 'imgapi_config.json';
 const VIDEO_CONFIG_PATH = 'videoapi_config.json';
 const OPENCLAW_CONFIG_PATH = 'data/.openclaw/openclaw.json';
+const OPENAI_CODEX_MANUAL_LOGIN_COMMAND = [
+  "$env:OPENCLAW_HOME=(Join-Path $PWD 'data')",
+  "$env:OPENCLAW_STATE_DIR=(Join-Path $PWD 'data\\.openclaw')",
+  "$env:OPENCLAW_CONFIG_PATH=(Join-Path $env:OPENCLAW_STATE_DIR 'openclaw.json')",
+  '$env:OPENCLAW_CONFIG=$env:OPENCLAW_CONFIG_PATH',
+  "$env:OPENCLAW_GATEWAY_PORT='18790'",
+  "$env:NO_COLOR='1'",
+  "$env:Path=(Join-Path $PWD 'node')+';'+(Join-Path $PWD 'node_modules\\.bin')+';'+$env:Path",
+  '.\\node\\node.exe .\\node_modules\\openclaw\\openclaw.mjs models auth login --provider openai --method oauth --set-default',
+].join('; ');
 
 export function SettingsPage() {
   const storeSettings = usePreviewStore((state) => state.settings);
@@ -43,12 +55,17 @@ export function SettingsPage() {
   const [gatewayForm, setGatewayForm] = React.useState<GatewayForm>({ baseUrl: '', apiKey: '', model: 'gpt-4o' });
   const [imageForm, setImageForm] = React.useState<ImageForm>({ baseUrl: '', apiKey: '', model: 'gpt-image-2' });
   const [videoForm, setVideoForm] = React.useState<VideoForm>({ providerId: 'agnes', apiBase: 'https://apihub.agnes-ai.com/v1', apiKey: '', model: 'agnes-video-v2.0' });
+  const [codexLoginRunning, setCodexLoginRunning] = React.useState(false);
   const [jsonDrafts, setJsonDrafts] = React.useState({
     authProfiles: '{}',
     imageConfig: '{}',
     videoConfig: '{}',
     openclawConfig: '{}',
   });
+
+  // 表单只首次填充:避免后续任意一次 loadConfigs 重跑(如 storeSettings 变化)把用户
+  // 正在编辑的网关地址/主模型等内容还原,表现为"打不进字/改了又跳回去"。
+  const formsSeededRef = React.useRef(false);
 
   const loadConfigs = React.useCallback(async () => {
     try {
@@ -67,27 +84,31 @@ export function SettingsPage() {
       setImageConfig(nextImage);
       setVideoConfig(nextVideo);
       setOpenclawConfig(nextOpenclaw);
-      setGatewayForm(gateway);
-      setImageForm({
-        baseUrl: stringValue(nextImage.baseUrl) || gateway.baseUrl,
-        apiKey: stringValue(nextImage.apiKey),
-        model: stringValue(nextImage.model) || 'gpt-image-2',
-      });
-      const loadedVideoBase = stringValue(nextVideo.apiBase) || stringValue(nextVideo.baseUrl) || gateway.baseUrl;
-      const loadedVideoModel = stringValue(nextVideo.model);
-      const loadedVideoProvider = inferVideoProviderId(nextVideo.providerId, loadedVideoBase, loadedVideoModel);
-      setVideoForm({
-        providerId: loadedVideoProvider,
-        apiBase: loadedVideoBase || videoProviderDefaults(loadedVideoProvider).apiBase,
-        apiKey: stringValue(nextVideo.apiKey) || stringValue(nextVideo.dashKey) || stringValue(nextImage.apiKey),
-        model: loadedVideoModel || videoProviderDefaults(loadedVideoProvider).model,
-      });
-      setJsonDrafts({
-        authProfiles: formatJson(nextAuth),
-        imageConfig: formatJson(nextImage),
-        videoConfig: formatJson(nextVideo),
-        openclawConfig: formatJson(nextOpenclaw),
-      });
+      // 仅首次填充可编辑表单/草稿;之后保留用户输入,不被重载冲掉。
+      if (!formsSeededRef.current) {
+        formsSeededRef.current = true;
+        setGatewayForm(gateway);
+        setImageForm({
+          baseUrl: stringValue(nextImage.baseUrl) || gateway.baseUrl,
+          apiKey: stringValue(nextImage.apiKey),
+          model: stringValue(nextImage.model) || 'gpt-image-2',
+        });
+        const loadedVideoBase = stringValue(nextVideo.apiBase) || stringValue(nextVideo.baseUrl) || gateway.baseUrl;
+        const loadedVideoModel = stringValue(nextVideo.model);
+        const loadedVideoProvider = inferVideoProviderId(nextVideo.providerId, loadedVideoBase, loadedVideoModel);
+        setVideoForm({
+          providerId: loadedVideoProvider,
+          apiBase: loadedVideoBase || videoProviderDefaults(loadedVideoProvider).apiBase,
+          apiKey: stringValue(nextVideo.apiKey) || stringValue(nextVideo.dashKey) || stringValue(nextImage.apiKey),
+          model: loadedVideoModel || videoProviderDefaults(loadedVideoProvider).model,
+        });
+        setJsonDrafts({
+          authProfiles: formatJson(nextAuth),
+          imageConfig: formatJson(nextImage),
+          videoConfig: formatJson(nextVideo),
+          openclawConfig: formatJson(nextOpenclaw),
+        });
+      }
     } catch {
       setAuthProfiles({});
       setImageConfig({});
@@ -100,6 +121,54 @@ export function SettingsPage() {
   React.useEffect(() => {
     loadConfigs();
   }, [loadConfigs]);
+
+  const handleOpenAiCodexLogin = React.useCallback(async () => {
+    if (codexLoginRunning) return;
+    setCodexLoginRunning(true);
+    try {
+      const cwd = await resolvePortableBasePath(storeSettings);
+      const args = ['scripts/openclaw-auth-terminal.mjs', 'openai-browser'];
+      const options = makeCommandOptions(cwd);
+      let result;
+
+      try {
+        result = await Command.create('openclaw-auth-openai-browser', args, options).execute();
+      } catch {
+        result = await Command.create('openclaw-auth-openai-browser-node-exe', args, options).execute();
+      }
+
+      if (result.code === 0) {
+        pushToast({
+          tone: 'ok',
+          title: 'OpenAI Codex 登录已打开',
+          detail: '会打开一个 PowerShell 登录窗口，并自动弹出 OpenAI 网页。若窗口没出现，请复制备用命令手动执行。',
+        });
+      } else {
+        pushToast({
+          tone: 'danger',
+          title: 'OpenAI Codex 登录启动失败',
+          detail: commandResultDetail(result),
+        });
+      }
+    } catch (err) {
+      pushToast({ tone: 'danger', title: 'OpenAI Codex 登录启动失败', detail: String(err) });
+    } finally {
+      setCodexLoginRunning(false);
+    }
+  }, [codexLoginRunning, pushToast, storeSettings]);
+
+  const handleCopyOpenAiCodexCommand = React.useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(OPENAI_CODEX_MANUAL_LOGIN_COMMAND);
+      pushToast({
+        tone: 'ok',
+        title: '登录命令已复制',
+        detail: '在 OpenClawFiles 目录打开 PowerShell 后粘贴执行。',
+      });
+    } catch (err) {
+      pushToast({ tone: 'danger', title: '复制失败', detail: String(err) });
+    }
+  }, [pushToast]);
 
   const handleSaveConfigs = async () => {
     const nextAuth = withPrimaryProvider(authProfiles, gatewayForm);
@@ -208,6 +277,35 @@ export function SettingsPage() {
             action={<Chip tone={gatewayForm.apiKey || imageForm.apiKey || videoForm.apiKey ? 'ok' : 'warn'}>{gatewayForm.apiKey || imageForm.apiKey || videoForm.apiKey ? '已配置' : '缺少密钥'}</Chip>}
           />
           <div className="settings-card-grid">
+            <section className="settings-card">
+              <div className="settings-card-title">OpenAI Codex 账号</div>
+              <p className="settings-card-copy">点击后会打开 PowerShell 登录窗口，OpenClaw 会自动弹出 OpenAI/ChatGPT 网页授权。这个窗口需要保留到授权写入完成。</p>
+              <div className="settings-card-actions">
+                <Button
+                  variant="primary"
+                  icon={ExternalLink}
+                  onClick={handleOpenAiCodexLogin}
+                  disabled={codexLoginRunning}
+                  className="settings-card-action"
+                >
+                  {codexLoginRunning ? '正在打开...' : '打开网页登录'}
+                </Button>
+                <Button
+                  variant="secondary"
+                  icon={Copy}
+                  onClick={handleCopyOpenAiCodexCommand}
+                  className="settings-card-action"
+                >
+                  复制备用命令
+                </Button>
+              </div>
+              <div className="settings-login-command">
+                <span>PowerShell 备用命令</span>
+                <code>{OPENAI_CODEX_MANUAL_LOGIN_COMMAND}</code>
+              </div>
+              <div className="settings-card-note">如果没有弹出终端：进入 OpenClaw.exe 同级的 OpenClawFiles 目录，打开 PowerShell，粘贴备用命令。授权完成后重启核心服务让模型登录生效。</div>
+            </section>
+
             <section className="settings-card">
               <div className="settings-card-title">主模型网关</div>
               <Field label="模型地址">
@@ -436,6 +534,11 @@ function sanitizeOpenClawConfig(value: any) {
   const next = cloneRecord(value);
   delete next.launcherPreview;
   return next;
+}
+
+function commandResultDetail(result: { code?: number | null; stdout?: string; stderr?: string } | undefined) {
+  const detail = [result?.stderr, result?.stdout].filter(Boolean).join('\n').trim();
+  return detail || `退出码：${result?.code ?? 'unknown'}`;
 }
 
 function transportLabel(value: string) {
