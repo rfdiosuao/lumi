@@ -354,6 +354,7 @@ function Write-PortableRuntimePackageJson {
             "openclaw:context" = "node scripts/openclaw-context.mjs"
         }
         dependencies = [ordered]@{
+            "@dingtalk-real-ai/dingtalk-connector" = "0.8.23"
             "@larksuite/openclaw-lark" = "2026.5.20"
             "@tencent-weixin/openclaw-weixin" = "2.4.4"
             openclaw = $OpenClawRuntimeVersion
@@ -876,6 +877,11 @@ function Copy-DesktopAgentSidecar {
     param([string]$PackageDir)
 
     $sourceRoots = @(
+        # Prefer the Luminode build that carries the launcher-compatible http-api-server routes.
+        (Join-Path $Root "sightflow-desktop-agent"),
+        # sightflow-desktop-agent 用 http-api-server,其路由与启动器 desktop_agent.py 的
+        # ALLOWED_PROXY_PATHS 完全对应,且含 sidecar 自启动;优先取它。
+        (Join-Path $Root "sightflow-desktop-agent"),
         (Join-Path $Root "sightflow-desktop-agent-main\sightflow-desktop-agent-main"),
         (Join-Path $Root "sightflow-desktop-agent-main")
     )
@@ -897,6 +903,7 @@ function Copy-DesktopAgentSidecar {
         Write-Warning "Luminode win-unpacked output not found. Run npm run build:unpack in $sourceRoot before packaging."
         return
     }
+    Write-Host "Using Luminode sidecar source: $source"
 
     foreach ($stale in @(
         "agents\luminode-desktop",
@@ -1068,7 +1075,7 @@ function Install-BundledBotPlugins {
     Push-Location $PackageDir
     try {
         $env:Path = "$nodeDir;$oldPath"
-        & $npmCmd install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "openclaw@$OpenClawRuntimeVersion" "@larksuite/openclaw-lark@latest" "@tencent-weixin/openclaw-weixin@latest"
+        & $npmCmd install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "openclaw@$OpenClawRuntimeVersion" "@larksuite/openclaw-lark@latest" "@tencent-weixin/openclaw-weixin@latest" "@dingtalk-real-ai/dingtalk-connector@0.8.23"
         if ($LASTEXITCODE -ne 0) {
             throw "npm install bot plugins failed with exit code $LASTEXITCODE"
         }
@@ -1079,6 +1086,7 @@ function Install-BundledBotPlugins {
 
     $required = @(
         "node_modules\@larksuite\openclaw-lark\package.json",
+        "node_modules\@dingtalk-real-ai\dingtalk-connector\package.json",
         "node_modules\@tencent-weixin\openclaw-weixin\package.json"
     )
     foreach ($item in $required) {
