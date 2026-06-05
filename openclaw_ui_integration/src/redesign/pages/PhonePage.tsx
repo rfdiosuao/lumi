@@ -172,6 +172,10 @@ function authErrorHelp(message: string): string {
   const lower = message.toLowerCase();
   if (lower.includes('missing_token')) return '缺少 APKClaw Token。请在手机端查看控制台令牌并填入。';
   if (lower.includes('invalid_phone_base_url') || lower.includes('invalid url') || lower.includes('ipv4')) return '手机地址格式不正确。局域网地址应类似 http://192.168.1.4:9527。';
+  if (lower.includes('lumi_signature_repair_failed') || lower.includes('invalid lumi signature')) return 'Lumi 安全签名修复失败。启动器已尝试重新配对仍未通过；请确认电脑和手机时间一致，手机端 APKClaw 服务仍是最新版本，然后点击“重新配对”。';
+  if (lower.includes('lumi body hash mismatch')) return 'Lumi 请求体校验失败。通常是任务内容在代理转发时被改写；请重新提交任务，若仍失败请升级启动器和 APKClaw。';
+  if (lower.includes('lumi request timestamp') || lower.includes('invalid lumi timestamp')) return 'Lumi 时间戳校验失败。请把电脑和手机时间同步到自动网络时间后再重试。';
+  if (lower.includes('lumi nonce has already been used')) return 'Lumi 防重放校验触发。请稍等几秒后重新提交任务。';
   if (lower.includes('missing lumi security headers') || lower.includes('unknown lumi launcher') || lower.includes('lumi_pair_failed')) return '安全配对失败或已失效。请确认 APKClaw 版本支持 Lumi 安全通道，然后点击“重新配对”。';
   if (lower.includes('401') || lower.includes('unauthorized')) return 'Token 无效。请重新复制手机端显示的令牌。';
   if (lower.includes('failed to fetch') || lower.includes('sending request') || lower.includes('network')) return '无法访问手机服务。确认电脑和手机在同一网络，APKClaw 控制服务正在运行。';
@@ -755,10 +759,33 @@ export function PhonePage() {
                   {snapshot.screenshotUrl ? <img src={snapshot.screenshotUrl} alt="APKClaw screenshot" /> : <div className="phone-screen-placeholder" aria-label="暂无截图" />}
                 </div>
                 <div className="phone-summary">
+                  {(() => {
+                    const st = snapshot.status as any;
+                    if (!st) return null;
+                    const issues: string[] = [];
+                    if (st.accessibilityRunning === false) {
+                      issues.push('无障碍服务未开启：截图、点击、滑动都会失效。请到手机「设置 → 无障碍」开启本应用（若开关是灰色，先到「应用信息 → ⋮ → 允许受限的设置」）。');
+                    }
+                    if (st.keyguardLocked === true || st.deviceLocked === true) {
+                      issues.push('手机当前锁屏：请点上方「唤醒」或手动解锁后再操作。');
+                    }
+                    if (st.overlayPermission === false) {
+                      issues.push('悬浮窗权限未开：光标预览不可用（不影响截图与点击）。');
+                    }
+                    if (!issues.length) return null;
+                    const critical = st.accessibilityRunning === false;
+                    return (
+                      <InlineState
+                        tone={critical ? 'danger' : 'warn'}
+                        title={critical ? '演示前请先修复：手机无障碍服务已关闭' : '设备状态提醒'}
+                        description={issues.join(' ')}
+                      />
+                    );
+                  })()}
                   <div className="detail-stack">
                     <div className="detail-row"><span className="detail-label">版本</span><span className="detail-value">{snapshot.status?.versionInfo || snapshot.status?.version || '暂无'}</span></div>
                     <div className="detail-row"><span className="detail-label">屏幕</span><span className="detail-value">{snapshot.status?.screenOn ? '亮屏' : '未知'}</span></div>
-                    <div className="detail-row"><span className="detail-label">无障碍</span><span className="detail-value">{snapshot.status?.accessibilityRunning ? '运行中' : '未确认'}</span></div>
+                    <div className="detail-row"><span className="detail-label">无障碍</span><span className="detail-value">{snapshot.status?.accessibilityRunning ? '运行中' : (snapshot.status ? '未开启 ⚠' : '未确认')}</span></div>
                     <div className="detail-row"><span className="detail-label">电量</span><span className="detail-value">{formatBattery(snapshot.profile)}</span></div>
                   </div>
                   {loading ? <InlineState tone="neutral" title="正在刷新快照" description="截图和状态会先显示，视频/录屏等附加能力稍后更新。" /> : null}
