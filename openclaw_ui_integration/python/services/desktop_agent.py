@@ -162,6 +162,24 @@ class DesktopAgentService:
         if not command:
             raise FileNotFoundError(f"未找到 SightFlow 可启动入口：{agent_dir}")
 
+        # 显式以 sidecar 模式启动并传参,让 agent 自动开启 token 保护的本地 HTTP API。
+        # agent 读 --luminode-sidecar / --port / --token / --app-type / --api-key(arg 优先于 env)。
+        # 此前启动器只设 LUMINODE_* env,而 agent 读 SIGHTFLOW_* env,前缀对不上 → API 起不来、
+        # 桌面控制无法自主启动。用显式 arg 绕开前缀问题,最可靠。
+        sidecar_port = int(config.get("port") or self.DEFAULT_PORT)
+        sidecar_token = str(config.get("token") or "")
+        sidecar_app_type = str(config.get("appType") or "weixin")
+        command = [
+            *command,
+            "--luminode-sidecar",
+            "--port", str(sidecar_port),
+            "--token", sidecar_token,
+            "--app-type", sidecar_app_type,
+        ]
+        sidecar_api_key = self._primary_api_key()
+        if sidecar_api_key:
+            command += ["--api-key", sidecar_api_key]
+
         env = os.environ.copy()
         env.update({
             "LUMINODE_HTTP_API_AUTOSTART": "1" if config.get("autoStartHttpApi", True) else "0",
@@ -229,6 +247,9 @@ class DesktopAgentService:
         port = int(config.get("port") or self.DEFAULT_PORT)
         url = f"http://127.0.0.1:{port}{path}"
         payload = json.dumps(self._augment_body(path, body, config), ensure_ascii=False).encode("utf-8")
+        # 按路径分级超时:健康检查要快返回;动作/微信操作要扫 UI、点按、抓未读,耗时长,
+        # 对齐 agent 自身 ~30s 动作超时,避免启动器这边 8s 就误判"动作失败"(agent 还在干)。
+        timeout = 8 if path == "/health" else 35
         request = urllib.request.Request(
             url,
             data=None if method.upper() == "GET" else payload,
@@ -241,7 +262,7 @@ class DesktopAgentService:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=8) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 text = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as error:
             text = error.read().decode("utf-8", errors="replace")

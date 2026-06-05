@@ -59,7 +59,9 @@ export function DesktopPage() {
 
   const handleAction = async (path: string, body: Record<string, unknown>) => {
     try {
-      await requestBridgeData(settings, path, 'POST', body);
+      // 操作员在启动器上点按钮即为人工确认 → 带 confirmed:true,满足策略的 requireConfirm 校验,
+      // 否则点击/打字/微信发送会被"requires confirmed=true"拦死。
+      await requestBridgeData(settings, path, 'POST', { confirmed: true, ...body });
       pushToast({ tone: 'ok', title: '动作已发送', detail: path });
     } catch (err) {
       pushToast({ tone: 'danger', title: '动作失败', detail: String(err) });
@@ -135,6 +137,30 @@ export function DesktopPage() {
                 <Field label="令牌预览"><Input value={configDraft.tokenPreview || ''} onChange={(event) => setConfigDraft((state) => ({ ...state, tokenPreview: event.target.value }))} /></Field>
                 </div>
                 <Toggle checked={Boolean(configDraft.enabled)} onChange={(checked) => setConfigDraft((state) => ({ ...state, enabled: checked }))} label="启用" hint="通过 /api/desktop-agent/config 持久化" />
+                <Toggle
+                  checked={Boolean(configDraft.policy?.allowClick)}
+                  onChange={(checked) => setConfigDraft((state) => ({ ...state, policy: { ...(state.policy || {}), allowClick: checked } }))}
+                  label="允许点击"
+                  hint="桌面模拟点击(默认关闭,安全起见)"
+                />
+                <Toggle
+                  checked={Boolean(configDraft.policy?.allowType)}
+                  onChange={(checked) => setConfigDraft((state) => ({ ...state, policy: { ...(state.policy || {}), allowType: checked } }))}
+                  label="允许打字"
+                  hint="桌面模拟输入文本(默认关闭)"
+                />
+                <Toggle
+                  checked={Boolean(configDraft.policy?.allowWechatSend)}
+                  onChange={(checked) => setConfigDraft((state) => ({ ...state, policy: { ...(state.policy || {}), allowWechatSend: checked } }))}
+                  label="允许微信发送"
+                  hint="允许自动发送微信回复(默认关闭)"
+                />
+                <Toggle
+                  checked={(configDraft.wechat?.sendMode || 'draft_only') === 'auto_enter'}
+                  onChange={(checked) => setConfigDraft((state) => ({ ...state, wechat: { ...(state.wechat || {}), sendMode: checked ? 'auto_enter' : 'draft_only' } }))}
+                  label="微信自动回车发送"
+                  hint="关=仅填入草稿不发送;开=自动按回车发送(需配合上面的允许微信发送)"
+                />
                 <div className="button-row">
                   <Button variant="primary" icon={SquareStack} onClick={handleSave}>保存配置</Button>
                 </div>
