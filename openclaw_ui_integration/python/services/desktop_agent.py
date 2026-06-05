@@ -176,9 +176,16 @@ class DesktopAgentService:
             "--token", sidecar_token,
             "--app-type", sidecar_app_type,
         ]
-        sidecar_api_key = self._primary_api_key()
-        if sidecar_api_key:
-            command += ["--api-key", sidecar_api_key]
+        # 视觉模型:从统一配置(auth-profiles 主 provider)读出 网关地址+模型+key 一起传给 agent。
+        # 否则 agent 的视觉客户端会回退默认火山地址,拿网关 token 直连 → 401「key 格式不对」,
+        # 布局测量失败导致引擎无法启动。
+        sidecar_provider = self._primary_provider()
+        if sidecar_provider.get("apiKey"):
+            command += ["--api-key", sidecar_provider["apiKey"]]
+        if sidecar_provider.get("baseUrl"):
+            command += ["--base-url", sidecar_provider["baseUrl"]]
+        if sidecar_provider.get("model"):
+            command += ["--model", sidecar_provider["model"]]
 
         env = os.environ.copy()
         env.update({
@@ -404,6 +411,36 @@ class DesktopAgentService:
         elif path in {"/click", "/type", "/wechat/send"}:
             enriched.setdefault("action", self._public_action(config))
         return enriched
+
+    def _primary_provider(self) -> dict:
+        """返回统一配置主 provider 的 {apiKey, baseUrl, model},供桌面 agent 的视觉客户端使用。
+
+        agent 的 VLM(布局测量/识别)默认直连火山地址,只换 key 会 401;必须把网关
+        baseUrl + model 一起带过去,让 agent 走网关。
+        """
+        result = {"apiKey": "", "baseUrl": "", "model": ""}
+        try:
+            with open(self.paths.auth_profiles, "r", encoding="utf-8") as handle:
+                profiles = json.load(handle)
+            models = profiles.get("models") if isinstance(profiles, dict) else {}
+            providers = models.get("providers") if isinstance(models, dict) else {}
+            primary = models.get("primary") if isinstance(models, dict) else ""
+            provider = providers.get(primary) if primary else None
+            if not isinstance(provider, dict) and isinstance(providers, dict):
+                provider = next((item for item in providers.values() if isinstance(item, dict)), None)
+            provider = provider if isinstance(provider, dict) else {}
+            result["apiKey"] = str(provider.get("apiKey") or "").strip()
+            result["baseUrl"] = str(provider.get("baseUrl") or "").strip()
+            model_list = provider.get("models")
+            if isinstance(model_list, list) and model_list:
+                result["model"] = str(model_list[0] or "").strip()
+            elif isinstance(provider.get("model"), str):
+                result["model"] = str(provider.get("model")).strip()
+        except Exception:
+            pass
+        if not result["apiKey"]:
+            result["apiKey"] = self._primary_api_key()
+        return result
 
     def _primary_api_key(self) -> str:
         try:
