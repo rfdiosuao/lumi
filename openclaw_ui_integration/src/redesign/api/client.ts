@@ -32,6 +32,7 @@ export function isTauriRuntime(): boolean {
 }
 
 const LUMI_PAIRING_STORE_KEY = 'openclaw-lumi-secure-pairings-v1';
+const LUMI_LAUNCHER_ID_STORE_KEY = 'openclaw-lumi-launcher-ids-v1';
 const LUMI_LAUNCHER_ID_HEADER = 'X-LUMI-LAUNCHER-ID';
 const LUMI_TIMESTAMP_HEADER = 'X-LUMI-TIMESTAMP';
 const LUMI_NONCE_HEADER = 'X-LUMI-NONCE';
@@ -63,6 +64,23 @@ export interface PhonePairingSummary {
 
 const lumiPairingInflight = new Map<string, Promise<LumiPairing>>();
 const lumiSecureQueues = new Map<string, Promise<void>>();
+
+// 手机↔电脑时钟偏差(毫秒),按 baseUrl 记录。来源:device/status 响应里的 serverTime。
+// 签名时用 Date.now()+offset,让 Lumi 时间戳落在手机的时间窗口内,
+// 避免客户手机时间不准导致签名 403(手机端容差仅 120 秒)。
+const phoneClockOffsets = new Map<string, number>();
+
+function recordPhoneServerTime(baseUrl: string, payload: unknown): void {
+  const data = payload as any;
+  const serverTime = Number(data?.data?.serverTime ?? data?.serverTime);
+  if (Number.isFinite(serverTime) && serverTime > 0) {
+    phoneClockOffsets.set(baseUrl, serverTime - Date.now());
+  }
+}
+
+function phoneClockOffset(baseUrl: string): number {
+  return phoneClockOffsets.get(baseUrl) ?? 0;
+}
 
 export function resolveBridgeBaseUrl(explicitBaseUrl = ''): string {
   const envBase = getTextValue(import.meta.env.VITE_OPENCLAW_API_BASE_URL);
@@ -154,7 +172,7 @@ export async function phoneRequest<T = unknown>(
           await clearLumiPairing(normalizedBase, normalizedToken);
         }
       }
-      throw lastPairingError instanceof Error ? lastPairingError : new Error('lumi_signature_repair_failed');
+      throw createLumiRepairError(lastPairingError);
     });
   }
 
@@ -181,7 +199,9 @@ async function rawPhoneRequest<T>(
       timeoutMs,
       extraHeaders,
     });
-    return parseJson(String(payload)) as T;
+    const parsed = parseJson(String(payload));
+    recordPhoneServerTime(baseUrl, parsed);
+    return parsed as T;
   }
 
   const controller = new AbortController();
@@ -200,6 +220,7 @@ async function rawPhoneRequest<T>(
   }).finally(() => window.clearTimeout(timeout));
 
   const payload = parseJson(await response.text());
+  recordPhoneServerTime(baseUrl, payload);
   if (!response.ok) {
     const message = typeof payload?.error === 'string' ? payload.error : `http_${response.status}`;
     throw new Error(message);
@@ -249,6 +270,31 @@ function isLumiPairingError(error: unknown): boolean {
   );
 }
 
+function createLumiRepairError(error: unknown): Error {
+  const message = extractPhoneErrorMessage(error);
+  if (!message) return new Error('lumi_signature_repair_failed');
+  if (message.toLowerCase().includes('lumi_signature_repair_failed')) {
+    return new Error(message);
+  }
+  return new Error(`lumi_signature_repair_failed: ${message}`);
+}
+
+function extractPhoneErrorMessage(error: unknown): string {
+  const raw = String((error as Error)?.message || error || '').trim();
+  if (!raw) return '';
+  const jsonStart = raw.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const payload = JSON.parse(raw.slice(jsonStart));
+      if (typeof payload?.error === 'string' && payload.error.trim()) return payload.error.trim();
+      if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
+    } catch {
+      // Keep the original transport text when the phone returns non-JSON content.
+    }
+  }
+  return raw;
+}
+
 function lumiPairingKey(baseUrl: string, token: string): string {
   return `${baseUrl}\n${token}`;
 }
@@ -276,7 +322,8 @@ async function getOrCreateLumiPairing(baseUrl: string, token: string, forcePair 
 }
 
 async function pairLumiSecureChannel(baseUrl: string, token: string): Promise<LumiPairing> {
-  const launcherId = `openclaw-${randomHex(8)}`;
+  const tokenHashValue = await tokenHash(baseUrl, token);
+  const launcherId = getStableLumiLauncherId(baseUrl, tokenHashValue);
   const payload = await rawPhoneRequest<any>(
     baseUrl,
     token,
@@ -293,7 +340,7 @@ async function pairLumiSecureChannel(baseUrl: string, token: string): Promise<Lu
   const data = payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object' ? payload.data : payload;
   const next: LumiPairing = {
     baseUrl,
-    tokenHash: await tokenHash(baseUrl, token),
+    tokenHash: tokenHashValue,
     launcherId: getTextValue(data?.launcherId) || launcherId,
     launcherSecret: getTextValue(data?.launcherSecret),
     pairedAt: new Date(Number(data?.pairedAt) || Date.now()).toISOString(),
@@ -317,6 +364,7 @@ async function readLumiPairing(baseUrl: string, token: string): Promise<LumiPair
 
 async function saveLumiPairing(pairing: LumiPairing) {
   if (typeof window === 'undefined') return;
+  saveStableLumiLauncherId(pairing.baseUrl, pairing.tokenHash, pairing.launcherId);
   const items = readLumiPairings().filter((item) => !(item.baseUrl === pairing.baseUrl && item.tokenHash === pairing.tokenHash));
   items.unshift(pairing);
   window.localStorage.setItem(LUMI_PAIRING_STORE_KEY, JSON.stringify(items.slice(0, 12)));
@@ -357,6 +405,38 @@ function pairingSummary(pairing: LumiPairing): PhonePairingSummary {
     pairedAt: pairing.pairedAt,
     expiresAt: new Date((Number.isFinite(pairedAt) ? pairedAt : Date.now()) + LUMI_PAIRING_MAX_AGE_MS).toISOString(),
   };
+}
+
+function stableLumiLauncherKey(baseUrl: string, tokenHashValue: string): string {
+  return `${baseUrl}\n${tokenHashValue}`;
+}
+
+function getStableLumiLauncherId(baseUrl: string, tokenHashValue: string): string {
+  if (typeof window === 'undefined') return `openclaw-${randomHex(8)}`;
+  const key = stableLumiLauncherKey(baseUrl, tokenHashValue);
+  const items = readStableLumiLauncherIds();
+  const existing = getTextValue(items[key]);
+  if (existing) return existing;
+  const launcherId = `openclaw-${randomHex(8)}`;
+  saveStableLumiLauncherId(baseUrl, tokenHashValue, launcherId);
+  return launcherId;
+}
+
+function saveStableLumiLauncherId(baseUrl: string, tokenHashValue: string, launcherId: string) {
+  if (typeof window === 'undefined') return;
+  const key = stableLumiLauncherKey(baseUrl, tokenHashValue);
+  const items = readStableLumiLauncherIds();
+  items[key] = launcherId;
+  window.localStorage.setItem(LUMI_LAUNCHER_ID_STORE_KEY, JSON.stringify(items));
+}
+
+function readStableLumiLauncherIds(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LUMI_LAUNCHER_ID_STORE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
+  } catch {
+    return {};
+  }
 }
 
 export async function warmPhoneSecurePairing(baseUrl: string, token: string, forcePair = false): Promise<PhonePairingSummary> {
@@ -411,7 +491,8 @@ async function hmacBase64Url(secret: string, text: string): Promise<string> {
 }
 
 async function buildLumiHeaders(pairing: LumiPairing, method: string, path: string, bodyText: string): Promise<Record<string, string>> {
-  const timestamp = String(Date.now());
+  // 用手机时钟签名(Date.now() + 手机↔电脑偏差),客户手机时间不准也不会 403。
+  const timestamp = String(Date.now() + phoneClockOffset(pairing.baseUrl));
   const nonce = randomHex(16);
   const bodyHash = await sha256Hex(bodyText);
   const signature = await hmacBase64Url(pairing.launcherSecret, [
