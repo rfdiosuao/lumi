@@ -877,13 +877,12 @@ function Copy-DesktopAgentSidecar {
     param([string]$PackageDir)
 
     $sourceRoots = @(
-        # Prefer the Luminode build that carries the launcher-compatible http-api-server routes.
-        (Join-Path $Root "sightflow-desktop-agent"),
-        # sightflow-desktop-agent 用 http-api-server,其路由与启动器 desktop_agent.py 的
-        # ALLOWED_PROXY_PATHS 完全对应,且含 sidecar 自启动;优先取它。
-        (Join-Path $Root "sightflow-desktop-agent"),
+        # sightflow-desktop-agent-main 是集成版:-main 更全的自动回复能力(多渠道/更可配置)
+        # + 移植进来的 http-api-server/sidecar(路由与启动器 desktop_agent.py 的
+        # ALLOWED_PROXY_PATHS 对应)。优先取它;sightflow-desktop-agent 为回退。
         (Join-Path $Root "sightflow-desktop-agent-main\sightflow-desktop-agent-main"),
-        (Join-Path $Root "sightflow-desktop-agent-main")
+        (Join-Path $Root "sightflow-desktop-agent-main"),
+        (Join-Path $Root "sightflow-desktop-agent")
     )
     $sourceRoot = $sourceRoots |
         Where-Object { Test-Path -LiteralPath (Join-Path $_ "package.json") } |
