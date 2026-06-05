@@ -16,7 +16,11 @@ from services.video_api import VideoApiError
 def _generate_image_payload(ctx, body: dict) -> dict:
     client = ctx.get_image_client()
     gateway_profile = ctx.get_license_mgr().current_gateway_profile()
-    base_url = str(body.get("baseUrl", "") or "").strip() or str((gateway_profile or {}).get("baseUrl") or "").strip()
+    base_url = (
+        str(body.get("baseUrl", "") or "").strip()
+        or str((gateway_profile or {}).get("imageBaseUrl") or "").strip()
+        or str((gateway_profile or {}).get("baseUrl") or "").strip()
+    )
     api_key = (
         str(body.get("apiKey", "") or "").strip()
         or str((gateway_profile or {}).get("imageApiKey") or "").strip()
@@ -29,6 +33,9 @@ def _generate_image_payload(ctx, body: dict) -> dict:
     count = body.get("count", 1)
 
     if not base_url:
+        diag = ctx.get_license_mgr().gateway_diagnosis()
+        if not diag.get("ok") and diag.get("code") == "gateway_fields_missing":
+            raise ValueError(diag["message"])
         raise ValueError("image baseUrl is required")
     if not prompt:
         raise ValueError("image prompt is required")
@@ -78,7 +85,11 @@ def _generate_video_payload(ctx, body: dict) -> dict:
     client = ctx.get_video_client()
     provider_id = body.get("providerId", "dashscope")
     gateway_profile = ctx.get_license_mgr().current_gateway_profile()
-    api_base = str(body.get("apiBase", "") or "").strip() or str((gateway_profile or {}).get("baseUrl") or "").strip()
+    api_base = (
+        str(body.get("apiBase", "") or "").strip()
+        or str((gateway_profile or {}).get("videoBaseUrl") or "").strip()
+        or str((gateway_profile or {}).get("baseUrl") or "").strip()
+    )
     model = (
         str(body.get("model", "") or "").strip()
         or str((gateway_profile or {}).get("videoModel") or "").strip()
@@ -97,6 +108,9 @@ def _generate_video_payload(ctx, body: dict) -> dict:
     image_path = body.get("imagePath")
 
     if not dash_key:
+        diag = ctx.get_license_mgr().gateway_diagnosis()
+        if not diag.get("ok") and diag.get("code") == "gateway_fields_missing":
+            raise ValueError(diag["message"])
         raise ValueError("video api key is required")
     if not prompt:
         raise ValueError("video prompt is required")
