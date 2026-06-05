@@ -147,8 +147,8 @@ export const DesktopAgentPage: React.FC = () => {
         <div className="flex items-start justify-between gap-6">
           <div>
             <div className="text-[11px] font-bold uppercase tracking-[0.32em] text-accent">LUMINODE</div>
-            <h1 className="mt-2 text-2xl font-black text-text">Luminode 桌面控制</h1>
-            <p className="mt-1 text-sm text-text-muted">启动器托管 Luminode，统一保管 token、策略和 Bridge 调用。</p>
+            <h1 className="mt-2 text-2xl font-black text-text">lumi 桌面控制台</h1>
+            <p className="mt-1 text-sm text-text-muted">启动器托管 Luminode 桌面代理，统一保管 token、策略和 Bridge 调用。</p>
           </div>
           <span className={`rounded-full border px-3 py-1.5 text-xs font-black ${tone.className}`}>{tone.label}</span>
         </div>
@@ -160,7 +160,7 @@ export const DesktopAgentPage: React.FC = () => {
             <h2 className="text-sm font-black text-text">连接配置</h2>
             <div className="mt-4 space-y-4">
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-text-muted">SightFlow 目录</span>
+                <span className="mb-1 block text-xs font-bold text-text-muted">Luminode 目录</span>
                 <Input
                   value={config.agentDir}
                   placeholder="留空时自动查找内置 agents/luminode-desktop"

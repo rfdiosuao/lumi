@@ -1,5 +1,5 @@
 import React from 'react';
-import { Camera, MessageCircleMore, RefreshCcw, Send, SquareTerminal, SquareStack, StopCircle } from 'lucide-react';
+import { Camera, MessageCircleMore, RefreshCcw, Send, ShieldCheck, SquareTerminal, SquareStack, StopCircle } from 'lucide-react';
 import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, TextArea, Toggle } from '../components/ui';
 import { loadDesktopSnapshot, requestBridgeData, saveDesktopAgentConfig, startDesktopAgent, stopDesktopAgent } from '../api/adapters';
 import { useAsync } from '../lib/useAsync';
@@ -11,7 +11,7 @@ export function DesktopPage() {
   const { data, loading, error, refresh } = useAsync(() => loadDesktopSnapshot(settings), [settings]);
   const [configDraft, setConfigDraft] = React.useState<Record<string, any>>({});
   const [screenshot, setScreenshot] = React.useState('');
-  const [message, setMessage] = React.useState('你好，这是一条来自 OpenClaw 预览控制台的回复。');
+  const [message, setMessage] = React.useState('你好，这是一条来自 lumi 桌面自动化的回复。');
 
   React.useEffect(() => {
     if (data?.config) setConfigDraft(data.config);
@@ -50,7 +50,7 @@ export function DesktopPage() {
   const handleScreenshot = async () => {
     try {
       const response = await requestBridgeData(settings, '/api/desktop-agent/screenshot', 'POST', {});
-      setScreenshot(response.data?.screenshot || '');
+      setScreenshot(normalizeScreenshot(response.data?.screenshot || response.data?.image || ''));
       pushToast({ tone: 'ok', title: '桌面截图已获取', detail: '已收到桌面 Agent 截图响应。' });
     } catch (err) {
       pushToast({ tone: 'danger', title: '截图失败', detail: String(err) });
@@ -66,13 +66,23 @@ export function DesktopPage() {
     }
   };
 
+  const config = (data?.config || {}) as Record<string, any>;
+  const policy = (config.policy || {}) as Record<string, any>;
+  const resolvedAgentDir = String(config.resolvedAgentDir || config.agentDir || '');
+  const commandText = data?.command?.length ? data.command.join(' ') : '';
+  const apiPort = Number(config.port || 21900);
+  const allowSend = Boolean(policy.allowWechatSend);
+  const sendMode = String((config.wechat || {}).sendMode || 'draft_only');
+  const canSend = Boolean(data?.apiReady && allowSend);
+  const healthMessage = String((data?.health as any)?.message || (data?.apiReady ? 'API ready' : '等待桌面 Agent 上线'));
+
   return (
     <div className="page-grid">
       <section className="hero-band">
         <div className="hero-copy">
-          <div className="eyebrow">桌面 RPA</div>
-          <h1>桌面控制端是原来内置的 RPA 自动回复项目。</h1>
-          <p>启动 Agent、查看当前桌面画面，并通过现有桥接接口发送受控的微信自动回复动作。</p>
+          <div className="eyebrow">桌面自动化</div>
+          <h1>lumi 桌面控制台</h1>
+          <p>统一托管内置 Luminode 代理，支持 Windows 与 macOS 桌面截图、微信未读检测和受控自动回复。</p>
         </div>
         <div className="hero-actions">
           {data?.running ? (
@@ -91,10 +101,10 @@ export function DesktopPage() {
       </section>
 
       <section className="stats-grid">
-        <StatCard label="运行状态" value={data?.running ? '运行中' : '未运行'} tone={data?.running ? 'ok' : 'warn'} />
-        <StatCard label="API 状态" value={data?.apiReady ? '就绪' : '等待'} tone={data?.apiReady ? 'ok' : 'warn'} />
-        <StatCard label="项目存在" value={data?.present ? '是' : '否'} tone={data?.present ? 'ok' : 'warn'} />
-        <StatCard label="配置" value={data?.configured ? '已配置' : '未设置'} tone={data?.configured ? 'ok' : 'warn'} />
+        <StatCard label="代理进程" value={data?.running ? '运行中' : '未运行'} hint={data?.pid ? `PID ${data.pid}` : '等待启动'} tone={data?.running ? 'ok' : 'warn'} />
+        <StatCard label="本地 API" value={data?.apiReady ? '就绪' : '等待'} hint={`127.0.0.1:${apiPort}`} tone={data?.apiReady ? 'ok' : 'warn'} />
+        <StatCard label="内置代理" value={data?.present ? '已发现' : '未找到'} hint={shortPath(resolvedAgentDir || 'agents/luminode-desktop')} tone={data?.present ? 'ok' : 'warn'} />
+        <StatCard label="发送策略" value={allowSend ? '已允许' : '需开启'} hint={sendModeLabel(sendMode)} tone={allowSend ? 'ok' : 'warn'} />
       </section>
 
       {loading ? (
@@ -104,39 +114,57 @@ export function DesktopPage() {
       ) : data ? (
         <section className="content-grid content-grid-desktop">
           <Panel className="surface-panel">
-            <SectionHeader eyebrow="状态" title="桌面 Agent 健康状态" subtitle="读取 /api/desktop-agent/status 与 /health 返回值。" action={<Chip tone={data.source === 'live' ? 'ok' : 'warn'}>{sourceLabel(data.source)}</Chip>} />
+            <SectionHeader
+              eyebrow="状态"
+              title="桌面代理健康状态"
+              subtitle="启动器通过 /api/desktop-agent/status 管理内置 Luminode sidecar。"
+              action={<Chip tone={data.source === 'live' ? 'ok' : 'warn'}>{sourceLabel(data.source)}</Chip>}
+            />
             <div className="detail-stack">
-              <div className="detail-row"><span className="detail-label">PID</span><span className="detail-value">{data.pid ?? '未知'}</span></div>
-              <div className="detail-row"><span className="detail-label">命令</span><span className="detail-value">{data.command.join(' ') || '暂无'}</span></div>
-              <div className="detail-row"><span className="detail-label">健康状态</span><span className="detail-value">{String((data.health as any)?.message || '暂无')}</span></div>
+              <div className="detail-row"><span className="detail-label">代理目录</span><span className="detail-value">{resolvedAgentDir || '未找到内置 agents/luminode-desktop'}</span></div>
+              <div className="detail-row"><span className="detail-label">启动命令</span><span className="detail-value">{commandText || '暂无'}</span></div>
+              <div className="detail-row"><span className="detail-label">健康状态</span><span className="detail-value">{healthMessage}</span></div>
             </div>
-            {screenshot ? <img className="desktop-shot" src={screenshot} alt="桌面截图" /> : <EmptyState title="暂无截图" description="点击截图后显示桌面 Agent 当前画面。" />}
+            {screenshot ? <img className="desktop-shot" src={screenshot} alt="桌面截图" /> : <EmptyState title="暂无桌面截图" description="启动代理并点击截图后，这里会显示当前桌面画面。" />}
           </Panel>
 
           <Panel className="surface-panel rpa-actions-panel">
-            <SectionHeader eyebrow="操作" title="自动回复操作" subtitle="通过现有 API 截屏、读取未读消息或发送准备好的微信回复。" />
+            <SectionHeader eyebrow="操作" title="受控桌面动作" subtitle="截图和未读检测默认安全可用；自动发送需要在策略里明确开启。" />
             <div className="button-row">
-              <Button variant="secondary" icon={Camera} onClick={handleScreenshot}>截图</Button>
-              <Button variant="secondary" icon={MessageCircleMore} onClick={() => handleAction('/api/desktop-agent/wechat/unread', {})}>未读</Button>
-              <Button variant="success" icon={Send} onClick={() => handleAction('/api/desktop-agent/wechat/send', { text: message })}>发送</Button>
+              <Button variant="secondary" icon={Camera} onClick={handleScreenshot} disabled={!data.apiReady}>截图</Button>
+              <Button variant="secondary" icon={MessageCircleMore} onClick={() => handleAction('/api/desktop-agent/wechat/unread', {})} disabled={!data.apiReady}>未读</Button>
+              <Button variant="success" icon={Send} onClick={() => handleAction('/api/desktop-agent/wechat/send', { text: message, confirmed: true })} disabled={!canSend}>发送</Button>
             </div>
-            <Field label="回复内容"><TextArea rows={5} value={message} onChange={(event) => setMessage(event.target.value)} /></Field>
+            {!canSend ? (
+              <InlineState
+                tone="warn"
+                title="自动发送当前未开启"
+                description="在下方策略中开启“允许微信发送”，并确认发送模式后再执行。"
+                icon={ShieldCheck}
+              />
+            ) : null}
+            <Field label="回复内容" hint={sendModeLabel(sendMode)}><TextArea rows={5} value={message} onChange={(event) => setMessage(event.target.value)} /></Field>
           </Panel>
 
           <Panel className="surface-panel surface-panel-wide">
-            <SectionHeader eyebrow="配置" title="Agent 配置" subtitle="连接配置默认折叠，避免占用日常控制区。" />
+            <SectionHeader eyebrow="配置" title="代理配置" subtitle="留空目录时自动查找内置 agents/luminode-desktop，Mac 包会解析 Luminode.app。" />
             <details className="settings-details">
-              <summary>编辑桌面 Agent 配置</summary>
+              <summary>编辑桌面代理配置</summary>
               <div className="desktop-config-stack">
                 <div className="form-grid">
-                  <Field label="Agent 目录"><Input value={configDraft.agentDir || ''} onChange={(event) => setConfigDraft((state) => ({ ...state, agentDir: event.target.value }))} /></Field>
-                  <Field label="端口"><Input type="number" value={configDraft.port || 0} onChange={(event) => setConfigDraft((state) => ({ ...state, port: Number(event.target.value) || 0 }))} /></Field>
-                  <Field label="应用类型"><Input value={configDraft.appType || ''} onChange={(event) => setConfigDraft((state) => ({ ...state, appType: event.target.value }))} /></Field>
-                <Field label="令牌预览"><Input value={configDraft.tokenPreview || ''} onChange={(event) => setConfigDraft((state) => ({ ...state, tokenPreview: event.target.value }))} /></Field>
+                  <Field label="Agent 目录" hint="可留空使用内置代理"><Input value={configDraft.agentDir || ''} placeholder="agents/luminode-desktop 或 Luminode.app" onChange={(event) => setConfigDraft((state) => ({ ...state, agentDir: event.target.value }))} /></Field>
+                  <Field label="端口"><Input type="number" value={configDraft.port || 21900} onChange={(event) => setConfigDraft((state) => ({ ...state, port: Number(event.target.value) || 21900 }))} /></Field>
+                  <Field label="应用类型"><Input value={configDraft.appType || 'weixin'} onChange={(event) => setConfigDraft((state) => ({ ...state, appType: event.target.value }))} /></Field>
+                  <Field label="Token"><Input value={config.tokenPreview || '自动生成'} readOnly /></Field>
                 </div>
                 <Toggle checked={Boolean(configDraft.enabled)} onChange={(checked) => setConfigDraft((state) => ({ ...state, enabled: checked }))} label="启用" hint="通过 /api/desktop-agent/config 持久化" />
+                <div className="form-grid">
+                  <Toggle checked={Boolean((configDraft.policy as any)?.allowScreenshot ?? true)} onChange={(checked) => setConfigDraft((state) => ({ ...state, policy: { ...(state.policy as any), allowScreenshot: checked } }))} label="允许截图" />
+                  <Toggle checked={Boolean((configDraft.policy as any)?.allowWechatSend)} onChange={(checked) => setConfigDraft((state) => ({ ...state, policy: { ...(state.policy as any), allowWechatSend: checked } }))} label="允许微信发送" hint="危险动作，需要显式开启" />
+                  <Toggle checked={Boolean((configDraft.policy as any)?.requireConfirmForSend ?? true)} onChange={(checked) => setConfigDraft((state) => ({ ...state, policy: { ...(state.policy as any), requireConfirmForSend: checked } }))} label="发送需要确认" />
+                </div>
                 <div className="button-row">
-                  <Button variant="primary" icon={SquareStack} onClick={handleSave}>保存配置</Button>
+                  <Button variant="primary" icon={SquareStack} onClick={handleSave}>保存代理配置</Button>
                 </div>
               </div>
             </details>
@@ -147,11 +175,12 @@ export function DesktopPage() {
   );
 }
 
-function StatCard({ label, value, tone = 'neutral' }: { label: string; value: React.ReactNode; tone?: 'ok' | 'warn' | 'danger' | 'neutral' }) {
+function StatCard({ label, value, hint, tone = 'neutral' }: { label: string; value: React.ReactNode; hint?: React.ReactNode; tone?: 'ok' | 'warn' | 'danger' | 'neutral' }) {
   return (
     <div className={`stat-tile stat-tile-${tone}`}>
       <div className="stat-label">{label}</div>
       <div className="stat-value">{value}</div>
+      {hint ? <div className="stat-hint">{hint}</div> : null}
     </div>
   );
 }
@@ -163,4 +192,25 @@ function sourceLabel(value: string) {
     mixed: '混合',
   };
   return map[value] || value;
+}
+
+function normalizeScreenshot(value: string) {
+  if (!value) return '';
+  if (value.startsWith('data:')) return value;
+  return `data:image/png;base64,${value}`;
+}
+
+function shortPath(value: string) {
+  if (!value) return '未配置';
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  return parts.length > 3 ? `.../${parts.slice(-3).join('/')}` : value;
+}
+
+function sendModeLabel(value: string) {
+  const map: Record<string, string> = {
+    draft_only: '只生成草稿',
+    paste_only: '只粘贴不发送',
+    auto_enter: '允许回车发送',
+  };
+  return map[value] || value || '未设置';
 }

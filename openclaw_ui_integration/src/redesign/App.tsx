@@ -21,7 +21,7 @@ const ROUTE_TITLES: Record<RouteKey, string> = {
   integrations: '平台对接',
   studio: '图像 / 视频',
   phone: '手机控制台',
-  desktop: '桌面 RPA',
+  desktop: '桌面自动化',
   skills: 'Skills 工作区',
   diagnostics: '环境检测',
   settings: '统一设置',
