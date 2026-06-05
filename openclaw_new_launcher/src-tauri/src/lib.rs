@@ -231,7 +231,14 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     child_cmd.arg(py_path);
     child_cmd.env("PYTHONUTF8", "1");
     child_cmd.env("PYTHONIOENCODING", "utf-8");
-    child_cmd.env("PYTHONDONTWRITEBYTECODE", "1");
+    // Cache compiled bytecode in a writable, stable location to speed up cold
+    // starts. Previously bytecode writing was disabled entirely, which forced
+    // Python to recompile every module (fastapi/pydantic/uvicorn/...) on every
+    // launch. Routing the cache to a temp subdir keeps the delivered package
+    // clean and still works when the portable package sits on read-only media.
+    let pycache_dir = std::env::temp_dir().join("openclaw-pycache");
+    let _ = std::fs::create_dir_all(&pycache_dir);
+    child_cmd.env("PYTHONPYCACHEPREFIX", &pycache_dir);
     child_cmd.stdout(std::process::Stdio::piped());
     child_cmd.stderr(std::process::Stdio::piped());
     #[cfg(windows)]
@@ -307,6 +314,23 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
             break;
         }
         line.clear();
+    }
+
+    // The bridge prints BRIDGE_PORT/BRIDGE_TOKEN before uvicorn actually binds
+    // the socket, so a very early frontend request could hit connection-refused
+    // ("刚打开就报错"). Wait until the port is accepting connections before
+    // reporting success. This is best-effort: if it never becomes ready within
+    // the window we still return Ok and let the frontend retry.
+    let ready_port = BRIDGE_PORT.load(Ordering::Relaxed);
+    if ready_port != 0 {
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], ready_port));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     std::thread::spawn(move || {
@@ -480,7 +504,10 @@ async fn proxy_request(
     }
 
     let url = format!("http://127.0.0.1:{}/{}", port, path.trim_start_matches('/'));
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("bridge_client_failed: {}", e))?;
 
     let mut req = client.request(
         match method.as_str() {
@@ -541,6 +568,7 @@ async fn phone_proxy_request(
 
     let timeout = timeout_ms.unwrap_or(30_000).clamp(1_000, 615_000);
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_millis(timeout))
         .build()
         .map_err(|e| format!("phone_client_failed: {}", e))?;

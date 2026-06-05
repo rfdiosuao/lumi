@@ -147,6 +147,32 @@ class LicenseManager:
                 member.get("gatewayBaseUrl"),
                 member.get("gatewayUrl"),
             ).rstrip("/")
+            image_base_url = self._pick_text(
+                source.get("gatewayImageBaseUrl"),
+                source.get("imageBaseUrl"),
+                source.get("imageUrl"),
+                gateway.get("gatewayImageBaseUrl"),
+                gateway.get("imageBaseUrl"),
+                gateway.get("imageUrl"),
+                lease.get("gatewayImageBaseUrl"),
+                lease.get("imageBaseUrl"),
+                member.get("gatewayImageBaseUrl"),
+                member.get("imageBaseUrl"),
+                base_url,
+            ).rstrip("/")
+            video_base_url = self._pick_text(
+                source.get("gatewayVideoBaseUrl"),
+                source.get("videoBaseUrl"),
+                source.get("videoUrl"),
+                gateway.get("gatewayVideoBaseUrl"),
+                gateway.get("videoBaseUrl"),
+                gateway.get("videoUrl"),
+                lease.get("gatewayVideoBaseUrl"),
+                lease.get("videoBaseUrl"),
+                member.get("gatewayVideoBaseUrl"),
+                member.get("videoBaseUrl"),
+                base_url,
+            ).rstrip("/")
             token = self._pick_text(
                 source.get("gatewayAccessToken"),
                 source.get("gatewayToken"),
@@ -236,6 +262,8 @@ class LicenseManager:
             features = source.get("features")
             return {
                 "baseUrl": base_url,
+                "imageBaseUrl": image_base_url,
+                "videoBaseUrl": video_base_url,
                 "apiKey": token,
                 "imageApiKey": image_token or token,
                 "videoApiKey": video_token or token,
@@ -287,6 +315,72 @@ class LicenseManager:
 
     def has_gateway_profile(self) -> bool:
         return self.current_gateway_profile() is not None
+
+    def gateway_diagnosis(self) -> dict[str, Any]:
+        """Explain why a gateway profile did or didn't resolve.
+
+        ``current_gateway_profile`` silently returns ``None`` when the base URL
+        or token can't be picked out of the (many) candidate field names. That
+        turns a server-side field rename into an opaque "生成失败". This guard
+        names the inspected source and the missing key fields so the failure is
+        actionable instead of silent. It does not change resolution behavior.
+        """
+        profile = self.current_gateway_profile()
+        if profile:
+            return {"ok": True, "profile": profile}
+
+        # NOTE: read_json(path, None) returns {} (not None) for a missing file,
+        # so check for a non-empty dict to tell "no session" apart from "session
+        # present but missing fields".
+        member_session = read_json(self.paths.member_session_file, None)
+        license_data = self.current_license()
+        source: dict[str, Any] | None = None
+        source_name = ""
+        if isinstance(member_session, dict) and member_session:
+            source, source_name = member_session, "member"
+        elif isinstance(license_data, dict) and license_data:
+            source, source_name = license_data, "license"
+
+        if not isinstance(source, dict):
+            return {
+                "ok": False,
+                "code": "no_gateway_source",
+                "message": "未找到会员托管或授权网关配置，请先激活会员或导入授权后再使用生图/视频。",
+                "source": None,
+                "missing": ["baseUrl", "token"],
+            }
+
+        def _has(*keys: str) -> bool:
+            nests = [source]
+            for nested_key in ("gateway", "lease", "member"):
+                nested = source.get(nested_key)
+                if isinstance(nested, dict):
+                    nests.append(nested)
+            return any(
+                str(nest.get(key) or "").strip()
+                for nest in nests
+                if isinstance(nest, dict)
+                for key in keys
+            )
+
+        missing: list[str] = []
+        if not _has("gatewayBaseUrl", "gatewayUrl", "baseUrl", "url"):
+            missing.append("baseUrl")
+        if not _has("gatewayAccessToken", "gatewayToken", "memberToken", "apiKey", "token"):
+            missing.append("token")
+
+        return {
+            "ok": False,
+            "code": "gateway_fields_missing",
+            "message": (
+                f"会员/授权网关配置不完整（来源：{source_name}），缺少必要字段："
+                f"{', '.join(missing) or '未知'}。"
+                "可能是授权服务端下发的字段名与客户端不一致，请联系服务方核对网关字段。"
+            ),
+            "source": source_name,
+            "presentKeys": sorted(key for key in source.keys() if isinstance(key, str))[:40],
+            "missing": missing,
+        }
 
     def diagnose(self) -> dict[str, Any]:
         gateway_profile = self.current_gateway_profile()
@@ -514,6 +608,19 @@ class LicenseManager:
         if isinstance(theme_data, dict) and theme_data.get("colors"):
             write_json(self.paths.theme_json, theme_data)
         return self._with_license_meta(license_data)
+
+    def client_config(self) -> dict[str, Any]:
+        request = urllib.request.Request(
+            f"{LICENSE_SERVER_URL.rstrip('/')}/api/client/config",
+            headers={"User-Agent": "Lumi-Desktop/2.0"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
 
     def get_brand_config(self) -> dict[str, Any] | None:
         license_data = self.current_license()

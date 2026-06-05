@@ -65,11 +65,12 @@ class DashScopeVideoClient:
                     api_base=api_base, model=model, on_status=on_status
                 )
 
+            submit_url, task_url = self._dashscope_urls(api_base)
             body = self._build_dashscope_body(prompt, mode, resolution, duration, ratio, image_path, model)
-            task_id = self._submit_dashscope_task(dash_key, body)
+            task_id = self._submit_dashscope_task(dash_key, body, submit_url)
             if on_status:
                 on_status(f"任务已提交：{task_id[:8]}...，等待生成", "accent")
-            return self._poll_dashscope_and_download(dash_key, task_id, on_status)
+            return self._poll_dashscope_and_download(dash_key, task_id, on_status, task_url)
         except urllib.error.HTTPError as error:
             raise VideoApiError(_http_error_message(error)) from error
         except Exception as error:
@@ -110,9 +111,24 @@ class DashScopeVideoClient:
             "parameters": {"resolution": resolution, "duration": duration},
         }
 
-    def _submit_dashscope_task(self, dash_key: str, body: dict) -> str:
+    def _dashscope_urls(self, api_base: str) -> tuple[str, str]:
+        """Resolve the DashScope-compatible submit/poll URLs.
+
+        When ``api_base`` is empty this reproduces the official Aliyun
+        endpoints.  When the member gateway (or a "快乐马"/中转站) supplies a
+        compatible base URL we derive the submit and task-poll URLs from it so
+        the gateway token is sent to the gateway instead of real Aliyun.
+        """
+        base = (api_base or "").strip().rstrip("/")
+        if not base:
+            return DASHSCOPE_VIDEO_URL, DASHSCOPE_TASK_URL
+        submit_suffix = "/services/aigc/video-generation/video-synthesis"
+        root = base[: -len(submit_suffix)] if base.endswith(submit_suffix) else base
+        return f"{root}{submit_suffix}", f"{root}/tasks/{{task_id}}"
+
+    def _submit_dashscope_task(self, dash_key: str, body: dict, submit_url: str = DASHSCOPE_VIDEO_URL) -> str:
         request = urllib.request.Request(
-            DASHSCOPE_VIDEO_URL,
+            submit_url,
             data=json.dumps(body).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
@@ -127,8 +143,14 @@ class DashScopeVideoClient:
             raise VideoApiError(data.get("message", "任务提交失败"))
         return task_id
 
-    def _poll_dashscope_and_download(self, dash_key: str, task_id: str, on_status: StatusCallback | None) -> bytes:
-        poll_url = DASHSCOPE_TASK_URL.format(task_id=task_id)
+    def _poll_dashscope_and_download(
+        self,
+        dash_key: str,
+        task_id: str,
+        on_status: StatusCallback | None,
+        task_url_template: str = DASHSCOPE_TASK_URL,
+    ) -> bytes:
+        poll_url = task_url_template.format(task_id=task_id)
         for attempt in range(120):
             time.sleep(5)
             request = urllib.request.Request(poll_url, headers={"Authorization": f"Bearer {dash_key}"})

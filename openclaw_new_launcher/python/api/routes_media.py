@@ -23,7 +23,11 @@ def register_media_routes(app, ctx) -> None:
         body = await ctx.body(request)
         client = ctx.get_image_client()
         gateway_profile = ctx.get_license_mgr().current_gateway_profile()
-        base_url = str(body.get("baseUrl", "") or "").strip() or str((gateway_profile or {}).get("baseUrl") or "").strip()
+        base_url = (
+            str(body.get("baseUrl", "") or "").strip()
+            or str((gateway_profile or {}).get("imageBaseUrl") or "").strip()
+            or str((gateway_profile or {}).get("baseUrl") or "").strip()
+        )
         api_key = (
             str(body.get("apiKey", "") or "").strip()
             or str((gateway_profile or {}).get("imageApiKey") or "").strip()
@@ -36,6 +40,9 @@ def register_media_routes(app, ctx) -> None:
         count = body.get("count", 1)
 
         if not base_url:
+            diag = ctx.get_license_mgr().gateway_diagnosis()
+            if not diag.get("ok") and diag.get("code") == "gateway_fields_missing":
+                return ctx.fastapi_json({"error": diag["message"]}, 400)
             return ctx.fastapi_json({"error": "中转站地址不能为空"}, 400)
         if not prompt:
             return ctx.fastapi_json({"error": "提示词不能为空"}, 400)
@@ -88,7 +95,11 @@ def register_media_routes(app, ctx) -> None:
         client = ctx.get_video_client()
         provider_id = body.get("providerId", "dashscope")
         gateway_profile = ctx.get_license_mgr().current_gateway_profile()
-        api_base = str(body.get("apiBase", "") or "").strip() or str((gateway_profile or {}).get("baseUrl") or "").strip()
+        api_base = (
+            str(body.get("apiBase", "") or "").strip()
+            or str((gateway_profile or {}).get("videoBaseUrl") or "").strip()
+            or str((gateway_profile or {}).get("baseUrl") or "").strip()
+        )
         model = (
             str(body.get("model", "") or "").strip()
             or str((gateway_profile or {}).get("videoModel") or "").strip()
@@ -107,6 +118,9 @@ def register_media_routes(app, ctx) -> None:
         image_path = body.get("imagePath")
 
         if not dash_key:
+            diag = ctx.get_license_mgr().gateway_diagnosis()
+            if not diag.get("ok") and diag.get("code") == "gateway_fields_missing":
+                return ctx.fastapi_json({"error": diag["message"]}, 400)
             return ctx.fastapi_json({"error": "视频服务密钥不能为空"}, 400)
         if not prompt:
             return ctx.fastapi_json({"error": "提示词不能为空"}, 400)
