@@ -195,12 +195,22 @@ class DesktopAgentService:
             "LUMINODE_AGENT_TOKEN": str(config.get("token") or ""),
             "LUMINODE_APP_TYPE": str(config.get("appType") or "weixin"),
             "LUMINODE_POLICY_JSON": json.dumps(self.public_config(config), ensure_ascii=False),
+            "SIGHTFLOW_HTTP_API_AUTOSTART": "1" if config.get("autoStartHttpApi", True) else "0",
+            "SIGHTFLOW_HTTP_API_PORT": str(sidecar_port),
+            "SIGHTFLOW_AGENT_TOKEN": sidecar_token,
+            "SIGHTFLOW_APP_TYPE": sidecar_app_type,
         })
         api_key = self._primary_api_key()
         if api_key:
             env["LUMINODE_API_KEY"] = api_key
+        if sidecar_provider.get("apiKey"):
+            env["SIGHTFLOW_API_KEY"] = sidecar_provider["apiKey"]
+        if sidecar_provider.get("baseUrl"):
+            env["SIGHTFLOW_BASE_URL"] = sidecar_provider["baseUrl"]
+        if sidecar_provider.get("model"):
+            env["SIGHTFLOW_MODEL"] = sidecar_provider["model"]
 
-        self.append_log(f"[DesktopAgent] Starting Luminode: {' '.join(command)}\n")
+        self.append_log(f"[DesktopAgent] Starting Luminode: {' '.join(self._redact_command(command))}\n")
         popen_kwargs = self._popen_platform_kwargs()
         self.process = subprocess.Popen(
             command,
@@ -219,6 +229,8 @@ class DesktopAgentService:
         return self.status()
 
     def stop(self) -> dict:
+        config = self.read_config()
+        stopped = False
         if self.process and self.process.poll() is None:
             pid = self.process.pid
             self.append_log(f"[DesktopAgent] Stopping PID {pid}\n")
@@ -228,6 +240,9 @@ class DesktopAgentService:
             except subprocess.TimeoutExpired:
                 self._kill_process_tree(pid)
                 pass
+            stopped = True
+        if not stopped:
+            stopped = self._stop_process_on_port(int(config.get("port") or self.DEFAULT_PORT))
         self.process = None
         return self.status()
 
@@ -389,6 +404,66 @@ class DesktopAgentService:
                 os.kill(pid, signal.SIGKILL)
             except Exception:
                 pass
+
+    def _redact_command(self, command: list[str]) -> list[str]:
+        redacted: list[str] = []
+        hide_next = False
+        sensitive_flags = {"--token", "--api-key"}
+        for part in command:
+            if hide_next:
+                redacted.append("[redacted]")
+                hide_next = False
+                continue
+            redacted.append(part)
+            if part in sensitive_flags:
+                hide_next = True
+        return redacted
+
+    def _stop_process_on_port(self, port: int) -> bool:
+        if port <= 0:
+            return False
+        pids = self._listening_pids_for_port(port)
+        stopped = False
+        for pid in pids:
+            if not pid or pid == str(os.getpid()):
+                continue
+            self.append_log(f"[DesktopAgent] Stopping listener on port {port}: PID {pid}\n")
+            if os.name == "nt":
+                result = subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", pid],
+                    capture_output=True,
+                    text=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                stopped = stopped or result.returncode == 0
+            else:
+                result = subprocess.run(["kill", "-TERM", pid], capture_output=True, text=True)
+                stopped = stopped or result.returncode == 0
+        return stopped
+
+    def _listening_pids_for_port(self, port: int) -> set[str]:
+        if os.name == "nt":
+            try:
+                result = subprocess.run(
+                    ["netstat", "-ano", "-p", "tcp"],
+                    capture_output=True,
+                    text=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception:
+                return set()
+            pids: set[str] = set()
+            suffix = f":{port}"
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[1].endswith(suffix) and parts[3].upper() == "LISTENING":
+                    pids.add(parts[-1])
+            return pids
+        try:
+            result = subprocess.run(["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True)
+        except Exception:
+            return set()
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
     def _deep_merge(self, base: dict, updates: dict) -> dict:
         merged = dict(base)

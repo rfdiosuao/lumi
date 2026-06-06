@@ -279,6 +279,7 @@ async function buildContext(args) {
       phoneVerifier: path.join(root, 'scripts', 'verify-phone-agent.ps1'),
       coldStartBenchmarkCli: path.join(root, 'scripts', 'measure-cold-start.ps1'),
       phoneDemoCli: path.join(root, 'scripts', 'openclaw-phone-demo.mjs'),
+      desktopAgentCli: path.join(root, 'scripts', 'openclaw-desktop-agent.mjs'),
     },
     capabilities: {
       imageGeneration: {
@@ -342,13 +343,22 @@ async function buildContext(args) {
         configPath: 'data/.openclaw/launcher/desktop-agent.json',
         tokenAvailable: desktopFileConfig.tokenAvailable,
         controlPolicy: 'bridge-only',
+        agentCli: 'npm run desktop:agent',
+        replyCli: 'npm run desktop:reply',
+        replyPolicy: 'observe first; send only with explicit --confirmed user approval',
         tokenPolicy: 'never expose token or Luminode port; call through launcher Bridge /api/desktop-agent/*',
         tools: [
+          'desktop.status',
+          'desktop.health',
+          'desktop.start',
+          'desktop.stop',
           'desktop.screenshot',
           'desktop.click',
           'desktop.type',
           'wechat.send',
           'wechat.unread',
+          'desktop.reply.observe',
+          'desktop.reply.once',
         ],
       },
       portableRuntime: {
@@ -424,4 +434,3 @@ main().catch((error) => {
   console.error(error?.message || error);
   process.exit(1);
 });
-
