@@ -1,57 +1,70 @@
-# 鎺堟潈鍚庡彴绾夸笂绔欑偣闂璁板綍
+# License Admin Site Audit - 2026-05-21
 
-> 妫€鏌ュ璞★細`https://license.heang.top/admin`
-> 妫€鏌ユ椂闂达細2026-05-21
-> 妫€鏌ユ柟寮忥細绾夸笂 HTML 鎶撳彇銆丒dge Headless 妗岄潰/绉诲姩鎴浘銆佸叕寮€鎺ュ彛鐘舵€併€佸搷搴斿ご妫€鏌ャ€?
-> 缁撹锛氱嚎涓婂凡缁忔槸鏂扮増鍚庡彴锛屼絾杩樻湁鍑犻」鐢熶骇浣撻獙鍜屽畨鍏ㄦ不鐞嗗€洪渶瑕佹帓鏈熴€?
-## 宸茬‘璁ゆ甯?
-- 绾夸笂 HTML 宸插寘鍚柊鐗堝叆鍙ｏ細`濂楅妯℃澘`銆乣鎿嶄綔瀹¤`銆乣婵€娲昏鎯卄銆乣鎼滅储瀹㈡埛 / 鎺堟潈鐮乣銆?- `/health` 杩斿洖 200銆?- 鏈甫绠＄悊鍛?Token 璁块棶 `/admin/api/codes`銆乣/admin/api/plans`銆乣/admin/api/audit-logs` 杩斿洖 401銆?- `X-Frame-Options: SAMEORIGIN` 鍜?`X-Content-Type-Options: nosniff` 宸插瓨鍦ㄣ€?
-## 宸蹭慨澶嶏細宸︿晶瀵艰埅鏃犲搷搴?
-璇佹嵁锛歚浼氬憳濂楅`銆乣缃戝叧閰嶇疆`銆乣鎿嶄綔瀹¤`銆乣鏂囨。` 鍘熸潵鍙槸闈欐€佹寜閽紝娌℃湁缁戝畾鐐瑰嚮浜嬩欢銆?
-淇锛?
-- 宸︿晶瀵艰埅宸叉敼鎴愮湡瀹為敋鐐瑰鑸€?- `浼氬憳濂楅` 璺宠浆鍒板椁愭ā鏉垮尯銆?- `缃戝叧閰嶇疆` 璺宠浆鍒扮嫭绔嬬綉鍏抽厤缃尯锛屽苟灞曠ず鍚勫椁愮綉鍏虫槸鍚﹀凡閰嶇疆銆?- `鎿嶄綔瀹¤` 璺宠浆鍒板璁¤〃銆?- `鏂囨。` 璺宠浆鍒版枃妗ｅ尯锛屽垪鍑烘搷浣滄墜鍐屻€佺敓浜у€哄姟鍙拌处銆佺珯鐐瑰璁¤褰曘€?
-楠屾敹鏂瑰紡锛?
-- 鐐瑰嚮宸︿晶浜斾釜瀵艰埅鎸夐挳锛岄〉闈㈠簲婊氬姩鍒板搴斿尯鍩熴€?- 褰撳墠瀵艰埅鎸夐挳搴旈珮浜€?
-## 宸蹭慨澶嶏細绉诲姩绔竷灞€婧㈠嚭
+Target: `https://license.heang.top/admin`
 
-璇佹嵁锛?90px 瀹界Щ鍔ㄦ埅鍥句腑锛宍鎺堟潈涓績` 椤堕儴鎸夐挳鍖哄煙琚尋鍒板彸渚э紝`鍒锋柊` 鎸夐挳鍙湶鍑轰竴閮ㄥ垎銆?
-褰卞搷锛氭墜鏈烘垨绐勫睆杩滅▼妗岄潰閲屾棤娉曞畬鏁存搷浣滈《閮ㄦ寜閽€?
-淇锛?
-- 鍦?`@media (max-width: 700px)` 涓嬭 `.topbar` 鏀规垚绾靛悜甯冨眬銆?- `.top-actions` 璁句负 `width: 100%`锛屾寜閽敼鎴愪袱鍒楁帓鍒椼€?- 缁?`.content` 璁剧疆 `min-width: 0`锛岄伩鍏嶅唴閮?flex 瀛愬厓绱犳拺寮€椤甸潰銆?
-楠屾敹鏂瑰紡锛?
-- 390 x 844 鎴浘閲屼笉鍑虹幇妯悜瑁佸垏銆?- `鍒锋柊`銆乣瀵煎嚭鍏ㄩ儴`銆乣鎵归噺鏀规湀鍗銆乣娓呯┖鍏ㄩ儴` 鍏ㄩ儴鍙銆?
-## P1锛氬畨鍏ㄥ搷搴斿ご涓嶅畬鏁?
-璇佹嵁锛氱嚎涓?`/admin` 缂哄皯锛?
+This note records the production review of the OpenClaw license admin console. The online site was already running the newer admin UI, but several production hardening items were still worth tracking.
+
+## Confirmed Working
+
+- `/health` returned HTTP 200.
+- Unauthenticated requests to `/admin/api/codes`, `/admin/api/plans`, and `/admin/api/audit-logs` returned HTTP 401.
+- `X-Frame-Options: SAMEORIGIN` and `X-Content-Type-Options: nosniff` were present.
+- The admin console included sections for plans, gateway configuration, audit records, and documentation.
+
+## Fixed Items
+
+### Left Navigation
+
+The left-side navigation buttons were changed from static buttons into real anchors:
+
+- Plans jump to the plan template section.
+- Gateway configuration jumps to the gateway profile section.
+- Audit records jump to the audit table.
+- Documentation jumps to the operations notes.
+
+Validation:
+
+- Clicking each navigation item scrolls to the matching section.
+- The active navigation item is highlighted.
+
+### Mobile Layout
+
+The mobile top bar previously overflowed on narrow screens. The layout now stacks the top actions under the header when the viewport is narrow.
+
+Validation:
+
+- A 390 x 844 viewport should not show horizontal clipping.
+- Refresh, export, batch update, and clear actions should remain visible.
+
+## Remaining Production Debt
+
+### P1: Security Headers
+
+Recommended headers for `/admin` and `/admin/api/*`:
+
 - `Content-Security-Policy`
 - `Referrer-Policy`
 - `Strict-Transport-Security`
-- `Cache-Control`
+- `Cache-Control: no-store`
 
-褰卞搷锛氬悗鍙伴〉闈㈡姉娉ㄥ叆銆佽烦杞硠闇层€丠TTPS 寮哄埗鍜屾晱鎰熼〉闈㈢紦瀛樻帶鍒朵笉瓒炽€?
-寤鸿淇锛?
-- 鍦?Nginx 鎴?Python 鏈嶅姟灞傝ˉ瀹夊叏澶淬€?- `/admin` 鍜?`/admin/api/*` 鑷冲皯璁剧疆 `Cache-Control: no-store`銆?- HTTPS 姝ｅ父鍚庤ˉ `Strict-Transport-Security: max-age=31536000; includeSubDomains`銆?
-## P1锛氱鐞嗗憳 Token 瀛樺湪娴忚鍣?localStorage
+### P1: Admin Token Storage
 
-璇佹嵁锛氬悗鍙板墠绔娇鐢?`localStorage.setItem("openclawAdminToken", token())`銆?
-褰卞搷锛氬鏋滄祻瑙堝櫒琚悓婧愯剼鏈薄鏌撴垨鐢佃剳琚复鏃跺€熺敤锛孴oken 鏇村鏄撻暱鏈熸畫鐣欍€?
-寤鸿淇锛?
-- 鐭湡锛氬鍔犫€滈€€鍑虹櫥褰?娓呴櫎 Token鈥濇寜閽€?- 涓湡锛氭敼鎴愭湇鍔＄ session cookie锛宍HttpOnly + Secure + SameSite=Strict`銆?- 鑷冲皯缁欏悗鍙版枃妗ｅ啓鏄庯細鍏敤鐢佃剳涓嶈淇濆瓨 Token銆?
-## P1锛氭竻绌哄叏閮ㄤ粛鏄祻瑙堝櫒 confirm
+The admin UI still stores the admin token in browser storage. Short-term mitigation is an explicit logout button that clears local state. Longer-term mitigation is server-side session cookies with `HttpOnly`, `Secure`, and `SameSite=Strict`.
 
-璇佹嵁锛歚娓呯┖鍏ㄩ儴`銆乣鍒犻櫎鎺堟潈鐮乣銆乣瑙ｇ粦婵€娲籤 閮戒緷璧?`confirm()`銆?
-褰卞搷锛氶珮鍗辨搷浣滃鏄撹鐐癸紱娴忚鍣ㄥ師鐢熺‘璁ゆ涓嶅睍绀鸿冻澶熶笂涓嬫枃锛屼篃涓嶈姹備簩娆¤緭鍏ャ€?
-寤鸿淇锛?
-- `娓呯┖鍏ㄩ儴` 鏀规垚鑷畾涔夊脊绐楋紝瑕佹眰杈撳叆 `CLEAR`銆?- 鍒犻櫎/瑙ｇ粦寮圭獥灞曠ず瀹㈡埛銆佹巿鏉冪爜灏惧彿銆佽澶?ID銆?- 鍚庣鍙互澧炲姞 `confirmText` 鏍￠獙锛岄槻姝㈢粫杩囧墠绔€?
-## P1锛氭湭鐧诲綍鎬佷俊鎭眰绾т笉澶熸槑纭?
-璇佹嵁锛氭湭杈撳叆 Token 鏃讹紝濂楅妯℃澘銆佹巿鏉冨垪琛ㄣ€佸璁¤〃鍚勮嚜鏄剧ず鈥滆杈撳叆绠＄悊鍛?Token 鍚庡埛鏂扳€濓紝浣嗛〉闈㈤《閮ㄤ粛鏄剧ず瀹屾暣鎿嶄綔鎸夐挳銆?
-褰卞搷锛氭柊鐢ㄦ埛鍙兘浠ヤ负鏈嶅姟寮傚父鎴栨寜閽彲鐩存帴鎿嶄綔銆?
-寤鸿淇锛?
-- 鏈櫥褰曟椂椤堕儴鏄剧ず缁熶竴鐧诲綍鎬佹彁绀恒€?- 绂佺敤 `鍒锋柊` 浠ュ鐨勫嵄闄╂寜閽細`瀵煎嚭鍏ㄩ儴`銆乣鎵归噺鏀规湀鍗銆乣娓呯┖鍏ㄩ儴`銆?- Token 淇濆瓨鍚庤嚜鍔ㄥ埛鏂版墍鏈夐潰鏉裤€?
-## P2锛氬璁℃绱㈣兘鍔涗笉瓒?
-璇佹嵁锛氬綋鍓嶅璁¤〃鍙睍绀烘渶杩戣褰曪紝娌℃湁绛涢€夈€佸鍑恒€佹寜鎺堟潈鐮佸畾浣嶃€?
-褰卞搷锛氬悗缁敓浜ф暟鎹浜嗕互鍚庯紝鍞悗杩芥煡浼氬彉鎱€?
-寤鸿淇锛?
-- 瀹¤鎸夊姩浣溿€佺洰鏍囨巿鏉冪爜銆佹椂闂磋寖鍥寸瓫閫夈€?- 鏀寔瀵煎嚭 CSV銆?- 鎺堟潈鐮佽鎯呴〉鏄剧ず璇ョ爜鐩稿叧瀹¤璁板綍銆?
-## 鍚庣画寤鸿
+### P1: Dangerous Action Confirmation
 
-浼樺厛鍏堜慨 P0 绉诲姩绔竷灞€锛屽啀琛?P1 瀹夊叏澶村拰 Token 閫€鍑虹櫥褰曘€傚璁＄瓫閫夈€丆SV 瀵煎嚭鍙互鏀惧埌鍚庣画杩愯惀澧炲己銆?
+High-risk actions should use custom confirmation dialogs instead of browser `confirm()`:
+
+- Clear all codes.
+- Delete a license code.
+- Unbind an activation.
+
+For destructive actions, require explicit confirmation text such as `CLEAR`.
+
+### P1: Unauthenticated State
+
+When no admin token is present, dangerous actions should be disabled and the page should show one clear login-state message instead of repeating per-panel errors.
+
+### P2: Audit Search
+
+Audit records should support filtering by action, target license code, and time range. CSV export should be added when production usage grows.
