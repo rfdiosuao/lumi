@@ -3,7 +3,10 @@ param(
     [switch]$SkipRust,
     [switch]$SkipPython,
     [switch]$SkipLicenseServer,
-    [switch]$SkipSourceText
+    [switch]$SkipSourceText,
+    [switch]$SkipWorkspaceHygiene,
+    [switch]$SkipAdminConsole,
+    [switch]$SkipLicenseFlowTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +17,8 @@ $TauriDir = Join-Path $LauncherDir "src-tauri"
 $LicenseServerDir = Join-Path $Root "license_server"
 $VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
 $VerifyVersionScript = Join-Path $PSScriptRoot "verify-version-consistency.ps1"
+$VerifyAdminConsoleScript = Join-Path $PSScriptRoot "verify-admin-console.ps1"
+$WorkspaceHygieneScript = Join-Path $PSScriptRoot "check-workspace-hygiene.ps1"
 
 function Invoke-Step {
     param(
@@ -34,6 +39,12 @@ if (-not $SkipSourceText) {
 
 Invoke-Step "Version consistency" {
     & powershell -ExecutionPolicy Bypass -File $VerifyVersionScript
+}
+
+if (-not $SkipWorkspaceHygiene) {
+    Invoke-Step "Workspace hygiene" {
+        & powershell -ExecutionPolicy Bypass -File $WorkspaceHygieneScript
+    }
 }
 
 if (-not $SkipFrontend) {
@@ -87,6 +98,23 @@ if (-not $SkipLicenseServer -and (Test-Path -LiteralPath (Join-Path $LicenseServ
             python -m py_compile server.py
         } finally {
             Pop-Location
+        }
+    }
+
+    if (-not $SkipAdminConsole) {
+        Invoke-Step "Admin console contract" {
+            & powershell -ExecutionPolicy Bypass -File $VerifyAdminConsoleScript
+        }
+    }
+
+    if (-not $SkipLicenseFlowTests) {
+        Invoke-Step "License server flow tests" {
+            Push-Location $Root
+            try {
+                python -m unittest discover -s license_server/tests -p "test_*.py" -v
+            } finally {
+                Pop-Location
+            }
         }
     }
 }

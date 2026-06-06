@@ -163,6 +163,18 @@ async function readDesktopConfig(root) {
   };
 }
 
+async function readPublishConfig(root) {
+  const publishConfig = await readJson(path.join(root, 'data', '.openclaw', 'launcher', 'publish.json'), {});
+  return {
+    platformId: hasText(publishConfig?.platformId) ? String(publishConfig.platformId).trim() : 'xiaohongshu',
+    transportMode: hasText(publishConfig?.transportMode) ? String(publishConfig.transportMode).trim() : 'direct',
+    album: hasText(publishConfig?.phoneAlbum) ? String(publishConfig.phoneAlbum).trim() : 'OpenClaw Publish',
+    selectedDeviceId: hasText(publishConfig?.selectedDeviceId) ? String(publishConfig.selectedDeviceId).trim() : '',
+    reverseRelayUrl: hasText(publishConfig?.reverseRelayUrl) ? String(publishConfig.reverseRelayUrl).trim() : '',
+    reverseChannelId: hasText(publishConfig?.reverseChannelId) ? String(publishConfig.reverseChannelId).trim() : '',
+  };
+}
+
 async function probePhone(baseUrl, token) {
   if (!hasText(baseUrl) || !hasText(token)) return null;
   const url = `${baseUrl.replace(/\/+$/, '')}/api/device/status`;
@@ -227,6 +239,7 @@ async function buildContext(args) {
   const videoConfig = await readJson(path.join(root, 'video_config.json'), {});
   const phoneFileConfig = await readPhoneConfig(root, args.deviceId);
   const desktopFileConfig = await readDesktopConfig(root);
+  const publishFileConfig = await readPublishConfig(root);
   const phoneUrl = args.phoneUrl || phoneFileConfig.baseUrl;
   const phoneAlbum = args.phoneAlbum || phoneFileConfig.album || 'OpenClaw';
   const tokenAvailable = hasText(args.phoneToken) || phoneFileConfig.tokenAvailable;
@@ -261,6 +274,7 @@ async function buildContext(args) {
       phoneAgentCli: path.join(root, 'scripts', 'openclaw-phone-agent.mjs'),
       phoneFleetCli: path.join(root, 'scripts', 'openclaw-phone-fleet.mjs'),
       phoneVideoCli: path.join(root, 'scripts', 'openclaw-phone-video.mjs'),
+      phonePublishCli: path.join(root, 'scripts', 'openclaw-publish-phone.mjs'),
       phoneGameCli: path.join(root, 'scripts', 'openclaw-phone-game.mjs'),
       phoneVerifier: path.join(root, 'scripts', 'verify-phone-agent.ps1'),
       coldStartBenchmarkCli: path.join(root, 'scripts', 'measure-cold-start.ps1'),
@@ -278,6 +292,21 @@ async function buildContext(args) {
         available: true,
         configured: isConfiguredConfig(videoConfig),
       },
+      platformPublish: {
+        available: true,
+        configured: Boolean(phoneUrl && tokenAvailable) || hasText(publishFileConfig.reverseRelayUrl),
+        controlPolicy: 'launcher-cli-wrapper',
+        directCli: 'npm run phone:publish -- --transport direct',
+        reverseCli: 'npm run phone:publish -- --transport reverse',
+        consumerEndpoint: '/api/lumi/publish/execute',
+        defaultPlatform: publishFileConfig.platformId,
+        defaultTransport: publishFileConfig.transportMode,
+        defaultAlbum: publishFileConfig.album,
+        selectedDeviceId: publishFileConfig.selectedDeviceId || null,
+        reverseRelayUrl: publishFileConfig.reverseRelayUrl || null,
+        reverseChannelId: publishFileConfig.reverseChannelId || null,
+        tokenPolicy: 'never expose token; publish through launcher CLI or reverse packet only',
+      },
       phoneAgent: {
         available: true,
         configured: hasText(phoneUrl) && tokenAvailable,
@@ -289,6 +318,7 @@ async function buildContext(args) {
         visionCli: 'npm run phone:vision',
         videoDownloadDir: path.join(root, 'data', 'phone-videos'),
         videoCli: 'npm run phone:video',
+        publishCli: 'npm run phone:publish',
         gameModeCli: 'npm run phone:game',
         shoppingDemoCli: 'npm run phone:demo:shopping -- --query "<search query>"',
         readDemoCli: 'npm run phone:demo:read',
@@ -312,7 +342,7 @@ async function buildContext(args) {
         configPath: 'data/.openclaw/launcher/desktop-agent.json',
         tokenAvailable: desktopFileConfig.tokenAvailable,
         controlPolicy: 'bridge-only',
-        tokenPolicy: 'never expose token or SightFlow port; call through launcher Bridge /api/desktop-agent/*',
+        tokenPolicy: 'never expose token or Luminode port; call through launcher Bridge /api/desktop-agent/*',
         tools: [
           'desktop.screenshot',
           'desktop.click',

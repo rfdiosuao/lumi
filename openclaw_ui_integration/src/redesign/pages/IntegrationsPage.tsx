@@ -27,7 +27,7 @@ type PlatformKey = 'feishu' | 'wecom' | 'wechat' | 'dingtalk' | 'slack' | 'webho
 type ChannelMode = 'push' | 'reply' | 'relay';
 type DeliveryTarget = 'service' | 'desktop' | 'phone';
 type MessageMode = 'text' | 'markdown' | 'card';
-type ScanPlatformKey = Extract<PlatformKey, 'feishu' | 'wechat'>;
+type ScanPlatformKey = Extract<PlatformKey, 'feishu' | 'wechat' | 'dingtalk'>;
 type FieldKey =
   | 'channelMode'
   | 'endpoint'
@@ -84,6 +84,13 @@ const SCAN_BINDING_META: Record<ScanPlatformKey, {
     args: ['scripts/bot-plugin-helper.mjs', 'login-weixin'],
     hint: '微信账号不在启动器里保存，只通过命令输出的二维码完成绑定。',
   },
+  dingtalk: {
+    label: '钉钉扫码授权',
+    commandName: 'bot-plugin-login-dingtalk',
+    fallbackCommandName: 'bot-plugin-login-dingtalk-node-exe',
+    args: ['scripts/bot-plugin-helper.mjs', 'login-dingtalk'],
+    hint: '调用钉钉官方 OpenClaw 连接器扫码授权，配置会写入启动器便携 data/.openclaw/openclaw.json。',
+  },
 };
 
 const PLATFORM_META: Record<PlatformKey, {
@@ -116,10 +123,10 @@ const PLATFORM_META: Record<PlatformKey, {
   },
   dingtalk: {
     label: '钉钉',
-    desc: '机器人通知和工作流回调',
-    hint: '适合把运行结果、诊断报告和内测提醒推送到钉钉群。',
-    fields: ['channelMode', 'webhookUrl', 'appId', 'appSecret', 'messageMode', 'deliveryTarget', 'notes'],
-    required: ['webhookUrl'],
+    desc: '官方机器人与 Stream 模式通道',
+    hint: '适合把 OpenClaw 作为钉钉内部机器人使用，通过官方连接器扫码创建并授权。',
+    fields: ['channelMode', 'appId', 'appSecret', 'messageMode', 'deliveryTarget', 'notes'],
+    required: [],
   },
   slack: {
     label: 'Slack',
@@ -720,7 +727,7 @@ function validatePlatform(id: PlatformKey, draft: IntegrationDraft, desktopBridg
 
 function extractBindingUrl(text: string): string {
   const urls = Array.from(text.matchAll(/https?:\/\/[^\s"'<>]+/g)).map((match) => match[0].replace(/[),.;，。]+$/g, ''));
-  return urls.find((url) => /open\.feishu\.cn|accounts\.feishu\.cn|accounts\.larksuite\.com|weixin|wechat|qrcode/i.test(url)) || urls[0] || '';
+  return urls.find((url) => /open\.feishu\.cn|accounts\.feishu\.cn|accounts\.larksuite\.com|dingtalk|oapi\.dingtalk\.com|login\.dingtalk\.com|weixin|wechat|qrcode/i.test(url)) || urls[0] || '';
 }
 
 function platformTone(id: PlatformKey, draft: IntegrationDraft): 'ok' | 'warn' | 'neutral' {
@@ -758,7 +765,7 @@ function isPlatformKey(value: unknown): value is PlatformKey {
 }
 
 function isScanPlatform(value: PlatformKey): value is ScanPlatformKey {
-  return value === 'feishu' || value === 'wechat';
+  return value === 'feishu' || value === 'wechat' || value === 'dingtalk';
 }
 
 function isChannelMode(value: unknown): value is ChannelMode {

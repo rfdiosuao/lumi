@@ -293,6 +293,7 @@ jobs:
           name: Lumi / OpenClaw ${{ inputs.tag_name || github.ref_name }}
           draft: false
           prerelease: false
+          make_latest: true
           generate_release_notes: false
           body_path: ci_release/RELEASE_BODY.md
           files: |
@@ -300,3 +301,150 @@ jobs:
             ci_artifacts/*.msi
             ci_artifacts/*.zip
             ci_artifacts/*.sha256.txt
+
+  macos:
+    name: macOS release build
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: openclaw_new_launcher/package-lock.json
+
+      - name: Setup Rust
+        run: |
+          rustup default stable
+          rustup show
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            openclaw_new_launcher/src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_new_launcher/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      - name: Install frontend dependencies
+        working-directory: openclaw_new_launcher
+        run: npm ci
+
+      - name: Verify version consistency
+        env:
+          RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          version="$(node -p "require('./openclaw_new_launcher/package.json').version")"
+          expected="v${version}"
+          if [ "$RELEASE_TAG" != "$expected" ]; then
+            echo "Release tag mismatch: $RELEASE_TAG, expected $expected"
+            exit 1
+          fi
+          echo "Version consistency check passed: $version"
+
+      - name: Build frontend
+        working-directory: openclaw_new_launcher
+        run: npm run build
+
+      - name: Check Rust
+        working-directory: openclaw_new_launcher/src-tauri
+        run: cargo check
+
+      - name: Build macOS bundles
+        working-directory: openclaw_new_launcher
+        run: npm run tauri -- build --bundles app,dmg
+
+      - name: Collect macOS release assets
+        run: |
+          set -euo pipefail
+          artifact_dir="$PWD/ci_artifacts"
+          bundle_dir="$PWD/openclaw_new_launcher/src-tauri/target/release/bundle"
+          version="$(node -p "require('./openclaw_new_launcher/package.json').version")"
+          mkdir -p "$artifact_dir"
+
+          dmg_path="$(find "$bundle_dir" -type f -name "*.dmg" | head -n 1 || true)"
+          if [ -z "$dmg_path" ]; then
+            echo "No macOS dmg was produced under $bundle_dir"
+            exit 1
+          fi
+          cp "$dmg_path" "$artifact_dir/OpenClaw-macOS-v${version}.dmg"
+
+          app_path="$(find "$bundle_dir" -type d -name "*.app" | head -n 1 || true)"
+          if [ -z "$app_path" ]; then
+            echo "No macOS app bundle was produced under $bundle_dir"
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$artifact_dir/OpenClaw-macOS-v${version}.app.zip"
+
+          for file in "$artifact_dir"/*; do
+            if [ -f "$file" ] && [[ "$file" != *.sha256.txt ]]; then
+              shasum -a 256 "$file" | sed "s#  $artifact_dir/#  #" > "$file.sha256.txt"
+            fi
+          done
+
+      - name: Upload macOS workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release-assets
+          path: ci_artifacts/*
+
+      - name: Upload macOS assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" ci_artifacts/* --repo "$GITHUB_REPOSITORY" --clobber
+
+          mkdir -p ci_release
+          body_path="ci_release/RELEASE_BODY.md"
+          commit="$(git rev-parse --short HEAD)"
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | sort_by(.name) | .[].name')"
+
+          {
+            echo "OpenClaw Launcher $RELEASE_TAG"
+            echo ""
+            echo "Build commit: $commit"
+            echo ""
+            echo "本次发布由 GitHub Actions 自动构建 Windows 与 macOS 产物。"
+            echo "This release was built by GitHub Actions for both Windows and macOS."
+            echo ""
+            echo "Assets:"
+            while IFS= read -r asset; do
+              [ -n "$asset" ] && echo "- \`$asset\`"
+            done <<< "$assets"
+            echo ""
+            echo "Windows:"
+            echo "- Use the installer assets for normal installation."
+            echo "- Use \`OpenClaw-Portable-*.zip\` for portable USB-style delivery."
+            echo ""
+            echo "macOS:"
+            echo "- Use \`OpenClaw-macOS-*.dmg\` for normal installation."
+            echo "- Use \`OpenClaw-macOS-*.app.zip\` when you need the raw app bundle."
+            echo ""
+            echo "Security:"
+            echo "- Check the matching \`.sha256.txt\` file after downloading."
+            echo "- Customer license files, install IDs, API keys, and local account caches are not bundled."
+          } > "$body_path"
+
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Lumi / OpenClaw $RELEASE_TAG" \
+            --notes-file "$body_path" \
+            --latest

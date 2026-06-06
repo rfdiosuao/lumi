@@ -342,7 +342,7 @@ async function buildContext(args) {
         configPath: 'data/.openclaw/launcher/desktop-agent.json',
         tokenAvailable: desktopFileConfig.tokenAvailable,
         controlPolicy: 'bridge-only',
-        tokenPolicy: 'never expose token or SightFlow port; call through launcher Bridge /api/desktop-agent/*',
+        tokenPolicy: 'never expose token or Luminode port; call through launcher Bridge /api/desktop-agent/*',
         tools: [
           'desktop.screenshot',
           'desktop.click',

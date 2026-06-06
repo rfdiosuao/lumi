@@ -9,6 +9,7 @@ import { DiagnosticsPage } from '../components/diagnostics/DiagnosticsPage';
 import { SkillsPage } from '../components/skills/SkillsPage';
 import { PhoneControlPage } from '../components/phone/PhoneControlPage';
 import { DesktopAgentPage } from '../components/desktop/DesktopAgentPage';
+import { PublishPage } from '../components/publish/PublishPage';
 
 const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
   dashboard: DashboardPage,
@@ -20,6 +21,7 @@ const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
   diagnostics: DiagnosticsPage,
   skills: SkillsPage,
   phone: PhoneControlPage,
+  publish: PublishPage,
   desktop: DesktopAgentPage,
 };
 

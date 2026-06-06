@@ -23,11 +23,11 @@ For product-level business scenarios, read `docs/OPENCLAW_APKCLAW_COMBINED_CAPAB
 - Scan and display launcher/OpenClaw skills.
 - Connect to the Android phone Agent over Wi-Fi.
 - Pull phone screen recordings back to the PC for AI demo material collection.
-- Host SightFlow Desktop Agent as a local desktop execution sidecar for screenshots, coordinate clicks, typing, and WeChat-oriented workflows.
+- Host Luminode Desktop Agent as a local desktop execution sidecar for screenshots, coordinate clicks, typing, and WeChat-oriented workflows.
 
 ## Desktop Agent Capabilities
 
-SightFlow Desktop Agent is the local PC executor. The launcher owns process lifecycle, token storage, diagnostics, policy enforcement, and Bridge proxying. OpenClaw must call the launcher Bridge instead of connecting to SightFlow directly.
+Luminode Desktop Agent is the local PC executor. The launcher owns process lifecycle, token storage, diagnostics, policy enforcement, and Bridge proxying. OpenClaw must call the launcher Bridge instead of connecting to Luminode directly.
 
 Current first-stage tools:
 
@@ -51,7 +51,7 @@ The Android phone Agent currently supports:
 
 - connection status and version checks;
 - screenshots and screen tree inspection;
-- device profile initialization, including model, memory, storage, installed apps, current UI, and preferred browser;
+- device profile initialization, including model, RAM, storage, installed apps, current UI, and preferred browser;
 - device profile vision hints for low-node, image-heavy, or game-like screens;
 - signed game/vision mode frame capture through `npm run phone:vision`, including optional grid overlay and image-to-screen coordinate mapping;
 - productized game/canvas loop through `npm run phone:game`: APKClaw Agent probe, signed vision frame, OpenClaw visual plan, launcher safety guard, APKClaw Agent guided execution, and after-frame verification;

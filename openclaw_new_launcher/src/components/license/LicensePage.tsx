@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { open } from '@tauri-apps/plugin-shell';
 import { Button, Input, showToast } from '../common';
 import { licenseApi } from '../../services/api';
 import { useAppStore } from '../../stores/appStore';
@@ -23,8 +24,26 @@ export const LicensePage: React.FC = () => {
   const [code, setCode] = useState('');
   const [activating, setActivating] = useState(false);
   const [statusText, setStatusText] = useState('');
+  const [cardSite, setCardSite] = useState<{ enabled?: boolean; label?: string; url?: string } | null>(null);
   const { isAuthorized, licenseInfo, setAuthorized, setLicenseInfo, setCurrentPage } = useAppStore();
   const appendLog = useLogStore((state) => state.append);
+
+  useEffect(() => {
+    let mounted = true;
+    licenseApi.clientConfig()
+      .then((config) => {
+        if (!mounted) return;
+        const site = config.cardSite;
+        if (site?.enabled && site.url) setCardSite(site);
+        else setCardSite(null);
+      })
+      .catch(() => {
+        if (mounted) setCardSite(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleActivate = async () => {
     if (!code.trim()) {
@@ -50,8 +69,8 @@ export const LicensePage: React.FC = () => {
       if (typeof (window as any).__reloadTheme === 'function') {
         await (window as any).__reloadTheme();
       }
-      setStatusText(`激活成功：${(license as any).licensee || 'Lumi User'}`);
-      appendLog(`[授权] 激活成功：${(license as any).licensee || 'Lumi User'}\n`);
+      setStatusText(`激活成功：${(license as any).licensee || 'OpenClaw User'}`);
+      appendLog(`[授权] 激活成功：${(license as any).licensee || 'OpenClaw User'}\n`);
       showToast('激活成功，主题已更新', 'success');
       setTimeout(() => setCurrentPage('terminal'), 1200);
     } catch (error: any) {
@@ -76,6 +95,19 @@ export const LicensePage: React.FC = () => {
       }
     } catch {
       showToast('刷新授权状态失败', 'error');
+    }
+  };
+
+  const handleOpenCardSite = async () => {
+    const url = String(cardSite?.url || '').trim();
+    if (!url) {
+      showToast('发卡网站暂未配置', 'info');
+      return;
+    }
+    try {
+      await open(url);
+    } catch {
+      showToast('打开购买页面失败，请检查发卡网站链接', 'error');
     }
   };
 
@@ -127,6 +159,11 @@ export const LicensePage: React.FC = () => {
             </Button>
             <Button onClick={handleRefresh} variant="quiet">刷新状态</Button>
             <Button onClick={() => setCurrentPage('diagnostics')} variant="quiet">环境诊断</Button>
+            {cardSite?.url && (
+              <Button onClick={handleOpenCardSite} variant="quiet">
+                {cardSite.label || '购买授权码'}
+              </Button>
+            )}
           </div>
 
           {statusText && (
@@ -140,7 +177,7 @@ export const LicensePage: React.FC = () => {
           )}
         </div>
 
-        <p className="mt-5 text-xs text-text-muted">安装 ID 会在激活时自动生成。Lumi 版仍沿用现有授权流程。</p>
+        <p className="mt-5 text-xs text-text-muted">安装 ID 会在激活时自动生成。OpenClaw 版仍沿用现有授权流程。</p>
       </div>
     </div>
   );

@@ -23,7 +23,7 @@ For product-level business scenarios, read `docs/OPENCLAW_APKCLAW_COMBINED_CAPAB
 - Scan and display launcher/OpenClaw skills.
 - Connect to the Android phone Agent over Wi-Fi.
 - Pull phone screen recordings back to the PC for AI demo material collection.
-- Host SightFlow Desktop Agent as a local desktop execution sidecar for screenshots, coordinate clicks, typing, and WeChat-oriented workflows.
+- Host Luminode Desktop Agent as a local desktop execution sidecar for screenshots, coordinate clicks, typing, and WeChat-oriented workflows.
 
 ## Built-In Office Skills
 
@@ -40,7 +40,7 @@ Use these as operating recipes for office workflows. They do not authorize destr
 
 ## Desktop Agent Capabilities
 
-SightFlow Desktop Agent is the local PC executor. The launcher owns process lifecycle, token storage, diagnostics, policy enforcement, and Bridge proxying. OpenClaw must call the launcher Bridge instead of connecting to SightFlow directly.
+Luminode Desktop Agent is the local PC executor. The launcher owns process lifecycle, token storage, diagnostics, policy enforcement, and Bridge proxying. OpenClaw must call the launcher Bridge instead of connecting to Luminode directly.
 
 Current first-stage tools:
 

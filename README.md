@@ -1,42 +1,76 @@
-# Lumi / OpenClaw 便携启动器
+# OpenClaw Launcher / Lumi Automation Workbench
 
-Lumi 是面向商家交付的 OpenClaw 便携式 AI 服务启动器。项目目标是把 OpenClaw 本体、离线依赖、授权激活、AI 生图、AI 视频、广告视频工作台和机器人绑定能力封装成一个客户可直接运行的桌面工具。
+[![CI](https://github.com/rfdiosuao/lumi/actions/workflows/ci.yml/badge.svg)](https://github.com/rfdiosuao/lumi/actions/workflows/ci.yml)
+[![Release](https://github.com/rfdiosuao/lumi/actions/workflows/release.yml/badge.svg)](https://github.com/rfdiosuao/lumi/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/rfdiosuao/lumi?include_prereleases&label=release)](https://github.com/rfdiosuao/lumi/releases)
 
-当前主力版本：`v2.0.1`
+> 中文: OpenClaw Launcher 是一套面向交付的 AI 自动化工作台,把 OpenClaw 运行时、桌面启动器、手机控制、桌面 RPA、IM 通道、图像/视频工作流和授权交付封装成客户能直接运行的产品包。
+>
+> English: OpenClaw Launcher is a delivery-ready AI automation workbench that packages the OpenClaw runtime, desktop launcher, phone control, desktop RPA, IM connectors, image/video workflows, and license delivery into a product-ready desktop distribution.
 
-## 当前状态
+Current launcher version: `v2.0.6`
+Bundled OpenClaw runtime target: `2026.6.1`
 
-- Windows 便携包：已支持根目录仅保留 `OpenClaw.exe` 和 `OpenClawFiles/`。
-- 授权码：支持在线激活，核心授权校验已迁移到 Rust 二进制，交付包不内置授权文件。
-- 环境诊断：未授权也可进入，可一键修复端口占用、残留进程和基础目录。
-- AI 生图 / AI 视频：支持 API 配置后调用。
-- 广告视频工作台：支持分镜、素材、九宫格和首尾帧工作流。
-- 飞书 / 微信机器人：支持离线插件包检测、安装和扫码/手动配置入口。
-- Skills：支持本地 Skill 包管理、启用/停用和 Skill 网站跳转。
-- 品牌换壳：支持通过主题文件替换 Logo、名称、窗口标题和主题颜色。
-- Mac 迁移：已提供源码包和迁移文档，仍需在真实 Mac 环境完成 `.app/.dmg` 验收。
+Repository: [github.com/rfdiosuao/lumi](https://github.com/rfdiosuao/lumi)
 
-## 目录结构
+---
+
+## 中文说明
+
+### 这是什么
+
+OpenClaw Launcher 不是一个演示壳,而是一套把 AI Agent 能力交付到真实桌面环境里的工程化平台。它把模型配置、OpenClaw 本体、Python Bridge、Tauri 桌面端、手机 APKClaw 控制、桌面 RPA、飞书/微信/钉钉等通道、在线授权、便携包打包和发布校验串成一条完整链路。
+
+目标很直接:让用户拿到一个包,解压或安装后就能开始做自动化任务,而不是先理解一堆 CLI、依赖、端口、token 和运行时目录。
+
+### 核心能力
+
+| 能力 | 说明 |
+| --- | --- |
+| OpenClaw 运行时封装 | 默认面向 OpenClaw `2026.6.1`,便携包内置 Node/OpenClaw 运行环境和 workspace 上下文 |
+| 桌面启动器 | Tauri 2 + React 18 + TypeScript,提供统一控制台、日志、环境诊断、模型配置和授权入口 |
+| 手机控制 | 连接 APKClaw,支持截图、状态读取、任务执行、录屏、图片导入、平台发布和安全签名通道 |
+| 桌面控制 | 集成 Luminode 桌面 Agent 源码,支持窗口识别、截图理解、坐标点击、回复发送和 Provider Hub |
+| IM 通道 | 飞书、微信、钉钉连接器入口,用于把自动化能力接入消息工作流 |
+| AI 图像与视频 | 支持图像生成/编辑、视频生成、广告分镜、首尾帧和素材工作流 |
+| Skills 工作区 | 内置办公向 skills,覆盖会议纪要、周报、PDF/OCR、Excel 分析、PPT 生成、文件整理等场景 |
+| 授权交付 | 在线 license server、设备绑定、授权状态检查,交付包不内置客户授权码 |
+| 便携发布 | Windows portable zip 只暴露 `OpenClaw.exe` + `OpenClawFiles/`,并自动清理 API Key、install id、license 和缓存 |
+| 跨平台构建 | Windows 生成安装包/便携包,macOS 生成 `.app` / `.dmg`,Release 自动附带 SHA256 |
+
+### 产品结构
 
 ```text
 .
-├─ openclaw_new_launcher/      # 主项目：Tauri + React + Python Bridge 启动器
-├─ license_server/             # 在线授权码服务器
-├─ scripts/                    # 仓库级检查、打包、发布脚本
-├─ docs/                       # 仓库级品牌、CI/CD、打包文档
-├─ data/                       # 本地运行状态目录，状态文件不提交
-└─ release/                    # 本地构建产物，不提交到仓库
+├─ openclaw_new_launcher/                 # 主启动器: Tauri + React + Python Bridge
+│  ├─ src/                                 # 前端功能页: 手机控制/桌面控制/图像/视频/Skills/授权/诊断
+│  ├─ python/                              # 本地 FastAPI Bridge 与服务层
+│  ├─ openclaw-workspace/                  # 交付给 OpenClaw 的 Agent 上下文、能力清单和 skills
+│  └─ src-tauri/                           # Tauri shell、授权校验、Bridge 进程管理
+├─ openclaw_ui_integration/                # UI integration / portable packaging variant
+├─ sightflow-desktop-agent-main/           # 桌面 RPA / Luminode 代理源码
+├─ iosclaw/                                # iOS / macOS 适配源码
+├─ license_server/                         # 在线授权服务与后台管理
+├─ scripts/                                # CI、打包、校验、发布脚本
+├─ docs/                                   # 仓库级交付、品牌、CI/CD 和迁移文档
+└─ release/                                # 本地构建产物,不提交到 Git
 ```
 
-当前仓库根目录是 `D:\Axiangmu\AUSTART`。不要把旁边的 `D:\Axiangmu\U盘启动器` 当成源码工作区；那里只应作为临时测试包或历史打包产物位置。
+### 技术栈
 
-更完整的结构说明见：
+| 层级 | 技术 |
+| --- | --- |
+| 桌面壳 | Tauri 2, Rust, WebView2/WKWebView |
+| 前端 | React 18, TypeScript, Vite, Zustand, Tailwind CSS |
+| 本地服务 | Python 3.11, FastAPI-style Bridge, local HTTP API |
+| Agent 运行时 | Node.js, OpenClaw `2026.6.1`, local workspace skills |
+| 手机侧 | APKClaw / Lumi secure channel |
+| 桌面 RPA | Electron/Vite/TypeScript Luminode agent, VLM-assisted UI control |
+| 发布 | GitHub Actions, Windows runner, macOS runner, SHA256 verification |
 
-- `openclaw_new_launcher/docs/PROJECT_STRUCTURE.md`
+### 快速开始
 
-## 快速开始
-
-开发环境建议：
+Windows 开发环境建议:
 
 - Windows 10/11
 - Node.js 20+
@@ -44,8 +78,6 @@ Lumi 是面向商家交付的 OpenClaw 便携式 AI 服务启动器。项目目�
 - Python 3.11+
 - npm
 
-安装和构建：
-
 ```powershell
 cd openclaw_new_launcher
 npm ci
@@ -53,139 +85,181 @@ npm run build
 npm run tauri dev
 ```
 
-完整检查：
+完整本地检查:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1
 ```
 
-轻量检查：
+轻量检查:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1 -SkipFrontend -SkipRust
+powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1 -SkipRust -SkipLicenseFlowTests
 ```
 
-## Windows 便携包打包
-
-使用最新可用的便携包作为种子目录：
+### Windows 便携包
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -Version 2.0.1 -PackageName OpenClaw-Portable-v2.0.1-YYYY.MM.DD
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 `
+  -Version 2.0.6 `
+  -PackageName OpenClaw-Portable-v2.0.6-YYYY.MM.DD `
+  -BrandProfile lumi
 ```
 
-打包脚本会执行：
+交付包必须保持干净:
 
-- 清理源码缓存
-- 检查源码文本
-- 构建 Tauri 应用
-- 复制 OpenClaw 离线依赖
-- 清空授权文件、安装 ID 和 API Key
-- 安装/校验飞书与微信插件
-- 整理便携包目录为 `OpenClaw.exe + OpenClawFiles/`
-- 校验 zip 包和生成 SHA256
+```text
+OpenClaw.exe
+OpenClawFiles/
+```
 
-交付前必须确认：
+不能带入:
 
-- 不存在 `data/license.json`
-- 不存在 `data/install_id.txt`
-- `imgapi_config.json` 和 `video_config.json` 为空配置
-- 根目录只保留 `OpenClaw.exe` 和 `OpenClawFiles/`
+- `data/license.json`
+- `data/install_id.txt`
+- 客户 API Key
+- 客户 IM 账号缓存
+- `node_modules/`, `dist/`, `src-tauri/target/`
+- 历史 `release/` 产物
 
-## Mac 迁移
+### macOS 构建
 
-Mac 源码迁移文档：
-
-- `openclaw_new_launcher/docs/MAC_BUILD_NOTES.md`
-- `openclaw_new_launcher/docs/MAC_MIGRATION_CHECKLIST.md`
-- `openclaw_new_launcher/docs/RUNTIME_PATHS.md`
-
-Mac 上建议先跑开发版：
+macOS 构建必须在真实 macOS 环境或 GitHub Actions macOS runner 上执行:
 
 ```bash
+cd openclaw_new_launcher
+npm ci
+npm run build
+npm run tauri -- build --bundles app,dmg
+```
+
+macOS 不能复用 Windows 的 `node_modules`、`src-tauri/target`、Windows Node runtime 或 `.exe` 文件。
+
+### CI/CD 与发行
+
+仓库内置三条主要 workflow:
+
+| Workflow | 用途 |
+| --- | --- |
+| `ci.yml` | Windows CI: source guard、版本一致性、前端构建、Rust check、Python compile、授权服务测试 |
+| `release.yml` | 主启动器 Release: Windows 安装包/便携包 + macOS `.app/.dmg` + SHA256 + GitHub Release |
+| `openclaw-ui-integration-release.yml` | UI integration 变体的源码包与 Windows portable 发布 |
+
+手动触发主发布:
+
+```powershell
+gh workflow run release.yml `
+  --repo rfdiosuao/lumi `
+  --ref codex/phone-agent-hardguard `
+  -f tag_name=v2.0.6
+```
+
+### 安全交付底线
+
+这个仓库按“可交付产品”处理,不是随手堆脚本。任何提交或发行包都必须遵守:
+
+- 不提交真实 API Key、license、install id、IM 登录缓存、数据库和私钥
+- 发布包必须生成 SHA256
+- Windows portable 必须通过 `verify-release.ps1`
+- OpenClaw workspace 必须包含 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`CAPABILITIES.md`
+- 手机和桌面 Agent 的 token 只能存放在私有 launcher config,不能写入公开 runtime context
+
+---
+
+## English
+
+### What It Is
+
+OpenClaw Launcher is an engineering-grade desktop automation platform built around the OpenClaw runtime. It turns a loose collection of agent tools, local services, connectors, packaging scripts, and runtime folders into a product that can be shipped, installed, verified, and operated.
+
+The goal is simple: a user should be able to download one release, install or unzip it, configure their models and channels, and start running automation workflows without manually wiring every dependency.
+
+### Highlights
+
+| Capability | Description |
+| --- | --- |
+| OpenClaw runtime packaging | Targets OpenClaw `2026.6.1` with bundled runtime dependencies and workspace context |
+| Desktop launcher | Tauri 2 + React 18 + TypeScript console for services, logs, settings, diagnostics, and licensing |
+| Phone automation | APKClaw integration for screenshots, device state, task execution, recording, media import, and publishing |
+| Desktop RPA | Luminode desktop agent source with VLM-assisted layout detection and click/reply automation |
+| IM connectors | Feishu, WeChat, DingTalk-oriented entry points for message-channel automation |
+| Image and video workflows | AI image generation/editing, video generation, storyboard, keyframe, and material workflows |
+| Skills workspace | Office-oriented skills for meeting notes, weekly reports, PDF/OCR, spreadsheet analysis, slides, and file organization |
+| License delivery | Online license server, device binding, activation checks, and clean customer packages |
+| Portable distribution | Windows portable packages expose only `OpenClaw.exe` and `OpenClawFiles/` at the top level |
+| Cross-platform release | GitHub Actions builds Windows assets and macOS `.app` / `.dmg` assets with SHA256 files |
+
+### Architecture
+
+```text
+User
+  │
+  ├─ OpenClaw Launcher UI (React / Tauri)
+  │    ├─ Settings, diagnostics, logs, license, skills
+  │    ├─ Image / video / storyboard workflows
+  │    ├─ Phone control and publishing
+  │    └─ Desktop agent control
+  │
+  ├─ Rust shell
+  │    ├─ License verification
+  │    ├─ Python Bridge process lifecycle
+  │    └─ Packaged resource resolution
+  │
+  ├─ Python Bridge
+  │    ├─ Local HTTP API
+  │    ├─ OpenClaw process management
+  │    ├─ Media, model, license, diagnostics routes
+  │    └─ Secure phone / desktop sidecar config
+  │
+  └─ OpenClaw runtime
+       ├─ Workspace context
+       ├─ Built-in skills
+       ├─ IM connectors
+       └─ Automation execution
+```
+
+### Development
+
+```powershell
 cd openclaw_new_launcher
 npm ci
 npm run build
 npm run tauri dev
 ```
 
-开发版跑通后再打包：
-
-```bash
-npm run tauri build -- --bundles app,dmg
-```
-
-注意：Mac 不能复用 Windows 的 `node_modules`、`src-tauri/target`、Windows Node runtime 或 `.exe` 文件。
-
-## 品牌换壳与二开
-
-如果要更换 Logo、名称、窗口标题、主题颜色并重新打包，请先看：
-
-- `docs/BRANDING_AND_PACKAGING.md`：更换 Logo、名称并重新打包
-- `docs/BRAND_THEME.md`：主题文件结构说明
-
-常用品牌文件：
-
-```text
-openclaw_new_launcher/data/themes/default/theme.json
-openclaw_new_launcher/data/themes/default/logo.png
-openclaw_new_launcher/src-tauri/icons/
-openclaw_new_launcher/index.html
-openclaw_new_launcher/src-tauri/tauri.conf.json
-```
-
-注意：只改主题文件不会改变 Windows 文件图标；只改 Tauri 图标也不会改变启动器内部 Logo。
-
-## 重要文档
-
-- `openclaw_new_launcher/docs/DOCS_INDEX.md`：当前文档入口和历史文档状态说明
-- `openclaw_new_launcher/docs/BRIDGE_MIGRATION_GUARD.md`：Bridge 冒烟检查与 FastAPI 迁移护栏
-- `docs/BRANDING_AND_PACKAGING.md`：更换 Logo、名称并重新打包
-- `docs/BRAND_THEME.md`：主题 / 品牌配置说明
-- `openclaw_new_launcher/docs/UI_CUSTOMIZATION_DESIGN.md`：UI 自定义与模块化设计方案
-- `openclaw_new_launcher/docs/广告视频使用文档.md`：AI 广告工作台使用文档
-- `openclaw_new_launcher/docs/RUNTIME_PATHS.md`：Windows / Mac 运行时路径规范
-- `openclaw_new_launcher/docs/MAC_BUILD_NOTES.md`：Mac 编译注意事项
-- `openclaw_new_launcher/docs/MAC_MIGRATION_CHECKLIST.md`：Mac 迁移验收清单
-- `openclaw_new_launcher/docs/PRODUCT_ROADMAP.md`：产品路线规划
-- `openclaw_new_launcher/docs/MODULE_EXTENSION_GUIDE.md`：模块扩展与二开说明
-- `openclaw_new_launcher/docs/GITEE_SETUP.md`：Gitee 配置说明
-- `openclaw_new_launcher/docs/GIT_CICD_PLAN.md`：CI/CD 规划
-
-## 安全与交付规则
-
-禁止提交或打入交付包：
-
-- 授权服务器私钥、后台 token、数据库文件
-- `data/license.json`
-- `data/install_id.txt`
-- 客户 API Key
-- 客户扫码后的微信 / 飞书账号缓存
-- `node_modules/`
-- `dist/`
-- `src-tauri/target/`
-- `release/`
-
-## 当前优先级
-
-1. 保持 Windows 便携包稳定可交付。
-2. 完成环境诊断和一键修复闭环。
-3. 继续稳定飞书 / 微信绑定流程。
-4. 让广告视频工作台按创作者流程继续打磨。
-5. 在 Mac 真机跑通 `.app/.dmg` 构建和验收。
-
-## 维护说明
-
-每次准备交付前，至少执行：
+Run the full local validation suite:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\verify-source-text.ps1 -NoGit
-powershell -ExecutionPolicy Bypass -File scripts\smoke-bridge.ps1
-cd openclaw_new_launcher
-npm run build
+powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1
 ```
 
-打包后再执行：
+### Release
+
+The main release workflow builds and publishes:
+
+- Windows Tauri installer assets
+- Windows portable zip
+- macOS `.app.zip`
+- macOS `.dmg`
+- SHA256 checksum files
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 -Path release\你的包名.zip
+gh workflow run release.yml `
+  --repo rfdiosuao/lumi `
+  --ref codex/phone-agent-hardguard `
+  -f tag_name=v2.0.6
 ```
+
+### Audience
+
+OpenClaw Launcher is for builders who need an AI automation product that can actually be delivered:
+
+- AI automation studios
+- Desktop RPA builders
+- Agent workflow integrators
+- Teams packaging OpenClaw into customer-ready deployments
+- Developers adapting the launcher to Windows, macOS, phone, and IM automation scenarios
+
+### License
+
+The repository currently contains productized launcher, packaging, and integration code. Confirm the intended open-source/commercial license before redistributing modified builds.

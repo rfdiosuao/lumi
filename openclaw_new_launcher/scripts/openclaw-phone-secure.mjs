@@ -204,14 +204,22 @@ export async function signedFetch(config, method, endpoint, timeoutMs = REQUEST_
   return response;
 }
 
-export async function uploadImageBuffer(config, bytes, filename, mime = 'image/png') {
+export async function uploadMediaBuffer(config, bytes, filename, mime, endpoint) {
   const dataUrl = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
-  const payload = await signedJsonRequest(config, 'POST', '/api/lumi/media/import_image', {
+  const payload = await signedJsonRequest(config, 'POST', endpoint, {
     dataUrl,
     album: config.album || 'OpenClaw',
     filename,
   }, 120_000);
   return payload.data || payload;
+}
+
+export async function uploadImageBuffer(config, bytes, filename, mime = 'image/png') {
+  return uploadMediaBuffer(config, bytes, filename, mime, '/api/lumi/media/import_image');
+}
+
+export async function uploadVideoBuffer(config, bytes, filename, mime = 'video/mp4') {
+  return uploadMediaBuffer(config, bytes, filename, mime, '/api/lumi/media/import_video');
 }
 
 async function lumiHeaders(config, method, endpoint, bodyText) {

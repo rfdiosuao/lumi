@@ -20,7 +20,7 @@ LogCall = Callable[[str], None]
 
 
 class DesktopAgentService:
-    """Manage SightFlow as an optional local desktop execution sidecar."""
+    """Manage Luminode as an optional local desktop execution sidecar."""
 
     DEFAULT_PORT = 21900
     ALLOWED_PROXY_PATHS = {
@@ -157,11 +157,36 @@ class DesktopAgentService:
 
         agent_dir = self.resolve_agent_dir(config)
         if not agent_dir:
-            raise FileNotFoundError("未找到 SightFlow Desktop Agent 目录，请在桌面控制页设置 agentDir")
+            raise FileNotFoundError("未找到 Luminode Desktop Agent 目录，请在桌面控制页设置 agentDir")
 
         command = self.resolve_command(agent_dir)
         if not command:
-            raise FileNotFoundError(f"未找到 SightFlow 可启动入口：{agent_dir}")
+            raise FileNotFoundError(f"未找到 Luminode 可启动入口：{agent_dir}")
+
+        # 显式以 sidecar 模式启动并传参,让 agent 自动开启 token 保护的本地 HTTP API。
+        # agent 读 --luminode-sidecar / --port / --token / --app-type / --api-key(arg 优先于 env)。
+        # 此前启动器只设 LUMINODE_* env,而 agent 读 SIGHTFLOW_* env,前缀对不上 → API 起不来、
+        # 桌面控制无法自主启动。用显式 arg 绕开前缀问题,最可靠。
+        sidecar_port = int(config.get("port") or self.DEFAULT_PORT)
+        sidecar_token = str(config.get("token") or "")
+        sidecar_app_type = str(config.get("appType") or "weixin")
+        command = [
+            *command,
+            "--luminode-sidecar",
+            "--port", str(sidecar_port),
+            "--token", sidecar_token,
+            "--app-type", sidecar_app_type,
+        ]
+        # 视觉模型:从统一配置(auth-profiles 主 provider)读出 网关地址+模型+key 一起传给 agent。
+        # 否则 agent 的视觉客户端会回退默认火山地址,拿网关 token 直连 → 401「key 格式不对」,
+        # 布局测量失败导致引擎无法启动。
+        sidecar_provider = self._primary_provider()
+        if sidecar_provider.get("apiKey"):
+            command += ["--api-key", sidecar_provider["apiKey"]]
+        if sidecar_provider.get("baseUrl"):
+            command += ["--base-url", sidecar_provider["baseUrl"]]
+        if sidecar_provider.get("model"):
+            command += ["--model", sidecar_provider["model"]]
 
         env = os.environ.copy()
         env.update({
@@ -226,6 +251,9 @@ class DesktopAgentService:
         port = int(config.get("port") or self.DEFAULT_PORT)
         url = f"http://127.0.0.1:{port}{path}"
         payload = json.dumps(self._augment_body(path, body, config), ensure_ascii=False).encode("utf-8")
+        # 按路径分级超时:健康检查要快返回;动作/微信操作要扫 UI、点按、抓未读,耗时长,
+        # 对齐 agent 自身 ~30s 动作超时,避免启动器这边 8s 就误判"动作失败"(agent 还在干)。
+        timeout = 8 if path == "/health" else 35
         request = urllib.request.Request(
             url,
             data=None if method.upper() == "GET" else payload,
@@ -238,7 +266,7 @@ class DesktopAgentService:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=8) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 text = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as error:
             text = error.read().decode("utf-8", errors="replace")
@@ -449,6 +477,36 @@ class DesktopAgentService:
         elif path in {"/click", "/type", "/wechat/send"}:
             enriched.setdefault("action", self._public_action(config))
         return enriched
+
+    def _primary_provider(self) -> dict:
+        """返回统一配置主 provider 的 {apiKey, baseUrl, model},供桌面 agent 的视觉客户端使用。
+
+        agent 的 VLM(布局测量/识别)默认直连火山地址,只换 key 会 401;必须把网关
+        baseUrl + model 一起带过去,让 agent 走网关。
+        """
+        result = {"apiKey": "", "baseUrl": "", "model": ""}
+        try:
+            with open(self.paths.auth_profiles, "r", encoding="utf-8") as handle:
+                profiles = json.load(handle)
+            models = profiles.get("models") if isinstance(profiles, dict) else {}
+            providers = models.get("providers") if isinstance(models, dict) else {}
+            primary = models.get("primary") if isinstance(models, dict) else ""
+            provider = providers.get(primary) if primary else None
+            if not isinstance(provider, dict) and isinstance(providers, dict):
+                provider = next((item for item in providers.values() if isinstance(item, dict)), None)
+            provider = provider if isinstance(provider, dict) else {}
+            result["apiKey"] = str(provider.get("apiKey") or "").strip()
+            result["baseUrl"] = str(provider.get("baseUrl") or "").strip()
+            model_list = provider.get("models")
+            if isinstance(model_list, list) and model_list:
+                result["model"] = str(model_list[0] or "").strip()
+            elif isinstance(provider.get("model"), str):
+                result["model"] = str(provider.get("model")).strip()
+        except Exception:
+            pass
+        if not result["apiKey"]:
+            result["apiKey"] = self._primary_api_key()
+        return result
 
     def _primary_api_key(self) -> str:
         try:

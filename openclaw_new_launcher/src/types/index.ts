@@ -19,6 +19,8 @@ export interface License {
   issuedAt?: string | null;
   leaseExpiresAt?: string | null;
   gatewayBaseUrl?: string;
+  gatewayImageBaseUrl?: string;
+  gatewayVideoBaseUrl?: string;
   gatewayAccessToken?: string;
   gatewayToken?: string;
   gatewayImageAccessToken?: string;

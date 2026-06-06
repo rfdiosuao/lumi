@@ -5,6 +5,9 @@ export interface PhoneConnectionConfig {
   name?: string;
   baseUrl: string;
   token: string;
+  relayBaseUrl?: string;
+  relayChannelId?: string;
+  relayToken?: string;
   launcherId?: string;
   launcherSecret?: string;
   secureChannelPairedAt?: string;
@@ -162,6 +165,11 @@ export interface PhoneVisionFrameOptions {
   maxLongSide?: number;
   gridColumns?: number;
   gridRows?: number;
+}
+
+export interface PhoneRelayScreenshotOptions extends PhoneVisionFrameOptions {
+  waitSec?: number;
+  pollMs?: number;
 }
 
 export interface PhoneVisionImage {
@@ -485,6 +493,9 @@ const DEFAULT_CONFIG: PhoneConnectionConfig = {
   name: DEFAULT_PHONE_NAME,
   baseUrl: 'http://192.168.1.100:9527',
   token: '',
+  relayBaseUrl: '',
+  relayChannelId: '',
+  relayToken: '',
   visualizeActions: true,
   useDeviceProfileContext: true,
   enabled: true,
@@ -609,6 +620,9 @@ function normalizePhoneConfig(
     name: typeof config.name === 'string' ? config.name : DEFAULT_PHONE_NAME,
     baseUrl: typeof config.baseUrl === 'string' ? config.baseUrl.trim() : '',
     token: String(config.token || '').trim(),
+    relayBaseUrl: typeof config.relayBaseUrl === 'string' ? config.relayBaseUrl.trim() : '',
+    relayChannelId: typeof config.relayChannelId === 'string' ? config.relayChannelId.trim() : '',
+    relayToken: typeof config.relayToken === 'string' ? config.relayToken.trim() : '',
     launcherId: typeof config.launcherId === 'string' ? config.launcherId : undefined,
     launcherSecret: typeof config.launcherSecret === 'string' ? config.launcherSecret : undefined,
     secureChannelPairedAt:
@@ -837,6 +851,146 @@ function dataUrlToBlob(dataUrl: string): { blob: Blob; mime: string } {
     bytes[i] = binary.charCodeAt(i);
   }
   return { blob: new Blob([bytes], { type: mime }), mime };
+}
+
+function normalizeRelayBaseUrl(baseUrl: string): string {
+  return String(baseUrl || '').trim().replace(/\/+$/, '');
+}
+
+export function hasRelayScreenshotConfig(config: PhoneConnectionConfig): boolean {
+  return Boolean(
+    normalizeRelayBaseUrl(config.relayBaseUrl || '') &&
+      String(config.relayChannelId || '').trim() &&
+      String(config.relayToken || '').trim()
+  );
+}
+
+function relayAuthHeaders(relayToken: string, headers: Record<string, string> = {}): Record<string, string> {
+  if (!relayToken.trim()) return headers;
+  return {
+    ...headers,
+    Authorization: `Bearer ${relayToken.trim()}`,
+    'X-OpenClaw-Relay-Token': relayToken.trim(),
+  };
+}
+
+function headersToRecord(headers?: HeadersInit): Record<string, string> {
+  if (!headers) return {};
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers.map(([key, value]) => [key, String(value)]));
+  }
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key, String(value)])
+  );
+}
+
+async function fetchJsonWithTimeout(url: string, options: RequestInit = {}, timeoutMs = PHONE_REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+
+function relayUrl(baseUrl: string, endpoint: string): string {
+  const normalized = normalizeRelayBaseUrl(baseUrl);
+  if (!normalized) return '';
+  const base = normalized.endsWith('/') ? normalized : `${normalized}/`;
+  return new URL(endpoint.replace(/^\//, ''), base).toString();
+}
+
+async function requestRelayJson(
+  relayBaseUrl: string,
+  endpoint: string,
+  options: RequestInit = {},
+  token = '',
+  timeoutMs = PHONE_REQUEST_TIMEOUT_MS
+): Promise<{ ok: boolean; data?: unknown; error?: string; raw?: unknown }> {
+  const url = relayUrl(relayBaseUrl, endpoint);
+  if (!url) return { ok: false, error: 'missing_relay_base_url' };
+  const response = await fetchJsonWithTimeout(url, {
+    ...options,
+    headers: relayAuthHeaders(token, {
+      Accept: 'application/json',
+      ...headersToRecord(options.headers),
+    }),
+  }, timeoutMs);
+  const payload = await readJsonResponse(response);
+  if (!response.ok) {
+    const body = asObject(payload);
+    return {
+      ok: false,
+      error: body.error ? String(body.error) : `relay_http_${response.status}`,
+      raw: payload,
+    };
+  }
+  return { ok: true, data: payload, raw: payload };
+}
+
+function transformRelayScreenshotResult(result: unknown): PhoneScreenshot {
+  return transformScreenshot({ data: result });
+}
+
+async function waitForRelayRecord(
+  relayBaseUrl: string,
+  packetId: string,
+  relayToken: string,
+  waitSec: number,
+  pollMs: number
+): Promise<PhoneApiResult<Record<string, unknown>>> {
+  const deadline = Date.now() + Math.max(5, waitSec) * 1000;
+  let lastRecord: Record<string, unknown> | null = null;
+
+  while (Date.now() <= deadline) {
+    const status = await requestRelayJson(
+      relayBaseUrl,
+      `/api/lumi/relay/status?id=${encodeURIComponent(packetId)}`,
+      { method: 'GET' },
+      relayToken,
+      Math.max(5000, pollMs + 5000)
+    );
+    if (!status.ok) {
+      return { ok: false, error: status.error || 'relay_status_failed', raw: status.raw };
+    }
+    const record = asObject(payloadData(status.data));
+    lastRecord = record;
+    if (record.status === 'done') {
+      return { ok: true, data: record, raw: status.raw };
+    }
+    if (record.status === 'failed') {
+      return {
+        ok: false,
+        data: record,
+        error: asString(record.lastError) || 'relay_packet_failed',
+        raw: status.raw,
+      };
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, Math.max(500, pollMs)));
+  }
+
+  return {
+    ok: false,
+    data: lastRecord || undefined,
+    error: 'relay_timeout',
+  };
 }
 
 function transformMediaImport(payload: unknown): PhoneMediaImportResult {
@@ -1632,7 +1786,7 @@ export function buildPhoneInitializationReport(
       tone: status?.interactive || status?.screenOn ? 'ok' : 'warn',
       detail: `interactive=${Boolean(status?.interactive)}, screenOn=${Boolean(status?.screenOn)}, keyguardLocked=${Boolean(status?.keyguardLocked)}, deviceLocked=${Boolean(status?.deviceLocked)}`,
     },
-    '运行任务前让 Lumi 自动调用唤醒；如果手机仍锁屏，请先手动解锁。'
+    '运行任务前让 OpenClaw 自动调用唤醒；如果手机仍锁屏，请先手动解锁。'
   );
 
   addCheck(
@@ -1760,7 +1914,7 @@ export function buildPhoneInitializationReport(
   const passed = checks.filter((check) => check.ok).length;
   const total = checks.length;
   const summary = passed === total
-    ? '这台手机已完成初始化体检，可以直接接收 Lumi Agent 任务。'
+    ? '这台手机已完成初始化体检，可以直接接收 OpenClaw Agent 任务。'
     : `这台手机体检通过 ${passed}/${total} 项，建议先处理 ${total - passed} 个风险点。`;
 
   return {
@@ -1802,7 +1956,7 @@ export function buildDeviceProfilePromptContext(profile?: PhoneDeviceProfile | n
   });
 
   return [
-    '## Lumi Device Profile Context',
+    '## OpenClaw Device Profile Context',
     'Use this cached device profile to avoid guessing this phone environment. If the live screen conflicts with this profile, trust the live screen.',
     '',
     `Device: ${String(device.brand || device.manufacturer || 'Android')} ${String(device.model || '')}`.trim(),
@@ -1948,6 +2102,82 @@ export const phoneApi = {
 
   screenshot: (config: PhoneConnectionConfig): Promise<PhoneApiResult<PhoneScreenshot>> =>
     request(config, '/api/tool/screenshot', {}, transformScreenshot),
+
+  relayScreenshot: async (
+    config: PhoneConnectionConfig,
+    options: PhoneRelayScreenshotOptions = {}
+  ): Promise<PhoneApiResult<PhoneScreenshot>> => {
+    const relayBaseUrl = normalizeRelayBaseUrl(config.relayBaseUrl || '');
+    const relayChannelId = String(config.relayChannelId || '').trim();
+    const relayToken = String(config.relayToken || '').trim();
+    if (!relayBaseUrl) return { ok: false, error: 'missing_relay_base_url' };
+    if (!relayChannelId) return { ok: false, error: 'missing_relay_channel_id' };
+    if (!relayToken) return { ok: false, error: 'missing_relay_token' };
+
+    const packet = {
+      schema: 'openclaw.phone.screenshot.v1',
+      createdAt: new Date().toISOString(),
+      requestId: `relay_screenshot_${Date.now()}`,
+      channelId: relayChannelId,
+      options: {
+        format: options.format || 'jpeg',
+        quality: options.quality ?? 82,
+        maxLongSide: options.maxLongSide ?? 1600,
+        overlayGrid: options.overlayGrid ?? false,
+        gridColumns: options.gridColumns ?? 6,
+        gridRows: options.gridRows ?? 12,
+      },
+    };
+
+    const enqueue = await requestRelayJson(
+      relayBaseUrl,
+      '/api/lumi/relay/packet',
+      {
+        method: 'POST',
+        body: JSON.stringify(packet),
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+      },
+      relayToken,
+      PHONE_REQUEST_TIMEOUT_MS
+    );
+    if (!enqueue.ok || !enqueue.data) {
+      return { ok: false, error: enqueue.error || 'relay_packet_failed', raw: enqueue.raw };
+    }
+
+    const packetData = asObject(payloadData(enqueue.data));
+    const packetId = asString(packetData.packetId) || asString(packetData.id);
+    if (!packetId) {
+      return { ok: false, error: 'relay_missing_packet_id', raw: enqueue.raw };
+    }
+
+    const waitResult = await waitForRelayRecord(
+      relayBaseUrl,
+      packetId,
+      relayToken,
+      options.waitSec ?? 60,
+      options.pollMs ?? 1500
+    );
+    if (!waitResult.ok || !waitResult.data) {
+      return {
+        ok: false,
+        error: waitResult.error || 'relay_timeout',
+        raw: waitResult.raw,
+      };
+    }
+
+    const result = asObject(waitResult.data.result);
+    if (!Object.keys(result).length) {
+      return { ok: false, error: 'empty_screenshot', raw: waitResult.raw };
+    }
+
+    try {
+      return { ok: true, data: transformRelayScreenshotResult(result), raw: waitResult.raw };
+    } catch (error: any) {
+      return { ok: false, error: error?.message || 'invalid_response', raw: waitResult.raw };
+    }
+  },
 
   screenTree: (config: PhoneConnectionConfig): Promise<PhoneApiResult<PhoneScreenTree>> =>
     request(config, '/api/tool/screen_tree', {}, transformScreenTree),
@@ -2259,6 +2489,32 @@ export const phoneApi = {
           dataUrl,
           album: options.album || 'OpenClaw',
           filename: options.filename || `openclaw-image-${Date.now()}.png`,
+        }),
+      },
+      transformMediaImport
+    );
+  },
+
+  importVideoDataUrl: async (
+    config: PhoneConnectionConfig,
+    dataUrl: string,
+    options: { album?: string; filename?: string } = {}
+  ): Promise<PhoneApiResult<PhoneMediaImportResult>> => {
+    try {
+      dataUrlToBlob(dataUrl);
+    } catch (error: any) {
+      return { ok: false, error: error?.message || 'invalid_data_url' };
+    }
+
+    return secureRequest(
+      config,
+      '/api/lumi/media/import_video',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          dataUrl,
+          album: options.album || 'OpenClaw',
+          filename: options.filename || `openclaw-video-${Date.now()}.mp4`,
         }),
       },
       transformMediaImport

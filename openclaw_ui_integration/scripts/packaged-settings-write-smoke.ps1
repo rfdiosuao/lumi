@@ -205,7 +205,7 @@ try {
           id = "openclaw_gateway"
           name = "OpenClaw Gateway"
           baseUrl = "https://api.example.invalid/v1"
-          apiKey = "sk-contract-smoke-not-real"
+          apiKey = "contract-smoke-key-not-real"
           models = @("gpt-4o")
         }
       }

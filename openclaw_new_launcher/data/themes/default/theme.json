@@ -1,5 +1,5 @@
 {
-  "name": "Lumi Obsidian Gold",
+  "name": "OpenClaw Graphite Gold",
   "colors": {
     "app_bg": "#05060A",
     "sidebar_bg": "#070912",
@@ -89,10 +89,10 @@
     "mono": ["Cascadia Mono", 10, "normal"]
   },
   "brand": {
-    "name": "Lumi",
+    "name": "OpenClaw",
     "subtitle": "AI Creative Console",
-    "app_user_model_id": "Lumi.Launcher",
-    "terminal_header": "Lumi Console",
+    "app_user_model_id": "OpenClaw.Launcher",
+    "terminal_header": "OpenClaw Console",
     "logoUrl": "logo.png"
   },
   "navItems": [
@@ -111,7 +111,7 @@
     {"key": "help", "label": "帮助文档", "desc": "查看使用说明", "icon": "DOC", "group": "维护"}
   ],
   "window": {
-    "title": "Lumi - AI Creative Console",
+    "title": "OpenClaw - AI Creative Console",
     "width": 1200,
     "height": 800
   }

@@ -4,6 +4,8 @@ export type GatewayMode = 'member' | 'manual';
 
 export interface GatewayDefaults {
   baseUrl: string;
+  imageBaseUrl: string;
+  videoBaseUrl: string;
   apiKey: string;
   imageApiKey: string;
   videoApiKey: string;
@@ -74,6 +76,32 @@ export async function readMemberGatewayDefaults(): Promise<GatewayDefaults> {
       gateways[index].url,
     ]),
   );
+  const imageBaseUrl = firstText(
+    ...sources.flatMap((source, index) => [
+      source.gatewayImageBaseUrl,
+      source.imageBaseUrl,
+      source.imageUrl,
+      source.gatewayBaseUrl,
+      gateways[index].gatewayImageBaseUrl,
+      gateways[index].imageBaseUrl,
+      gateways[index].imageUrl,
+      gateways[index].gatewayBaseUrl,
+    ]),
+    baseUrl,
+  );
+  const videoBaseUrl = firstText(
+    ...sources.flatMap((source, index) => [
+      source.gatewayVideoBaseUrl,
+      source.videoBaseUrl,
+      source.videoUrl,
+      source.gatewayBaseUrl,
+      gateways[index].gatewayVideoBaseUrl,
+      gateways[index].videoBaseUrl,
+      gateways[index].videoUrl,
+      gateways[index].gatewayBaseUrl,
+    ]),
+    baseUrl,
+  );
   const apiKey = firstText(
     ...sources.flatMap((source, index) => [
       source.gatewayAccessToken,
@@ -139,6 +167,8 @@ export async function readMemberGatewayDefaults(): Promise<GatewayDefaults> {
 
   return {
     baseUrl,
+    imageBaseUrl,
+    videoBaseUrl,
     apiKey,
     imageApiKey,
     videoApiKey,

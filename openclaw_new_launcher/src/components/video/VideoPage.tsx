@@ -4,6 +4,8 @@ import { Button, FieldLabel, Input, Loading, Select, TextArea, showToast } from 
 import { videoApi, configApi } from '../../services/api';
 import { readGatewayStoredConfig, readMemberGatewayDefaults, type GatewayMode } from '../../services/gatewayConfig';
 import { useLogStore } from '../../stores/logStore';
+import { useAppStore } from '../../stores/appStore';
+import { getDefaultPublishDraftSeed, usePublishHandoffStore } from '../../stores/publishStore';
 import type { VideoMode, VideoProviderId } from '../../types';
 import { VIDEO_PROVIDERS, getDefaultVideoModel, getVideoProvider } from '../../features/video/providers';
 
@@ -40,6 +42,15 @@ function createVideoBlobUrl(base64: string, mime = 'video/mp4') {
 
   const blob = new Blob(chunks, { type: mime });
   return { url: URL.createObjectURL(blob), size: blob.size };
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read local video'));
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.readAsDataURL(blob);
+  });
 }
 
 function createGeneratedVideo(resp: {
@@ -101,6 +112,8 @@ export const VideoPage: React.FC = () => {
   const [videoError, setVideoError] = useState('');
 
   const appendLog = useLogStore((s) => s.append);
+  const setCurrentPage = useAppStore((state) => state.setCurrentPage);
+  const setPublishDraftSeed = usePublishHandoffStore((state) => state.setDraftSeed);
   const managedMode = gatewayMode === 'member';
   const provider = getVideoProvider(providerId);
   const availableModels = provider.models.filter((item) => item.modes.includes(mode));
@@ -139,7 +152,7 @@ export const VideoPage: React.FC = () => {
         if (stored.mode === 'member') {
           setGatewayMode('member');
           setProviderId('custom');
-          setApiBase(memberGateway.baseUrl || storedApiBase);
+          setApiBase(memberGateway.videoBaseUrl || memberGateway.baseUrl || storedApiBase);
           setApiKey(memberGateway.videoApiKey || memberGateway.apiKey || storedApiKey);
           setModel(memberGateway.videoModel || memberGateway.defaultModel || storedModel || getDefaultVideoModel('custom', 't2v'));
           return;
@@ -166,7 +179,7 @@ export const VideoPage: React.FC = () => {
         if (memberGateway.hasGateway) {
           setGatewayMode('member');
           setProviderId('custom');
-          setApiBase(memberGateway.baseUrl);
+          setApiBase(memberGateway.videoBaseUrl || memberGateway.baseUrl);
           setApiKey(memberGateway.apiKey);
           setModel(memberGateway.videoModel || memberGateway.defaultModel || getDefaultVideoModel('custom', mode));
         }
@@ -209,7 +222,7 @@ export const VideoPage: React.FC = () => {
       const memberGateway = await readMemberGatewayDefaults();
       if (memberGateway.hasGateway) {
         setProviderId('custom');
-        setApiBase(memberGateway.baseUrl);
+        setApiBase(memberGateway.videoBaseUrl || memberGateway.baseUrl);
         setApiKey(memberGateway.videoApiKey || memberGateway.apiKey);
         setModel(memberGateway.videoModel || memberGateway.defaultModel || getDefaultVideoModel('custom', mode));
       }
@@ -298,6 +311,34 @@ export const VideoPage: React.FC = () => {
       setGenerating(false);
       setProgress('');
     }
+  };
+
+  const handleSendToPublish = async () => {
+    if (!resultVideo) return;
+    let dataUrl = '';
+    if (resultVideo.blobUrl) {
+      dataUrl = await blobToDataUrl(await (await fetch(resultVideo.blobUrl)).blob());
+    }
+    const name = resultVideo.filename || `openclaw-video-${Date.now()}.mp4`;
+    setPublishDraftSeed({
+      ...getDefaultPublishDraftSeed(),
+      platformId: 'douyin',
+      transportMode: 'direct',
+      contentType: 'video',
+      title: `OpenClaw 视频发布 ${new Date().toLocaleDateString()}`,
+      body: '',
+      hashtags: ['OpenClaw', 'AI视频'],
+      assets: [{
+        id: `video-${Date.now()}`,
+        kind: 'video',
+        name,
+        mime: resultVideo.mime || 'video/mp4',
+        dataUrl,
+        size: resultVideo.size,
+        sourcePath: resultVideo.path,
+      }],
+    });
+    setCurrentPage('publish');
   };
 
   const handleOpenVideoDir = async () => {
@@ -512,12 +553,15 @@ export const VideoPage: React.FC = () => {
             <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
               <a
                 href={resultVideo.downloadUrl}
-                download={resultVideo.filename || `lumi-video-${Date.now()}.mp4`}
+                download={resultVideo.filename || `openclaw-video-${Date.now()}.mp4`}
                 onClick={handleDownloadClick}
                 className="text-accent hover:underline"
               >
                 下载视频
               </a>
+              <Button onClick={handleSendToPublish} variant="default">
+                去平台发布
+              </Button>
               {resultVideo.directory && (
                 <button onClick={handleOpenVideoDir} className="text-accent hover:underline">
                   打开保存目录

@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Lumi",
+  "productName": "OpenClaw",
   "version": "2.0.6",
   "identifier": "com.yonghaotech.openclaw",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Lumi - AI Creative Console",
+        "title": "OpenClaw - AI Creative Console",
         "width": 1200,
         "height": 800,
         "minWidth": 960,
@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https: asset: http://asset.localhost; media-src 'self' data: blob: asset: http://asset.localhost http://127.0.0.1:* http://localhost:*; connect-src 'self' http://127.0.0.1:* http://localhost:*"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https: asset: http://asset.localhost; media-src 'self' data: blob: asset: http://asset.localhost http://127.0.0.1:* http://localhost:*; connect-src 'self' http: https: http://127.0.0.1:* http://localhost:*"
     }
   },
   "bundle": {

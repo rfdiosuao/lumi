@@ -1,12 +1,18 @@
 import React from 'react';
-import { Camera, CheckCircle2, KeyRound, PlayCircle, Plus, RefreshCcw, Save, ShieldCheck, StopCircle, Trash2, Unlock } from 'lucide-react';
-import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, TextArea, Toggle } from '../components/ui';
+import { Camera, CheckCircle2, Copy, KeyRound, PlayCircle, Plus, RefreshCcw, Save, ShieldCheck, Smartphone, StopCircle, Trash2, Unlock } from 'lucide-react';
+import { Button, Chip, EmptyState, Field, Input, InlineState, Modal, Panel, SectionHeader, TextArea, Toggle } from '../components/ui';
 import { getMockPhoneInventory, removeMockPhoneDevice, setMockPhoneSelection, upsertMockPhoneDevice } from '../api/mock';
 import { formatDateTime, maskSecret } from '../lib/format';
 import { readConfigValue, requestPhoneData, writeConfigValue } from '../api/adapters';
 import { clearPhoneSecurePairing, warmPhoneSecurePairing, type PhonePairingSummary } from '../api/client';
 import { displayPhoneBaseUrl, normalizeOrCleanPhoneBaseUrl, normalizePhoneBaseUrl } from '../lib/phoneUrl';
 import { usePreviewStore } from '../store/appStore';
+import QRCode from 'qrcode';
+
+// 手机端 App(APKClaw)下载地址。更新 apk 时只改这一行;
+// 建议 Gitee 上用固定文件名(如 OpenClaw-AgentPhone.apk)让链接永久不变,二维码一劳永逸。
+const PHONE_APK_DOWNLOAD_URL =
+  'https://gitee.com/rfdiosuao/lumiapkclaw/releases/download/lumiclaw13241/OpenClaw-AgentPhone.apk';
 
 interface PhoneDevice {
   id: string;
@@ -57,6 +63,8 @@ const PHONE_AGENTS_PATH = 'data/.openclaw/launcher/phone-agents.json';
 const TERMINAL_TASK_STATES = new Set(['success', 'error', 'cancelled', 'canceled']);
 const CORE_SNAPSHOT_TIMEOUT_MS = 7000;
 const EXTRA_SNAPSHOT_TIMEOUT_MS = 2200;
+const PHONE_AGENT_TASK_TIMEOUT_SEC = 600;
+const PHONE_AGENT_TASK_POLL_SECONDS = PHONE_AGENT_TASK_TIMEOUT_SEC + 20;
 
 function createEmptySnapshot(): PhoneSnapshot {
   return {
@@ -172,6 +180,10 @@ function authErrorHelp(message: string): string {
   const lower = message.toLowerCase();
   if (lower.includes('missing_token')) return '缺少 APKClaw Token。请在手机端查看控制台令牌并填入。';
   if (lower.includes('invalid_phone_base_url') || lower.includes('invalid url') || lower.includes('ipv4')) return '手机地址格式不正确。局域网地址应类似 http://192.168.1.4:9527。';
+  if (lower.includes('lumi_signature_repair_failed') || lower.includes('invalid lumi signature')) return 'Lumi 安全签名修复失败。启动器已尝试重新配对仍未通过；请确认电脑和手机时间一致，手机端 APKClaw 服务仍是最新版本，然后点击“重新配对”。';
+  if (lower.includes('lumi body hash mismatch')) return 'Lumi 请求体校验失败。通常是任务内容在代理转发时被改写；请重新提交任务，若仍失败请升级启动器和 APKClaw。';
+  if (lower.includes('lumi request timestamp') || lower.includes('invalid lumi timestamp')) return 'Lumi 时间戳校验失败。请把电脑和手机时间同步到自动网络时间后再重试。';
+  if (lower.includes('lumi nonce has already been used')) return 'Lumi 防重放校验触发。请稍等几秒后重新提交任务。';
   if (lower.includes('missing lumi security headers') || lower.includes('unknown lumi launcher') || lower.includes('lumi_pair_failed')) return '安全配对失败或已失效。请确认 APKClaw 版本支持 Lumi 安全通道，然后点击“重新配对”。';
   if (lower.includes('401') || lower.includes('unauthorized')) return 'Token 无效。请重新复制手机端显示的令牌。';
   if (lower.includes('failed to fetch') || lower.includes('sending request') || lower.includes('network')) return '无法访问手机服务。确认电脑和手机在同一网络，APKClaw 控制服务正在运行。';
@@ -195,6 +207,18 @@ export function PhonePage() {
   const [checkingDevice, setCheckingDevice] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [authState, setAuthState] = React.useState<AuthState>({ tone: 'neutral', title: '等待授权检查' });
+  const [apkModalOpen, setApkModalOpen] = React.useState(false);
+  const [apkQrDataUrl, setApkQrDataUrl] = React.useState('');
+
+  React.useEffect(() => {
+    if (!apkModalOpen) return;
+    let cancelled = false;
+    QRCode.toDataURL(PHONE_APK_DOWNLOAD_URL, { width: 240, margin: 1 })
+      .then((url) => { if (!cancelled) setApkQrDataUrl(url); })
+      .catch(() => { if (!cancelled) setApkQrDataUrl(''); });
+    return () => { cancelled = true; };
+  }, [apkModalOpen]);
+
   const [actionPrompt, setActionPrompt] = React.useState('读取当前屏幕，判断下一步可以安全执行的动作。');
   const [sending, setSending] = React.useState(false);
   const [activeTaskId, setActiveTaskId] = React.useState('');
@@ -356,6 +380,28 @@ export function PhonePage() {
     setError(null);
     try {
       const context = { baseUrl: device.baseUrl, token: device.token };
+      // 并发拉快照前,先用一个轻量探针把 Lumi 安全通道配好/自愈一次。
+      // 否则下面那批并发签名请求会各自发现密钥失效(例如刚重装手机端 APKClaw、
+      // 密钥被重置后)、各自抢着重新配对、互相清掉对方刚配好的密钥,刷出好几条
+      // “任务失败”。先探针 → 内置重试只干净地重配一次 → 这批请求复用好密钥。
+      try {
+        // device/status 是 token 鉴权(手机时钟偏差也能通过),且携带 serverTime →
+        // 先拿它把"手机↔电脑时钟偏差"记下来,后面的签名请求才能落在手机的时间窗口内,
+        // 避免客户手机时间不准导致 Lumi 签名 403。
+        await requestPhoneData(settings, context, '/api/device/status', 'GET', undefined, { timeoutMs: 12_000 });
+        await warmPhoneSecurePairing(device.baseUrl, device.token);
+        await requestPhoneData(
+          settings,
+          context,
+          '/api/lumi/device/profile?includeApps=false&appLimit=1',
+          'GET',
+          undefined,
+          { timeoutMs: 12_000 },
+        );
+      } catch {
+        // 探针失败不阻断快照:基于 token 的 status/截图/screen_tree 仍可返回,
+        // 真正的配对/时间问题会由下面的快照给出一条清晰错误。
+      }
       const settled = await Promise.allSettled([
         snapshotRequest(requestPhoneData<any>(settings, context, '/api/device/status', 'GET', undefined, { timeoutMs: CORE_SNAPSHOT_TIMEOUT_MS }), '/api/device/status', CORE_SNAPSHOT_TIMEOUT_MS),
         snapshotRequest(requestPhoneData<any>(settings, context, '/api/tool/screenshot', 'GET', undefined, { timeoutMs: CORE_SNAPSHOT_TIMEOUT_MS }), '/api/tool/screenshot', CORE_SNAPSHOT_TIMEOUT_MS),
@@ -481,7 +527,7 @@ export function PhonePage() {
           force_agent: false,
           read_only: false,
           tool_policy: 'safe_action',
-          timeout_sec: 120,
+          timeout_sec: PHONE_AGENT_TASK_TIMEOUT_SEC,
         },
         { timeoutMs: 60_000 },
       );
@@ -492,7 +538,7 @@ export function PhonePage() {
       pushToast({ tone: 'ok', title: '任务已提交', detail: selectedDevice.name });
       addTaskLog('ok', '任务已提交', taskId);
 
-      for (let i = 0; i < 120; i += 1) {
+      for (let i = 0; i < PHONE_AGENT_TASK_POLL_SECONDS; i += 1) {
         if (taskRunRef.current !== runId) return;
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         const result = await requestPhoneData<any>(
@@ -699,6 +745,7 @@ export function PhonePage() {
           <p>桌面端负责授权、下发任务和留痕；APKClaw 只接收经过 Token 与 Lumi 签名校验的控制请求。</p>
         </div>
         <div className="hero-actions">
+          <Button variant="quiet" icon={Smartphone} onClick={() => setApkModalOpen(true)}>下载手机端App</Button>
           <Button variant="primary" icon={RefreshCcw} onClick={() => refresh('manual')} disabled={!selectedDevice || loading}>刷新</Button>
           <Button variant="secondary" icon={Camera} onClick={handleCapture} disabled={!selectedDevice}>截图</Button>
           <Button variant="success" icon={Unlock} onClick={handleWake} disabled={!selectedDevice}>唤醒</Button>
@@ -755,10 +802,33 @@ export function PhonePage() {
                   {snapshot.screenshotUrl ? <img src={snapshot.screenshotUrl} alt="APKClaw screenshot" /> : <div className="phone-screen-placeholder" aria-label="暂无截图" />}
                 </div>
                 <div className="phone-summary">
+                  {(() => {
+                    const st = snapshot.status as any;
+                    if (!st) return null;
+                    const issues: string[] = [];
+                    if (st.accessibilityRunning === false) {
+                      issues.push('无障碍服务未开启：截图、点击、滑动都会失效。请到手机「设置 → 无障碍」开启本应用（若开关是灰色，先到「应用信息 → ⋮ → 允许受限的设置」）。');
+                    }
+                    if (st.keyguardLocked === true || st.deviceLocked === true) {
+                      issues.push('手机当前锁屏：请点上方「唤醒」或手动解锁后再操作。');
+                    }
+                    if (st.overlayPermission === false) {
+                      issues.push('悬浮窗权限未开：光标预览不可用（不影响截图与点击）。');
+                    }
+                    if (!issues.length) return null;
+                    const critical = st.accessibilityRunning === false;
+                    return (
+                      <InlineState
+                        tone={critical ? 'danger' : 'warn'}
+                        title={critical ? '演示前请先修复：手机无障碍服务已关闭' : '设备状态提醒'}
+                        description={issues.join(' ')}
+                      />
+                    );
+                  })()}
                   <div className="detail-stack">
                     <div className="detail-row"><span className="detail-label">版本</span><span className="detail-value">{snapshot.status?.versionInfo || snapshot.status?.version || '暂无'}</span></div>
                     <div className="detail-row"><span className="detail-label">屏幕</span><span className="detail-value">{snapshot.status?.screenOn ? '亮屏' : '未知'}</span></div>
-                    <div className="detail-row"><span className="detail-label">无障碍</span><span className="detail-value">{snapshot.status?.accessibilityRunning ? '运行中' : '未确认'}</span></div>
+                    <div className="detail-row"><span className="detail-label">无障碍</span><span className="detail-value">{snapshot.status?.accessibilityRunning ? '运行中' : (snapshot.status ? '未开启 ⚠' : '未确认')}</span></div>
                     <div className="detail-row"><span className="detail-label">电量</span><span className="detail-value">{formatBattery(snapshot.profile)}</span></div>
                   </div>
                   {loading ? <InlineState tone="neutral" title="正在刷新快照" description="截图和状态会先显示，视频/录屏等附加能力稍后更新。" /> : null}
@@ -866,6 +936,61 @@ export function PhonePage() {
           </Panel>
         </div>
       </section>
+
+      <Modal
+        open={apkModalOpen}
+        title="下载手机端 App"
+        subtitle="让客户用手机扫码下载安装 APKClaw"
+        onClose={() => setApkModalOpen(false)}
+      >
+        <div className="apk-download-modal">
+          {apkQrDataUrl ? (
+            <img
+              src={apkQrDataUrl}
+              alt="手机端 App 下载二维码"
+              width={240}
+              height={240}
+              style={{ display: 'block', margin: '0 auto', borderRadius: 12 }}
+            />
+          ) : (
+            <div style={{ textAlign: 'center', padding: '40px 0' }}>二维码生成中...</div>
+          )}
+          <p style={{ textAlign: 'center', marginTop: 12 }}>
+            让客户用手机相机/浏览器扫码，或复制下方链接在手机里打开下载。
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+            <code
+              style={{
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontSize: 12,
+                padding: '8px 10px',
+                background: 'rgba(0,0,0,0.06)',
+                borderRadius: 8,
+              }}
+            >
+              {PHONE_APK_DOWNLOAD_URL}
+            </code>
+            <Button
+              variant="secondary"
+              icon={Copy}
+              onClick={() => {
+                void navigator.clipboard?.writeText(PHONE_APK_DOWNLOAD_URL);
+                pushToast({ tone: 'ok', title: '链接已复制' });
+              }}
+            >
+              复制
+            </Button>
+          </div>
+          <InlineState
+            tone="neutral"
+            title="安装三步"
+            description="① 手机文件管理器点 apk 安装　② 小米/红米先到开发者选项关「MIUI 优化」　③ 开无障碍若变灰，到 应用信息→右上角⋮→允许受限的设置。"
+          />
+        </div>
+      </Modal>
     </div>
   );
 }

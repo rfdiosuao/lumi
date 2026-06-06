@@ -7,10 +7,13 @@ import argparse
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
 import shutil
 import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -18,6 +21,25 @@ from urllib.parse import parse_qs, urlparse
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
+
+
+LOGGER = logging.getLogger("openclaw-license")
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=getattr(logging, os.environ.get("LICENSE_LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+    )
+
+
+def bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw or default)
+    except (TypeError, ValueError):
+        LOGGER.warning("Invalid integer env %s=%r; using %s", name, raw, default)
+        value = default
+    return max(minimum, min(value, maximum))
+
 
 BASE_DIR = "/opt/openclaw-license"
 DB_PATH = os.environ.get("LICENSE_DB", os.path.join(BASE_DIR, "license.db"))
@@ -29,6 +51,8 @@ HOST = os.environ.get("LICENSE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("LICENSE_PORT", "18791"))
 DEFAULT_FEATURES = ["openclaw", "image", "video", "storyboard"]
 DEFAULT_GATEWAY_BASE_URL = os.environ.get("MEMBER_GATEWAY_BASE_URL", "").strip().rstrip("/")
+DEFAULT_GATEWAY_IMAGE_BASE_URL = os.environ.get("MEMBER_GATEWAY_IMAGE_BASE_URL", "").strip().rstrip("/")
+DEFAULT_GATEWAY_VIDEO_BASE_URL = os.environ.get("MEMBER_GATEWAY_VIDEO_BASE_URL", "").strip().rstrip("/")
 DEFAULT_GATEWAY_TOKEN = os.environ.get("MEMBER_GATEWAY_TOKEN", "").strip()
 DEFAULT_GATEWAY_IMAGE_TOKEN = os.environ.get("MEMBER_GATEWAY_IMAGE_TOKEN", "").strip()
 DEFAULT_GATEWAY_VIDEO_TOKEN = os.environ.get("MEMBER_GATEWAY_VIDEO_TOKEN", "").strip()
@@ -40,6 +64,43 @@ DEFAULT_GATEWAY_MODELS = [
     for item in os.environ.get("MEMBER_GATEWAY_MODELS", "").replace("\uFF0C", ",").split(",")
     if item.strip()
 ]
+DEFAULT_PUBLIC_SETTINGS = {
+    "cardSiteEnabled": True,
+    "cardSiteLabel": "购买授权码",
+    "cardSiteUrl": "",
+}
+PUBLISH_RELAY_TOKEN = (
+    os.environ.get("OPENCLAW_PUBLISH_RELAY_TOKEN")
+    or os.environ.get("PUBLISH_RELAY_TOKEN")
+    or ""
+).strip()
+PUBLISH_RELAY_DEFAULT_LEASE_MS = 30_000
+PUBLISH_RELAY_DEFAULT_WAIT_MS = 15_000
+PUBLISH_RELAY_MAX_ATTEMPTS = max(1, min(int(os.environ.get("PUBLISH_RELAY_MAX_ATTEMPTS", "5") or "5"), 20))
+PUBLISH_RELAY_BACKOFF_MS = 2_000
+PUBLISH_RELAY_MAX_BACKOFF_MS = 5 * 60_000
+MAX_BULK_CODE_HASHES = bounded_int_env("LICENSE_MAX_BULK_CODE_HASHES", 1000, 1, 5000)
+LOGIN_RATE_LIMIT_ATTEMPTS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_ATTEMPTS", 10, 1, 100)
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_WINDOW_SECONDS", 600, 60, 86_400)
+LOGIN_RATE_LIMIT_LOCKOUT_SECONDS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_LOCKOUT_SECONDS", 900, 60, 86_400)
+REGISTER_RATE_LIMIT_ATTEMPTS = bounded_int_env("LICENSE_REGISTER_RATE_LIMIT_ATTEMPTS", 8, 1, 100)
+REGISTER_RATE_LIMIT_WINDOW_SECONDS = bounded_int_env("LICENSE_REGISTER_RATE_LIMIT_WINDOW_SECONDS", 600, 60, 86_400)
+REGISTER_RATE_LIMIT_LOCKOUT_SECONDS = bounded_int_env("LICENSE_REGISTER_RATE_LIMIT_LOCKOUT_SECONDS", 900, 60, 86_400)
+DEFAULT_ADMIN_CORS_ORIGINS = {
+    "http://127.0.0.1:18791",
+    "http://localhost:18791",
+    "http://118.145.98.220",
+    "http://118.145.98.220:80",
+    "https://118.145.98.220",
+    "https://license.heang.top",
+}
+ADMIN_CORS_ALLOWED_ORIGINS = {
+    origin.strip().rstrip("/")
+    for origin in os.environ.get("LICENSE_ADMIN_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+} or DEFAULT_ADMIN_CORS_ORIGINS
+RATE_LIMIT_LOCK = threading.Lock()
+RATE_LIMITS: dict[str, dict[str, Any]] = {}
 ADMIN_HTML_FALLBACK = """<!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><title>OpenClaw Admin</title></head>
@@ -65,6 +126,10 @@ ADMIN_HTML = load_admin_html()
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def canonical(payload: dict[str, Any]) -> bytes:
@@ -93,8 +158,711 @@ def load_admin_token() -> str | None:
         with open(ADMIN_TOKEN_FILE, "r", encoding="utf-8") as file:
             token = file.read().strip()
         return token or None
-    except OSError:
+    except FileNotFoundError:
         return None
+    except (PermissionError, OSError) as error:
+        LOGGER.warning("Unable to read admin token file %s: %s", ADMIN_TOKEN_FILE, error)
+        return None
+
+
+ADMIN_SESSION_TTL_DAYS = max(1, min(int(os.environ.get("LICENSE_ADMIN_SESSION_TTL_DAYS", "30")), 3650))
+ACCOUNT_ROLE_MERCHANT = "merchant"
+ACCOUNT_ROLE_SUPER_ADMIN = "super_admin"
+ACCOUNT_STATUS_ACTIVE = "active"
+ACCOUNT_STATUS_DISABLED = "disabled"
+INVITE_CODE_STATUS_ACTIVE = "active"
+INVITE_CODE_STATUS_DISABLED = "disabled"
+INVITE_CODE_STATUS_USED = "used"
+INVITE_CODE_STATUS_EXPIRED = "expired"
+INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def normalize_username(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def normalize_account_role(value: Any) -> str:
+    role = str(value or "").strip().lower()
+    if role in {"super", "admin", "super_admin", "superadmin"}:
+        return ACCOUNT_ROLE_SUPER_ADMIN
+    return ACCOUNT_ROLE_MERCHANT
+
+
+def normalize_account_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    if status in {"disabled", "inactive", "false", "0", "off"}:
+        return ACCOUNT_STATUS_DISABLED
+    return ACCOUNT_STATUS_ACTIVE
+
+
+def role_rank(role: str) -> int:
+    return {ACCOUNT_ROLE_MERCHANT: 1, ACCOUNT_ROLE_SUPER_ADMIN: 2}.get(normalize_account_role(role), 0)
+
+
+def password_hash(password: str, *, salt: bytes | None = None, iterations: int = 210_000) -> str:
+    if not str(password or ""):
+        raise ValueError("password is required")
+    salt_bytes = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt_bytes, iterations)
+    return (
+        f"pbkdf2_sha256${iterations}$"
+        f"{base64.b64encode(salt_bytes).decode('ascii')}$"
+        f"{base64.b64encode(digest).decode('ascii')}"
+    )
+
+
+def verify_password(password: str, encoded: str) -> bool:
+    try:
+        algorithm, iterations_text, salt_b64, digest_b64 = str(encoded or "").split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        iterations = int(iterations_text)
+        salt = base64.b64decode(salt_b64)
+        expected = base64.b64decode(digest_b64)
+        actual = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt, iterations)
+        return secrets.compare_digest(actual, expected)
+    except Exception:
+        return False
+
+
+def admin_session_token_hash(token: str) -> str:
+    return hashlib.sha256(f"openclaw-admin-session-v1:{str(token).strip()}".encode("utf-8")).hexdigest()
+
+
+def generate_admin_session_token() -> str:
+    return secrets.token_urlsafe(36)
+
+
+def add_days_iso(days: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0).isoformat()
+
+
+def extract_bearer_token(headers: Any) -> str:
+    auth = str(headers.get("Authorization", "") or "")
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return ""
+
+
+def request_admin_token(headers: Any) -> str:
+    return (
+        extract_bearer_token(headers)
+        or str(headers.get("X-Admin-Session", "") or "").strip()
+        or str(headers.get("X-Admin-Token", "") or "").strip()
+    )
+
+
+def account_row_public(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    keys = set(row.keys())
+    return {
+        "accountId": row["id"],
+        "username": row["username"],
+        "displayName": row["display_name"],
+        "role": row["role"],
+        "status": row["status"],
+        "note": row["note"] if "note" in keys else "",
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+        "lastLoginAt": row["last_login_at"] if "last_login_at" in keys else "",
+        "lastLoginIp": row["last_login_ip"] if "last_login_ip" in keys else "",
+        "codeCount": int(row["code_count"]) if "code_count" in keys and row["code_count"] is not None else 0,
+        "activeCodeCount": int(row["active_code_count"]) if "active_code_count" in keys and row["active_code_count"] is not None else 0,
+        "disabledCodeCount": int(row["disabled_code_count"]) if "disabled_code_count" in keys and row["disabled_code_count"] is not None else 0,
+        "memberCodeCount": int(row["member_code_count"]) if "member_code_count" in keys and row["member_code_count"] is not None else 0,
+        "usedCodeCount": int(row["used_code_count"]) if "used_code_count" in keys and row["used_code_count"] is not None else 0,
+        "activationCount": int(row["activation_count"]) if "activation_count" in keys and row["activation_count"] is not None else 0,
+        "activationLimitCount": int(row["activation_limit_count"]) if "activation_limit_count" in keys and row["activation_limit_count"] is not None else 0,
+        "lastCodeCreatedAt": row["last_code_created_at"] if "last_code_created_at" in keys else "",
+        "lastActivationAt": row["last_activation_at"] if "last_activation_at" in keys else "",
+    }
+
+
+def get_account_by_username(username: str) -> sqlite3.Row | None:
+    normalized = normalize_username(username)
+    if not normalized:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "select * from accounts where username = ?",
+            (normalized,),
+        ).fetchone()
+    return row
+
+
+def get_account_by_id(account_id: int) -> sqlite3.Row | None:
+    if int(account_id or 0) <= 0:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "select * from accounts where id = ?",
+            (int(account_id),),
+        ).fetchone()
+    return row
+
+
+def list_account_rows() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            select a.*,
+                   count(c.code_hash) as code_count,
+                   coalesce(sum(case when c.disabled = 0 then 1 else 0 end), 0) as active_code_count,
+                   coalesce(sum(case when c.disabled != 0 then 1 else 0 end), 0) as disabled_code_count,
+                   coalesce(sum(case when c.member_mode = 1 then 1 else 0 end), 0) as member_code_count,
+                   coalesce(sum(case when coalesce(c.activations, 0) > 0 then 1 else 0 end), 0) as used_code_count,
+                   coalesce(sum(coalesce(c.activations, 0)), 0) as activation_count,
+                   coalesce(sum(coalesce(c.max_activations, 0)), 0) as activation_limit_count,
+                   coalesce(max(c.created_at), '') as last_code_created_at,
+                   coalesce(max(c.last_activated_at), '') as last_activation_at
+            from accounts a
+            left join (
+                select c.code_hash, c.owner_account_id, c.disabled, c.member_mode,
+                       c.max_activations, c.created_at,
+                       count(a.id) as activations,
+                       max(a.activated_at) as last_activated_at
+                from codes c
+                left join activations a on a.code_hash = c.code_hash
+                group by c.code_hash
+            ) c on c.owner_account_id = a.id
+            group by a.id
+            order by case a.role when ? then 0 else 1 end, a.created_at desc
+            """,
+            (ACCOUNT_ROLE_SUPER_ADMIN,),
+        ).fetchall()
+    return [account_row_public(row) for row in rows if account_row_public(row)]
+
+
+def account_summary_row(account_id: int) -> dict[str, Any] | None:
+    row = get_account_by_id(account_id)
+    return account_row_public(row) if row else None
+
+
+def normalize_invite_code(value: Any) -> str:
+    return str(value or "").strip().upper().replace(" ", "")
+
+
+def generate_invite_code() -> str:
+    groups = []
+    for _ in range(4):
+        groups.append("".join(secrets.choice(INVITE_CODE_ALPHABET) for _ in range(4)))
+    return "INV-" + "-".join(groups)
+
+
+def invite_row_public(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    keys = set(row.keys())
+    max_uses = max(1, int(row["max_uses"] or 1))
+    used_count = max(0, int(row["used_count"] or 0))
+    status = str(row["status"] or INVITE_CODE_STATUS_ACTIVE)
+    expires_at = str(row["expires_at"] or "")
+    now = utc_now()
+    if status == INVITE_CODE_STATUS_ACTIVE:
+        if expires_at and expires_at < now:
+            status = INVITE_CODE_STATUS_EXPIRED
+        elif used_count >= max_uses:
+            status = INVITE_CODE_STATUS_USED
+    remaining = max(0, max_uses - used_count)
+    return {
+        "inviteId": row["id"],
+        "inviteCode": row["invite_code"],
+        "role": row["role"],
+        "status": status,
+        "note": row["note"] if "note" in keys else "",
+        "maxUses": max_uses,
+        "usedCount": used_count,
+        "remainingUses": remaining,
+        "createdBy": int(row["created_by"] or 0),
+        "createdByUsername": row["created_by_username"] if "created_by_username" in keys else "",
+        "createdByDisplayName": row["created_by_display_name"] if "created_by_display_name" in keys else "",
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+        "expiresAt": expires_at,
+        "lastUsedAt": row["last_used_at"] if "last_used_at" in keys else "",
+        "lastUsedIp": row["last_used_ip"] if "last_used_ip" in keys else "",
+        "lastUsedUsername": row["last_used_username"] if "last_used_username" in keys else "",
+        "lastUsedAccountId": int(row["last_used_account_id"] or 0) if "last_used_account_id" in keys and row["last_used_account_id"] is not None else 0,
+    }
+
+
+def count_invites(*, active_only: bool = False) -> int:
+    with connect() as conn:
+        if active_only:
+            row = conn.execute(
+                """
+                select count(*)
+                from invite_codes
+                where status = ?
+                  and used_count < max_uses
+                  and (expires_at = '' or expires_at > ?)
+                """,
+                (INVITE_CODE_STATUS_ACTIVE, utc_now()),
+            ).fetchone()
+        else:
+            row = conn.execute("select count(*) from invite_codes").fetchone()
+        return int(row[0] or 0)
+
+
+def list_invite_rows() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            select i.*,
+                   coalesce(acc.username, '') as created_by_username,
+                   coalesce(acc.display_name, '') as created_by_display_name
+            from invite_codes i
+            left join accounts acc on acc.id = i.created_by
+            order by i.created_at desc
+            """
+        ).fetchall()
+    invites: list[dict[str, Any]] = []
+    for row in rows:
+        public = invite_row_public(row)
+        if public:
+            invites.append(public)
+    return invites
+
+
+def get_invite_by_code(invite_code: str) -> sqlite3.Row | None:
+    normalized = normalize_invite_code(invite_code)
+    if not normalized:
+        return None
+    with connect() as conn:
+        row = conn.execute("select * from invite_codes where invite_code = ?", (normalized,)).fetchone()
+    return row
+
+
+def _create_account_record_on_connection(
+    conn: sqlite3.Connection,
+    *,
+    username: str,
+    display_name: str = "",
+    password: str = "",
+    role: str = ACCOUNT_ROLE_MERCHANT,
+    status: str = ACCOUNT_STATUS_ACTIVE,
+    note: str = "",
+    created_by: int = 0,
+) -> tuple[dict[str, Any], str]:
+    normalized_username = normalize_username(username)
+    if not normalized_username:
+        raise ActivationError("用户名不能为空")
+    normalized_role = normalize_account_role(role)
+    normalized_status = normalize_account_status(status)
+    visible_name = str(display_name or "").strip() or normalized_username
+    provided_password = str(password or "").strip()
+    if provided_password and len(provided_password) < 8:
+        raise ActivationError("密码至少需要 8 个字符")
+    clear_password = provided_password or secrets.token_urlsafe(10)
+    hashed_password = password_hash(clear_password)
+    now = utc_now()
+    existing = conn.execute("select id from accounts where username = ?", (normalized_username,)).fetchone()
+    if existing:
+        raise ActivationError("用户名已存在", 409)
+    conn.execute(
+        """
+        insert into accounts (
+            username, display_name, password_hash, role, status, note,
+            created_by, created_at, updated_at, last_login_at, last_login_ip
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '')
+        """,
+        (
+            normalized_username,
+            visible_name,
+            hashed_password,
+            normalized_role,
+            normalized_status,
+            note[:500],
+            int(created_by or 0),
+            now,
+            now,
+        ),
+    )
+    row = conn.execute("select * from accounts where username = ?", (normalized_username,)).fetchone()
+    if not row:
+        raise ActivationError("创建账号失败", 500)
+    return account_row_public(row) or {}, "" if provided_password else clear_password
+
+
+def create_invite_record(
+    *,
+    note: str = "",
+    max_uses: int = 1,
+    expires_at: str = "",
+    created_by: int = 0,
+) -> tuple[dict[str, Any], str]:
+    normalized_note = str(note or "").strip()
+    normalized_expires_at = str(expires_at or "").strip()
+    normalized_max_uses = max(1, min(int(max_uses or 1), 100))
+    if normalized_expires_at and normalized_expires_at < utc_now():
+        raise ActivationError("到期时间不能早于当前时间")
+    now = utc_now()
+    with connect() as conn:
+        for _ in range(8):
+            invite_code = generate_invite_code()
+            try:
+                conn.execute(
+                    """
+                    insert into invite_codes (
+                        invite_code, role, status, max_uses, used_count, note,
+                        created_by, created_at, updated_at, expires_at,
+                        last_used_at, last_used_ip, last_used_username, last_used_account_id
+                    )
+                    values (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, '', '', '', 0)
+                    """,
+                    (
+                        invite_code,
+                        ACCOUNT_ROLE_MERCHANT,
+                        INVITE_CODE_STATUS_ACTIVE,
+                        normalized_max_uses,
+                        normalized_note[:500],
+                        int(created_by or 0),
+                        now,
+                        now,
+                        normalized_expires_at,
+                    ),
+                )
+                conn.commit()
+                row = conn.execute(
+                    """
+                    select i.*,
+                           coalesce(acc.username, '') as created_by_username,
+                           coalesce(acc.display_name, '') as created_by_display_name
+                    from invite_codes i
+                    left join accounts acc on acc.id = i.created_by
+                    where i.invite_code = ?
+                    """,
+                    (invite_code,),
+                ).fetchone()
+                return invite_row_public(row) or {}, invite_code
+            except sqlite3.IntegrityError:
+                conn.rollback()
+    raise ActivationError("生成邀请码失败", 500)
+
+
+def toggle_invite_record(invite_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        existing = conn.execute("select * from invite_codes where id = ?", (int(invite_id),)).fetchone()
+        if not existing:
+            return None
+        now = utc_now()
+        current_status = str(existing["status"] or INVITE_CODE_STATUS_ACTIVE)
+        if current_status == INVITE_CODE_STATUS_USED:
+            raise ActivationError("邀请码已用完，不能再次启用")
+        if current_status == INVITE_CODE_STATUS_EXPIRED:
+            raise ActivationError("邀请码已过期，不能直接启用")
+        next_status = INVITE_CODE_STATUS_DISABLED if current_status == INVITE_CODE_STATUS_ACTIVE else INVITE_CODE_STATUS_ACTIVE
+        conn.execute(
+            "update invite_codes set status = ?, updated_at = ? where id = ?",
+            (next_status, now, int(invite_id)),
+        )
+        conn.commit()
+    return invite_row_public(get_invite_by_code(str(existing["invite_code"])))
+
+
+def register_account_with_invite(
+    *,
+    invite_code: str,
+    username: str,
+    display_name: str = "",
+    password: str = "",
+    request_ip: str = "",
+    user_agent: str = "",
+) -> tuple[dict[str, Any], str, str]:
+    normalized_invite_code = normalize_invite_code(invite_code)
+    if not normalized_invite_code:
+        raise ActivationError("请输入邀请码")
+    normalized_username = normalize_username(username)
+    if not normalized_username:
+        raise ActivationError("用户名不能为空")
+    normalized_display_name = str(display_name or "").strip() or normalized_username
+    provided_password = str(password or "").strip()
+    if len(provided_password) < 8:
+        raise ActivationError("密码至少需要 8 个字符")
+
+    now = utc_now()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        invite_row = conn.execute("select * from invite_codes where invite_code = ?", (normalized_invite_code,)).fetchone()
+        if not invite_row:
+            raise ActivationError("邀请码不存在", 404)
+        if str(invite_row["status"] or INVITE_CODE_STATUS_ACTIVE) == INVITE_CODE_STATUS_DISABLED:
+            raise ActivationError("邀请码已停用", 403)
+        if str(invite_row["expires_at"] or "") and str(invite_row["expires_at"]) < now:
+            conn.execute(
+                "update invite_codes set status = ?, updated_at = ? where id = ?",
+                (INVITE_CODE_STATUS_EXPIRED, now, int(invite_row["id"])),
+            )
+            conn.commit()
+            raise ActivationError("邀请码已过期", 403)
+        max_uses = max(1, int(invite_row["max_uses"] or 1))
+        used_count = max(0, int(invite_row["used_count"] or 0))
+        if used_count >= max_uses:
+            conn.execute(
+                "update invite_codes set status = ?, updated_at = ? where id = ?",
+                (INVITE_CODE_STATUS_USED, now, int(invite_row["id"])),
+            )
+            conn.commit()
+            raise ActivationError("邀请码已使用", 403)
+        account, _ = _create_account_record_on_connection(
+            conn,
+            username=normalized_username,
+            display_name=normalized_display_name,
+            password=provided_password,
+            role=ACCOUNT_ROLE_MERCHANT,
+            status=ACCOUNT_STATUS_ACTIVE,
+            note=f"invite:{normalized_invite_code}",
+            created_by=int(invite_row["created_by"] or 0),
+        )
+        account_id = int(account.get("accountId") or 0)
+        if account_id <= 0:
+            raise ActivationError("创建账号失败", 500)
+        next_used_count = used_count + 1
+        next_status = INVITE_CODE_STATUS_USED if next_used_count >= max_uses else INVITE_CODE_STATUS_ACTIVE
+        conn.execute(
+            """
+            update invite_codes
+            set used_count = ?,
+                status = ?,
+                last_used_at = ?,
+                last_used_ip = ?,
+                last_used_username = ?,
+                last_used_account_id = ?,
+                updated_at = ?
+            where id = ?
+            """,
+            (
+                next_used_count,
+                next_status,
+                now,
+                request_ip[:80],
+                normalized_username[:80],
+                account_id,
+                now,
+                int(invite_row["id"]),
+            ),
+        )
+        conn.commit()
+
+    add_audit_log(
+        action="accounts.register",
+        target_type="account",
+        target_id=normalized_username,
+        before={},
+        after=account,
+        actor=f"invite:{normalized_invite_code[-8:]}",
+        request_ip=request_ip,
+        backup_path="",
+    )
+    return account, normalized_invite_code, ""
+
+
+def create_account_record(
+    *,
+    username: str,
+    display_name: str = "",
+    password: str = "",
+    role: str = ACCOUNT_ROLE_MERCHANT,
+    status: str = ACCOUNT_STATUS_ACTIVE,
+    note: str = "",
+    created_by: int = 0,
+) -> tuple[dict[str, Any], str]:
+    with connect() as conn:
+        account, temp_password = _create_account_record_on_connection(
+            conn,
+            username=username,
+            display_name=display_name,
+            password=password,
+            role=role,
+            status=status,
+            note=note,
+            created_by=created_by,
+        )
+        conn.commit()
+    return account, temp_password
+
+
+def update_account_record(
+    *,
+    account_id: int,
+    display_name: str | None = None,
+    role: str | None = None,
+    status: str | None = None,
+    password: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any] | None:
+    with connect() as conn:
+        existing = conn.execute("select * from accounts where id = ?", (int(account_id),)).fetchone()
+        if not existing:
+            return None
+        new_display_name = str(display_name).strip() if display_name is not None else str(existing["display_name"] or "")
+        new_role = normalize_account_role(role) if role is not None else str(existing["role"] or ACCOUNT_ROLE_MERCHANT)
+        new_status = normalize_account_status(status) if status is not None else str(existing["status"] or ACCOUNT_STATUS_ACTIVE)
+        new_note = str(note).strip() if note is not None else str(existing["note"] or "")
+        new_password_hash = str(existing["password_hash"] or "")
+        if password is not None and str(password).strip():
+            clear_password = str(password).strip()
+            if len(clear_password) < 8:
+                raise ActivationError("密码至少需要 8 个字符")
+            new_password_hash = password_hash(clear_password)
+        conn.execute(
+            """
+            update accounts
+            set display_name = ?,
+                password_hash = ?,
+                role = ?,
+                status = ?,
+                note = ?,
+                updated_at = ?
+            where id = ?
+            """,
+            (
+                new_display_name or str(existing["username"] or ""),
+                new_password_hash,
+                new_role,
+                new_status,
+                new_note[:500],
+                utc_now(),
+                int(account_id),
+            ),
+        )
+        conn.commit()
+    return account_summary_row(int(account_id))
+
+
+def admin_context_from_row(row: sqlite3.Row, *, auth_type: str, token: str = "") -> dict[str, Any]:
+    display_name = str(row["display_name"] or "").strip() or str(row["username"] or "admin")
+    account_id = int(row["id"])
+    role = str(row["role"] or ACCOUNT_ROLE_MERCHANT)
+    return {
+        "authType": auth_type,
+        "accountId": account_id,
+        "username": str(row["username"] or ""),
+        "displayName": display_name,
+        "role": role,
+        "status": str(row["status"] or ACCOUNT_STATUS_ACTIVE),
+        "actor": f"{str(row['username'] or 'admin')}#{account_id}",
+        "sessionToken": token,
+    }
+
+
+def load_admin_context_from_session(token: str) -> dict[str, Any] | None:
+    session_token = str(token or "").strip()
+    if not session_token:
+        return None
+    session_hash = admin_session_token_hash(session_token)
+    now = utc_now()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            select s.session_hash, s.account_id, s.created_at, s.updated_at, s.expires_at,
+                   s.revoked_at, s.request_ip, s.user_agent,
+                   a.id, a.username, a.display_name, a.password_hash, a.role, a.status, a.note,
+                   a.created_at, a.updated_at, a.last_login_at, a.last_login_ip
+            from admin_sessions s
+            join accounts a on a.id = s.account_id
+            where s.session_hash = ?
+            """,
+            (session_hash,),
+        ).fetchone()
+        if not row:
+            return None
+        if row["revoked_at"] or row["expires_at"] < now or row["status"] != ACCOUNT_STATUS_ACTIVE:
+            return None
+        conn.execute(
+            "update admin_sessions set updated_at = ? where session_hash = ?",
+            (now, session_hash),
+        )
+        conn.commit()
+    return admin_context_from_row(row, auth_type="session", token=session_token)
+
+
+def load_legacy_admin_context(token: str) -> dict[str, Any] | None:
+    expected = load_admin_token()
+    provided = str(token or "").strip()
+    if not expected or not provided:
+        return None
+    if not secrets.compare_digest(provided, expected):
+        return None
+    digest = hashlib.sha256(provided.encode("utf-8")).hexdigest()[:10]
+    return {
+        "authType": "legacy",
+        "accountId": 0,
+        "username": "legacy-admin",
+        "displayName": "Legacy Admin",
+        "role": ACCOUNT_ROLE_SUPER_ADMIN,
+        "status": ACCOUNT_STATUS_ACTIVE,
+        "actor": f"legacy:{digest}",
+        "sessionToken": provided,
+    }
+
+
+def create_admin_session(account_id: int, *, request_ip: str = "", user_agent: str = "") -> tuple[str, str]:
+    raw_token = generate_admin_session_token()
+    session_hash = admin_session_token_hash(raw_token)
+    now = utc_now()
+    expires_at = add_days_iso(ADMIN_SESSION_TTL_DAYS)
+    with connect() as conn:
+        conn.execute(
+            """
+            insert into admin_sessions (
+                session_hash, account_id, created_at, updated_at, expires_at,
+                revoked_at, request_ip, user_agent
+            )
+            values (?, ?, ?, ?, ?, '', ?, ?)
+            """,
+            (session_hash, int(account_id), now, now, expires_at, request_ip[:80], user_agent[:240]),
+        )
+        conn.commit()
+    return raw_token, expires_at
+
+
+def revoke_admin_session(token: str) -> bool:
+    session_token = str(token or "").strip()
+    if not session_token:
+        return False
+    session_hash = admin_session_token_hash(session_token)
+    with connect() as conn:
+        result = conn.execute(
+            "update admin_sessions set revoked_at = ?, updated_at = ? where session_hash = ? and revoked_at = ''",
+            (utc_now(), utc_now(), session_hash),
+        )
+        conn.commit()
+    return result.rowcount > 0
+
+
+def count_accounts() -> int:
+    with connect() as conn:
+        return int(conn.execute("select count(*) from accounts").fetchone()[0] or 0)
+
+
+def count_active_super_admins() -> int:
+    with connect() as conn:
+        return int(
+            conn.execute(
+                "select count(*) from accounts where role = ? and status = ?",
+                (ACCOUNT_ROLE_SUPER_ADMIN, ACCOUNT_STATUS_ACTIVE),
+            ).fetchone()[0]
+            or 0
+        )
+
+
+def auth_status_snapshot() -> dict[str, Any]:
+    accounts = count_accounts()
+    invites = count_invites()
+    active_invites = count_invites(active_only=True)
+    return {
+        "hasAccounts": accounts > 0,
+        "accountCount": accounts,
+        "inviteCount": invites,
+        "activeInviteCount": active_invites,
+        "registrationMode": "invite",
+        "inviteRegistrationEnabled": True,
+        "bootstrapAvailable": bool(load_admin_token()) and accounts == 0,
+        "sessionTtlDays": ADMIN_SESSION_TTL_DAYS,
+    }
 
 
 def public_key_b64() -> str:
@@ -105,6 +873,96 @@ def public_key_b64() -> str:
     return base64.b64encode(public).decode("ascii")
 
 
+def normalize_code_hashes(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise ActivationError("批量更新需要授权码列表")
+    if len(value) > MAX_BULK_CODE_HASHES:
+        raise ActivationError(f"批量更新一次最多支持 {MAX_BULK_CODE_HASHES} 个授权码", 400)
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in value:
+        item_hash = str(item or "").strip().lower()
+        if not item_hash:
+            continue
+        if len(item_hash) != 64 or any(ch not in "0123456789abcdef" for ch in item_hash):
+            raise ActivationError("授权码哈希格式不正确", 400)
+        if item_hash not in seen:
+            seen.add(item_hash)
+            normalized.append(item_hash)
+    return normalized
+
+
+def rate_limit_storage_key(scope: str, key: str) -> str:
+    return f"{scope}:{key.strip().lower()[:160]}"
+
+
+def rate_limit_check(scope: str, key: str) -> None:
+    now = time.time()
+    storage_key = rate_limit_storage_key(scope, key)
+    with RATE_LIMIT_LOCK:
+        entry = RATE_LIMITS.get(storage_key)
+        if not entry:
+            return
+        locked_until = float(entry.get("locked_until") or 0)
+        if locked_until > now:
+            raise ActivationError("请求过于频繁，请稍后再试", 429)
+        window_start = float(entry.get("window_start") or 0)
+        window_seconds = float(entry.get("window_seconds") or 0)
+        if window_seconds and now - window_start > window_seconds:
+            RATE_LIMITS.pop(storage_key, None)
+
+
+def rate_limit_record_failure(scope: str, key: str, *, limit: int, window_seconds: int, lockout_seconds: int) -> None:
+    now = time.time()
+    storage_key = rate_limit_storage_key(scope, key)
+    with RATE_LIMIT_LOCK:
+        entry = RATE_LIMITS.get(storage_key)
+        if not entry or now - float(entry.get("window_start") or 0) > window_seconds:
+            entry = {"window_start": now, "count": 0, "locked_until": 0, "window_seconds": window_seconds}
+        entry["count"] = int(entry.get("count") or 0) + 1
+        if int(entry["count"]) >= limit:
+            entry["locked_until"] = now + lockout_seconds
+        RATE_LIMITS[storage_key] = entry
+
+
+def rate_limit_clear(scope: str, key: str) -> None:
+    with RATE_LIMIT_LOCK:
+        RATE_LIMITS.pop(rate_limit_storage_key(scope, key), None)
+
+
+def rate_limit_consume(scope: str, key: str, *, limit: int, window_seconds: int, lockout_seconds: int) -> None:
+    rate_limit_check(scope, key)
+    now = time.time()
+    storage_key = rate_limit_storage_key(scope, key)
+    with RATE_LIMIT_LOCK:
+        entry = RATE_LIMITS.get(storage_key)
+        if not entry or now - float(entry.get("window_start") or 0) > window_seconds:
+            entry = {"window_start": now, "count": 0, "locked_until": 0, "window_seconds": window_seconds}
+        count = int(entry.get("count") or 0)
+        if count >= limit:
+            entry["locked_until"] = now + lockout_seconds
+            RATE_LIMITS[storage_key] = entry
+            raise ActivationError("请求过于频繁，请稍后再试", 429)
+        entry["count"] = count + 1
+        if int(entry["count"]) >= limit:
+            entry["locked_until"] = now + lockout_seconds
+        RATE_LIMITS[storage_key] = entry
+
+
+def admin_cors_origin_allowed(origin: str) -> bool:
+    normalized = origin.strip().rstrip("/")
+    if not normalized:
+        return False
+    if normalized in ADMIN_CORS_ALLOWED_ORIGINS:
+        return True
+    parsed = urlparse(normalized)
+    return parsed.scheme in {"http", "https"} and parsed.hostname in {"127.0.0.1", "localhost"}
+
+
+def is_admin_request_path(path: str) -> bool:
+    return urlparse(path).path.startswith("/admin")
+
+
 def sign_license(payload: dict[str, Any]) -> dict[str, Any]:
     private_key = load_private_key()
     signature = private_key.sign(canonical(payload))
@@ -113,9 +971,17 @@ def sign_license(payload: dict[str, Any]) -> dict[str, Any]:
     return license_data
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        try:
+            return bool(super().__exit__(exc_type, exc_value, traceback))
+        finally:
+            self.close()
+
+
 def connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
     init_db(conn)
     return conn
@@ -143,6 +1009,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             member_mode integer not null default 0,
             plan text not null default '',
             gateway_base_url text not null default '',
+            gateway_image_base_url text not null default '',
+            gateway_video_base_url text not null default '',
             gateway_token text not null default '',
             gateway_image_token text not null default '',
             gateway_video_token text not null default '',
@@ -170,6 +1038,59 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        create table if not exists accounts (
+            id integer primary key autoincrement,
+            username text not null unique,
+            display_name text not null default '',
+            password_hash text not null,
+            role text not null default 'merchant',
+            status text not null default 'active',
+            note text not null default '',
+            created_by integer not null default 0,
+            created_at text not null,
+            updated_at text not null,
+            last_login_at text not null default '',
+            last_login_ip text not null default ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        create table if not exists admin_sessions (
+            session_hash text primary key,
+            account_id integer not null,
+            created_at text not null,
+            updated_at text not null,
+            expires_at text not null,
+            revoked_at text not null default '',
+            request_ip text not null default '',
+            user_agent text not null default ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        create table if not exists invite_codes (
+            id integer primary key autoincrement,
+            invite_code text not null unique,
+            role text not null default 'merchant',
+            status text not null default 'active',
+            max_uses integer not null default 1,
+            used_count integer not null default 0,
+            note text not null default '',
+            created_by integer not null default 0,
+            created_at text not null,
+            updated_at text not null,
+            expires_at text not null default '',
+            last_used_at text not null default '',
+            last_used_ip text not null default '',
+            last_used_username text not null default '',
+            last_used_account_id integer not null default 0
+        )
+        """
+    )
+    conn.execute(
+        """
         create table if not exists audit_logs (
             id integer primary key autoincrement,
             actor text not null default '',
@@ -192,6 +1113,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             duration_days integer not null default 31,
             features_json text not null default '[]',
             gateway_base_url text not null default '',
+            gateway_image_base_url text not null default '',
+            gateway_video_base_url text not null default '',
             gateway_token text not null default '',
             gateway_image_token text not null default '',
             gateway_video_token text not null default '',
@@ -206,10 +1129,65 @@ def init_db(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        create table if not exists settings (
+            key text primary key,
+            value_json text not null default '{}',
+            updated_at text not null
+        )
+        """
+    )
+    conn.execute(
+        """
+        create table if not exists account_gateway_settings (
+            account_id integer primary key,
+            gateway_base_url text not null default '',
+            gateway_image_base_url text not null default '',
+            gateway_video_base_url text not null default '',
+            gateway_token text not null default '',
+            gateway_image_token text not null default '',
+            gateway_video_token text not null default '',
+            gateway_default_model text not null default '',
+            gateway_image_model text not null default '',
+            gateway_video_model text not null default '',
+            gateway_models_json text not null default '[]',
+            created_at text not null,
+            updated_at text not null
+        )
+        """
+    )
+    conn.execute(
+        """
+        create table if not exists publish_relay_packets (
+            seq integer primary key autoincrement,
+            packet_id text not null unique,
+            channel_id text not null,
+            packet_json text not null,
+            status text not null default 'pending',
+            attempts integer not null default 0,
+            created_at text not null,
+            updated_at text not null,
+            leased_by text not null default '',
+            lease_id text not null default '',
+            lease_until_ms integer not null default 0,
+            next_available_at_ms integer not null default 0,
+            completed_at text not null default '',
+            result_json text not null default '',
+            last_error text not null default ''
+        )
+        """
+    )
+    conn.execute(
+        "create index if not exists idx_publish_relay_channel_status on publish_relay_packets (channel_id, status, seq)"
+    )
+    ensure_column(conn, "codes", "owner_account_id", "integer not null default 0")
     ensure_column(conn, "codes", "full_code", "text not null default ''")
     ensure_column(conn, "codes", "member_mode", "integer not null default 0")
     ensure_column(conn, "codes", "plan", "text not null default ''")
     ensure_column(conn, "codes", "gateway_base_url", "text not null default ''")
+    ensure_column(conn, "codes", "gateway_image_base_url", "text not null default ''")
+    ensure_column(conn, "codes", "gateway_video_base_url", "text not null default ''")
     ensure_column(conn, "codes", "gateway_token", "text not null default ''")
     ensure_column(conn, "codes", "gateway_image_token", "text not null default ''")
     ensure_column(conn, "codes", "gateway_video_token", "text not null default ''")
@@ -219,6 +1197,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "codes", "gateway_models_json", "text not null default '[]'")
     ensure_column(conn, "codes", "quotas_json", "text not null default '{}'")
     ensure_column(conn, "plans", "gateway_base_url", "text not null default ''")
+    ensure_column(conn, "plans", "gateway_image_base_url", "text not null default ''")
+    ensure_column(conn, "plans", "gateway_video_base_url", "text not null default ''")
     ensure_column(conn, "plans", "gateway_token", "text not null default ''")
     ensure_column(conn, "plans", "gateway_image_token", "text not null default ''")
     ensure_column(conn, "plans", "gateway_video_token", "text not null default ''")
@@ -227,8 +1207,19 @@ def init_db(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "plans", "gateway_video_model", "text not null default ''")
     ensure_column(conn, "plans", "gateway_models_json", "text not null default '[]'")
     ensure_column(conn, "plans", "quotas_json", "text not null default '{}'")
+    seed_default_settings(conn)
     seed_default_plans(conn)
     conn.commit()
+
+
+def seed_default_settings(conn: sqlite3.Connection) -> None:
+    row = conn.execute("select 1 from settings where key = ?", ("public",)).fetchone()
+    if row:
+        return
+    conn.execute(
+        "insert into settings (key, value_json, updated_at) values (?, ?, ?)",
+        ("public", json.dumps(DEFAULT_PUBLIC_SETTINGS, ensure_ascii=False, sort_keys=True), utc_now()),
+    )
 
 
 def seed_default_plans(conn: sqlite3.Connection) -> None:
@@ -247,12 +1238,13 @@ def seed_default_plans(conn: sqlite3.Connection) -> None:
             """
             insert into plans (
                 plan_key, display_name, duration_days, features_json, gateway_base_url,
+                gateway_image_base_url, gateway_video_base_url,
                 gateway_token, gateway_image_token, gateway_video_token,
                 gateway_default_model, gateway_image_model, gateway_video_model,
                 gateway_models_json, quotas_json,
                 disabled, created_at, updated_at
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             """,
             (
                 plan_key,
@@ -260,6 +1252,8 @@ def seed_default_plans(conn: sqlite3.Connection) -> None:
                 duration_days,
                 json.dumps(features, ensure_ascii=False),
                 DEFAULT_GATEWAY_BASE_URL,
+                DEFAULT_GATEWAY_IMAGE_BASE_URL,
+                DEFAULT_GATEWAY_VIDEO_BASE_URL,
                 DEFAULT_GATEWAY_TOKEN,
                 DEFAULT_GATEWAY_IMAGE_TOKEN,
                 DEFAULT_GATEWAY_VIDEO_TOKEN,
@@ -272,6 +1266,292 @@ def seed_default_plans(conn: sqlite3.Connection) -> None:
                 now,
             ),
         )
+
+
+def clamp_int(value: Any, minimum: int, maximum: int, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(maximum, max(minimum, parsed))
+
+
+def normalize_string(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def publish_relay_backoff_ms(attempts: int) -> int:
+    factor = max(1, 2 ** max(0, attempts - 1))
+    return min(PUBLISH_RELAY_MAX_BACKOFF_MS, PUBLISH_RELAY_BACKOFF_MS * factor)
+
+
+def publish_relay_packet_id() -> str:
+    return f"relay_{secrets.token_hex(6)}"
+
+
+def publish_relay_lease_id() -> str:
+    return f"lease_{secrets.token_hex(6)}"
+
+
+def publish_relay_auth_required() -> bool:
+    return True
+
+
+def publish_relay_configured() -> bool:
+    return bool(PUBLISH_RELAY_TOKEN)
+
+
+def publish_relay_request_token(headers: Any) -> str:
+    direct = normalize_string(headers.get("X-OpenClaw-Relay-Token", ""))
+    if direct:
+        return direct
+    auth = normalize_string(headers.get("Authorization", ""))
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return ""
+
+
+def publish_relay_token_valid(headers: Any) -> bool:
+    if not PUBLISH_RELAY_TOKEN:
+        return False
+    provided = publish_relay_request_token(headers)
+    return bool(provided) and secrets.compare_digest(provided, PUBLISH_RELAY_TOKEN)
+
+
+def publish_relay_record_from_row(row: sqlite3.Row, include_packet: bool = False) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": row["packet_id"],
+        "channelId": row["channel_id"],
+        "status": row["status"],
+        "attempts": row["attempts"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+        "leasedBy": row["leased_by"],
+        "leaseId": row["lease_id"],
+        "leaseUntil": row["lease_until_ms"] or None,
+        "nextAvailableAt": row["next_available_at_ms"] or None,
+        "completedAt": row["completed_at"] or None,
+        "lastError": row["last_error"] or "",
+    }
+    if include_packet:
+        try:
+            payload["packet"] = json.loads(row["packet_json"] or "{}")
+        except json.JSONDecodeError as error:
+            LOGGER.warning("Invalid publish relay packet JSON for %s: %s", row["packet_id"], error)
+            payload["packet"] = {}
+    if row["result_json"]:
+        try:
+            payload["result"] = json.loads(row["result_json"] or "{}")
+        except json.JSONDecodeError as error:
+            LOGGER.warning("Invalid publish relay result JSON for %s: %s", row["packet_id"], error)
+            payload["result"] = row["result_json"]
+    return payload
+
+
+def publish_relay_fetch(conn: sqlite3.Connection, packet_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "select * from publish_relay_packets where packet_id = ?",
+        (packet_id,),
+    ).fetchone()
+
+
+def publish_relay_enqueue(packet: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(packet, dict):
+        raise ActivationError("Invalid JSON body", 400)
+    channel_id = normalize_string(packet.get("channelId") or packet.get("channel_id"))
+    if not channel_id:
+        raise ActivationError("Missing required field: channelId", 400)
+    schema = normalize_string(packet.get("schema"))
+    if schema not in {"openclaw.publish.packet.v1", "openclaw.phone.screenshot.v1"}:
+        raise ActivationError("Unsupported packet schema", 400)
+
+    packet_id = publish_relay_packet_id()
+    timestamp = utc_now()
+    with connect() as conn:
+        conn.execute(
+            """
+            insert into publish_relay_packets (
+                packet_id, channel_id, packet_json, status, attempts,
+                created_at, updated_at, leased_by, lease_id, lease_until_ms,
+                next_available_at_ms, completed_at, result_json, last_error
+            )
+            values (?, ?, ?, 'pending', 0, ?, ?, '', '', 0, 0, '', '', '')
+            """,
+            (packet_id, channel_id, json.dumps(packet, ensure_ascii=False), timestamp, timestamp),
+        )
+        conn.commit()
+        row = publish_relay_fetch(conn, packet_id)
+        assert row is not None
+        return publish_relay_record_from_row(row, include_packet=True)
+
+
+def publish_relay_claim(channel_id: str, client_id: str, lease_ms: int) -> dict[str, Any] | None:
+    channel_id = normalize_string(channel_id)
+    client_id = normalize_string(client_id) or "default-client"
+    lease_ms = clamp_int(lease_ms, 1_000, 15 * 60_000, PUBLISH_RELAY_DEFAULT_LEASE_MS)
+    if not channel_id:
+        raise ActivationError("Missing channelId", 400)
+
+    current_ms = now_ms()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            select * from publish_relay_packets
+            where channel_id = ? and status not in ('done', 'failed')
+            order by seq asc
+            """,
+            (channel_id,),
+        ).fetchall()
+        for row in rows:
+            if row["status"] == "leased" and int(row["lease_until_ms"] or 0) > current_ms:
+                continue
+            if int(row["next_available_at_ms"] or 0) > current_ms:
+                continue
+            if int(row["attempts"] or 0) >= PUBLISH_RELAY_MAX_ATTEMPTS:
+                conn.execute(
+                    """
+                    update publish_relay_packets
+                    set status = 'failed', updated_at = ?, completed_at = ?,
+                        last_error = case when last_error = '' then 'Max retry attempts reached' else last_error end
+                    where packet_id = ?
+                    """,
+                    (utc_now(), utc_now(), row["packet_id"]),
+                )
+                conn.commit()
+                continue
+
+            lease_id = publish_relay_lease_id()
+            conn.execute(
+                """
+                update publish_relay_packets
+                set status = 'leased', attempts = attempts + 1, leased_by = ?,
+                    lease_id = ?, lease_until_ms = ?, updated_at = ?
+                where packet_id = ?
+                """,
+                (client_id, lease_id, current_ms + lease_ms, utc_now(), row["packet_id"]),
+            )
+            conn.commit()
+            claimed = publish_relay_fetch(conn, row["packet_id"])
+            assert claimed is not None
+            return publish_relay_record_from_row(claimed, include_packet=True)
+    return None
+
+
+def publish_relay_wait_for_packet(channel_id: str, client_id: str, lease_ms: int, wait_ms: int) -> dict[str, Any] | None:
+    wait_ms = clamp_int(wait_ms, 0, 15 * 60_000, PUBLISH_RELAY_DEFAULT_WAIT_MS)
+    deadline = now_ms() + wait_ms
+    while True:
+        claimed = publish_relay_claim(channel_id, client_id, lease_ms)
+        if claimed:
+            return claimed
+        if wait_ms <= 0 or now_ms() >= deadline:
+            return None
+        time.sleep(min(0.5, max(0.25, (deadline - now_ms()) / 1000.0)))
+
+
+def publish_relay_complete(body: dict[str, Any]) -> dict[str, Any]:
+    packet_id = normalize_string(body.get("packetId") or body.get("id"))
+    lease_id = normalize_string(body.get("leaseId") or body.get("lease_id"))
+    client_id = normalize_string(body.get("clientId") or body.get("client_id"))
+    success = bool(body.get("success"))
+    if not packet_id:
+        raise ActivationError("Missing packetId", 400)
+
+    with connect() as conn:
+        row = publish_relay_fetch(conn, packet_id)
+        if row is None:
+            raise ActivationError(f"Packet not found: {packet_id}", 404)
+        if lease_id and row["lease_id"] and lease_id != row["lease_id"]:
+            raise ActivationError("Lease id mismatch", 409)
+        if client_id and row["leased_by"] and client_id != row["leased_by"]:
+            raise ActivationError("Client id mismatch", 409)
+
+        result = body.get("result", body.get("response"))
+        result_json = json.dumps(result, ensure_ascii=False) if result is not None else ""
+        error = "" if success else normalize_string(body.get("error") or body.get("message"))
+        current_ms = now_ms()
+        timestamp = utc_now()
+        if success:
+            conn.execute(
+                """
+                update publish_relay_packets
+                set status = 'done', updated_at = ?, completed_at = ?,
+                    lease_id = '', leased_by = '', lease_until_ms = 0,
+                    next_available_at_ms = 0, result_json = ?, last_error = ''
+                where packet_id = ?
+                """,
+                (timestamp, timestamp, result_json, packet_id),
+            )
+        else:
+            attempts = int(row["attempts"] or 0)
+            retryable = attempts < PUBLISH_RELAY_MAX_ATTEMPTS
+            conn.execute(
+                """
+                update publish_relay_packets
+                set status = ?, updated_at = ?, completed_at = ?,
+                    lease_id = '', leased_by = '', lease_until_ms = 0,
+                    next_available_at_ms = ?, result_json = ?, last_error = ?
+                where packet_id = ?
+                """,
+                (
+                    "pending" if retryable else "failed",
+                    timestamp,
+                    "" if retryable else timestamp,
+                    current_ms + publish_relay_backoff_ms(attempts) if retryable else 0,
+                    result_json,
+                    error,
+                    packet_id,
+                ),
+            )
+        conn.commit()
+        updated = publish_relay_fetch(conn, packet_id)
+        assert updated is not None
+        return publish_relay_record_from_row(updated)
+
+
+def publish_relay_status(packet_id: str, include_packet: bool = True) -> dict[str, Any]:
+    packet_id = normalize_string(packet_id)
+    if not packet_id:
+        raise ActivationError("Missing packetId", 400)
+    with connect() as conn:
+        row = publish_relay_fetch(conn, packet_id)
+        if row is None:
+            raise ActivationError(f"Packet not found: {packet_id}", 404)
+        return publish_relay_record_from_row(row, include_packet=include_packet)
+
+
+def publish_relay_stats(channel_id: str = "") -> dict[str, Any]:
+    channel_id = normalize_string(channel_id)
+    current_ms = now_ms()
+    params: tuple[Any, ...] = ()
+    where = ""
+    if channel_id:
+        where = "where channel_id = ?"
+        params = (channel_id,)
+    with connect() as conn:
+        rows = conn.execute(f"select status, lease_until_ms, next_available_at_ms from publish_relay_packets {where}", params).fetchall()
+    pending = 0
+    leased = 0
+    done = 0
+    failed = 0
+    for row in rows:
+        status = row["status"]
+        if status == "done":
+            done += 1
+        elif status == "failed":
+            failed += 1
+        elif status == "leased" and int(row["lease_until_ms"] or 0) > current_ms:
+            leased += 1
+        elif int(row["next_available_at_ms"] or 0) <= current_ms:
+            pending += 1
+    return {
+        "channelId": channel_id or None,
+        "total": len(rows),
+        "pending": pending,
+        "leased": leased,
+        "done": done,
+        "failed": failed,
+    }
 
 
 def make_code(edition: str = "PRO") -> str:
@@ -314,6 +1594,25 @@ def parse_json_object(raw: Any, default: dict[str, Any] | None = None) -> dict[s
     return data if isinstance(data, dict) else dict(default or {})
 
 
+def is_super_admin_context(context: dict[str, Any] | None) -> bool:
+    return bool(context) and str(context.get("role") or "").strip() == ACCOUNT_ROLE_SUPER_ADMIN
+
+
+def context_account_id(context: dict[str, Any] | None) -> int:
+    if not context:
+        return 0
+    try:
+        return int(context.get("accountId") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def code_row_owned_by_context(row: sqlite3.Row, context: dict[str, Any] | None) -> bool:
+    if not context or is_super_admin_context(context):
+        return True
+    return int(row["owner_account_id"] or 0) == context_account_id(context)
+
+
 def create_code_records(
     *,
     count: int,
@@ -325,6 +1624,8 @@ def create_code_records(
     member_mode: bool = False,
     plan: str = "",
     gateway_base_url: str = "",
+    gateway_image_base_url: str = "",
+    gateway_video_base_url: str = "",
     gateway_token: str = "",
     gateway_image_token: str = "",
     gateway_video_token: str = "",
@@ -333,6 +1634,7 @@ def create_code_records(
     gateway_video_model: str = "",
     gateway_models: list[str] | None = None,
     quotas: dict[str, Any] | None = None,
+    owner_account_id: int = 0,
 ) -> list[str]:
     count = max(1, min(int(count), 100))
     max_activations = max(1, min(int(max_activations), 20))
@@ -345,11 +1647,12 @@ def create_code_records(
                 insert into codes (
                     code_hash, code_label, full_code, licensee, edition, features_json, expires,
                     max_activations, disabled, member_mode, plan, gateway_base_url, gateway_token,
+                    gateway_image_base_url, gateway_video_base_url,
                     gateway_image_token, gateway_video_token,
                     gateway_default_model, gateway_image_model, gateway_video_model,
-                    gateway_models_json, quotas_json, created_at
+                    gateway_models_json, quotas_json, owner_account_id, created_at
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     code_hash(code),
@@ -364,6 +1667,8 @@ def create_code_records(
                     plan.strip(),
                     gateway_base_url.strip().rstrip("/"),
                     gateway_token.strip(),
+                    gateway_image_base_url.strip().rstrip("/"),
+                    gateway_video_base_url.strip().rstrip("/"),
                     gateway_image_token.strip(),
                     gateway_video_token.strip(),
                     gateway_default_model.strip(),
@@ -371,6 +1676,7 @@ def create_code_records(
                     gateway_video_model.strip(),
                     json.dumps(gateway_models or [], ensure_ascii=False),
                     json.dumps(quotas or {}, ensure_ascii=False),
+                    int(owner_account_id or 0),
                     utc_now(),
                 ),
             )
@@ -379,7 +1685,7 @@ def create_code_records(
     return codes
 
 
-def update_code_record(body: dict[str, Any]) -> None:
+def update_code_record(body: dict[str, Any], current_account: dict[str, Any] | None = None) -> None:
     code_hash_value = str(body.get("codeHash", "")).strip()
     if not code_hash_value:
         raise ActivationError("缺少授权码标识")
@@ -395,6 +1701,8 @@ def update_code_record(body: dict[str, Any]) -> None:
     member_mode = bool(body.get("memberMode"))
     plan = str(body.get("plan", "")).strip()
     gateway_base_url = str(body.get("gatewayBaseUrl", "")).strip().rstrip("/")
+    gateway_image_base_url = str(body.get("gatewayImageBaseUrl") or body.get("gateway_image_base_url") or "").strip().rstrip("/")
+    gateway_video_base_url = str(body.get("gatewayVideoBaseUrl") or body.get("gateway_video_base_url") or "").strip().rstrip("/")
     gateway_token = str(body.get("gatewayToken", "")).strip()
     gateway_image_token = str(body.get("gatewayImageToken") or body.get("gateway_image_token") or "").strip()
     gateway_video_token = str(body.get("gatewayVideoToken") or body.get("gateway_video_token") or "").strip()
@@ -407,7 +1715,8 @@ def update_code_record(body: dict[str, Any]) -> None:
     with connect() as conn:
         existing = conn.execute(
             """
-            select gateway_token, gateway_image_token, gateway_video_token,
+            select owner_account_id, gateway_image_base_url, gateway_video_base_url,
+                   gateway_token, gateway_image_token, gateway_video_token,
                    gateway_image_model, gateway_video_model
             from codes
             where code_hash = ?
@@ -416,6 +1725,12 @@ def update_code_record(body: dict[str, Any]) -> None:
         ).fetchone()
         if not existing:
             raise ActivationError("授权码不存在", 404)
+        if current_account and not code_row_owned_by_context(existing, current_account):
+            raise ActivationError("无权修改该授权码", 403)
+        if not gateway_image_base_url:
+            gateway_image_base_url = str(existing["gateway_image_base_url"] or "")
+        if not gateway_video_base_url:
+            gateway_video_base_url = str(existing["gateway_video_base_url"] or "")
         if not gateway_token:
             gateway_token = str(existing["gateway_token"] or "")
         if not gateway_image_token:
@@ -437,6 +1752,8 @@ def update_code_record(body: dict[str, Any]) -> None:
                 member_mode = ?,
                 plan = ?,
                 gateway_base_url = ?,
+                gateway_image_base_url = ?,
+                gateway_video_base_url = ?,
                 gateway_token = ?,
                 gateway_image_token = ?,
                 gateway_video_token = ?,
@@ -456,6 +1773,8 @@ def update_code_record(body: dict[str, Any]) -> None:
                 1 if member_mode else 0,
                 plan,
                 gateway_base_url,
+                gateway_image_base_url,
+                gateway_video_base_url,
                 gateway_token,
                 gateway_image_token,
                 gateway_video_token,
@@ -472,8 +1791,8 @@ def update_code_record(body: dict[str, Any]) -> None:
             raise ActivationError("授权码不存在", 404)
 
 
-def bulk_update_code_records(body: dict[str, Any]) -> int:
-    code_hashes = body.get("codeHashes")
+def bulk_update_code_records(body: dict[str, Any], current_account: dict[str, Any] | None = None) -> int:
+    code_hashes = normalize_code_hashes(body.get("codeHashes"))
     if not isinstance(code_hashes, list):
         raise ActivationError("批量更新需要授权码列表")
 
@@ -481,10 +1800,12 @@ def bulk_update_code_records(body: dict[str, Any]) -> int:
     with connect() as conn:
         rows = conn.execute(
             f"select * from codes where code_hash in ({','.join(['?'] * len(code_hashes))})",
-            tuple(str(item).strip() for item in code_hashes),
+            tuple(code_hashes),
         ).fetchall() if code_hashes else []
 
     for row in rows:
+        if current_account and not code_row_owned_by_context(row, current_account):
+            raise ActivationError("无权修改该授权码", 403)
         merged = {
             "codeHash": row["code_hash"],
             "licensee": row["licensee"],
@@ -495,6 +1816,8 @@ def bulk_update_code_records(body: dict[str, Any]) -> int:
             "memberMode": body.get("memberMode") if "memberMode" in body else bool(row["member_mode"]),
             "plan": str(body.get("plan") or "").strip() or row["plan"] or "monthly",
             "gatewayBaseUrl": str(body.get("gatewayBaseUrl") or "").strip() or row["gateway_base_url"],
+            "gatewayImageBaseUrl": str(body.get("gatewayImageBaseUrl") or body.get("gateway_image_base_url") or "").strip() or row["gateway_image_base_url"],
+            "gatewayVideoBaseUrl": str(body.get("gatewayVideoBaseUrl") or body.get("gateway_video_base_url") or "").strip() or row["gateway_video_base_url"],
             "gatewayToken": str(body.get("gatewayToken") or "").strip(),
             "gatewayImageToken": str(body.get("gatewayImageToken") or body.get("gateway_image_token") or "").strip(),
             "gatewayVideoToken": str(body.get("gatewayVideoToken") or body.get("gateway_video_token") or "").strip(),
@@ -504,7 +1827,7 @@ def bulk_update_code_records(body: dict[str, Any]) -> int:
             "gatewayModels": str(body.get("gatewayModels") or "").strip() or ",".join(load_json_value(row["gateway_models_json"], [])),
             "quotas": str(body.get("quotas") or "").strip() or row["quotas_json"] or "{}",
         }
-        update_code_record(merged)
+        update_code_record(merged, current_account=current_account)
         updated += 1
     return updated
 
@@ -525,9 +1848,11 @@ def plan_row_public(row: sqlite3.Row) -> dict[str, Any]:
         "durationDays": row["duration_days"],
         "features": load_json_value(row["features_json"], DEFAULT_FEATURES),
         "gatewayBaseUrl": row["gateway_base_url"],
+        "gatewayImageBaseUrl": row["gateway_image_base_url"],
+        "gatewayVideoBaseUrl": row["gateway_video_base_url"],
         "gatewayConfigured": bool(row["gateway_base_url"] and row["gateway_token"]),
-        "gatewayImageConfigured": bool(row["gateway_base_url"] and (row["gateway_image_token"] or row["gateway_token"])),
-        "gatewayVideoConfigured": bool(row["gateway_base_url"] and (row["gateway_video_token"] or row["gateway_token"])),
+        "gatewayImageConfigured": bool((row["gateway_image_base_url"] or row["gateway_base_url"]) and (row["gateway_image_token"] or row["gateway_token"])),
+        "gatewayVideoConfigured": bool((row["gateway_video_base_url"] or row["gateway_base_url"]) and (row["gateway_video_token"] or row["gateway_token"])),
         "gatewayDefaultModel": row["gateway_default_model"],
         "gatewayImageModel": row["gateway_image_model"],
         "gatewayVideoModel": row["gateway_video_model"],
@@ -558,12 +1883,305 @@ def get_plan_row(plan_key: str) -> sqlite3.Row | None:
         return conn.execute("select * from plans where plan_key = ?", (plan_key,)).fetchone()
 
 
+def public_settings() -> dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute("select value_json from settings where key = ?", ("public",)).fetchone()
+    value = load_json_value(row["value_json"], {}) if row else {}
+    settings = dict(DEFAULT_PUBLIC_SETTINGS)
+    if isinstance(value, dict):
+        settings.update(value)
+    settings["cardSiteEnabled"] = bool(settings.get("cardSiteEnabled"))
+    settings["cardSiteLabel"] = str(settings.get("cardSiteLabel") or "购买授权码").strip() or "购买授权码"
+    settings["cardSiteUrl"] = str(settings.get("cardSiteUrl") or "").strip()
+    return settings
+
+
+def client_public_config() -> dict[str, Any]:
+    settings = public_settings()
+    enabled = bool(settings.get("cardSiteEnabled")) and bool(settings.get("cardSiteUrl"))
+    return {
+        "cardSite": {
+            "enabled": enabled,
+            "label": settings.get("cardSiteLabel") or "购买授权码",
+            "url": settings.get("cardSiteUrl") if enabled else "",
+        }
+    }
+
+
+def update_public_settings(body: dict[str, Any]) -> dict[str, Any]:
+    settings = public_settings()
+    if "cardSiteEnabled" in body:
+        settings["cardSiteEnabled"] = bool(body.get("cardSiteEnabled"))
+    if "cardSiteLabel" in body:
+        settings["cardSiteLabel"] = str(body.get("cardSiteLabel") or "购买授权码").strip() or "购买授权码"
+    if "cardSiteUrl" in body:
+        card_site_url = str(body.get("cardSiteUrl") or "").strip()
+        if card_site_url and not card_site_url.lower().startswith(("http://", "https://")):
+            raise ActivationError("发卡网站链接必须以 http:// 或 https:// 开头")
+        settings["cardSiteUrl"] = card_site_url
+    with connect() as conn:
+        conn.execute(
+            """
+            insert into settings (key, value_json, updated_at)
+            values (?, ?, ?)
+            on conflict(key) do update set
+                value_json = excluded.value_json,
+                updated_at = excluded.updated_at
+            """,
+            ("public", json.dumps(settings, ensure_ascii=False, sort_keys=True), utc_now()),
+        )
+        conn.commit()
+    return settings
+
+
+def parse_optional_models(raw: Any, fallback: list[str] | None = None) -> list[str]:
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    text = str(raw or "").strip()
+    if not text:
+        return list(fallback or [])
+    return parse_models(text)
+
+
+def validate_gateway_url(value: str, label: str) -> str:
+    normalized = str(value or "").strip().rstrip("/")
+    if normalized and not normalized.lower().startswith(("http://", "https://")):
+        raise ActivationError(f"{label} 必须以 http:// 或 https:// 开头")
+    return normalized
+
+
+def default_account_gateway_settings(account_id: int = 0, *, include_secrets: bool = False) -> dict[str, Any]:
+    settings: dict[str, Any] = {
+        "accountId": int(account_id or 0),
+        "gatewayBaseUrl": "",
+        "gatewayImageBaseUrl": "",
+        "gatewayVideoBaseUrl": "",
+        "gatewayDefaultModel": "",
+        "gatewayImageModel": "",
+        "gatewayVideoModel": "",
+        "gatewayModels": [],
+        "gatewayConfigured": False,
+        "gatewayImageConfigured": False,
+        "gatewayVideoConfigured": False,
+        "updatedAt": "",
+    }
+    if include_secrets:
+        settings.update(
+            {
+                "gatewayToken": "",
+                "gatewayImageToken": "",
+                "gatewayVideoToken": "",
+            }
+        )
+    else:
+        settings.update(
+            {
+                "gatewayTokenConfigured": False,
+                "gatewayImageTokenConfigured": False,
+                "gatewayVideoTokenConfigured": False,
+            }
+        )
+    return settings
+
+
+def account_gateway_settings_public(
+    row: sqlite3.Row | None,
+    *,
+    account_id: int = 0,
+    include_secrets: bool = False,
+) -> dict[str, Any]:
+    if not row:
+        return default_account_gateway_settings(account_id, include_secrets=include_secrets)
+    base_url = str(row["gateway_base_url"] or "")
+    image_base_url = str(row["gateway_image_base_url"] or "")
+    video_base_url = str(row["gateway_video_base_url"] or "")
+    token_value = str(row["gateway_token"] or "")
+    image_token = str(row["gateway_image_token"] or "")
+    video_token = str(row["gateway_video_token"] or "")
+    settings: dict[str, Any] = {
+        "accountId": int(row["account_id"] or account_id or 0),
+        "gatewayBaseUrl": base_url,
+        "gatewayImageBaseUrl": image_base_url,
+        "gatewayVideoBaseUrl": video_base_url,
+        "gatewayDefaultModel": str(row["gateway_default_model"] or ""),
+        "gatewayImageModel": str(row["gateway_image_model"] or ""),
+        "gatewayVideoModel": str(row["gateway_video_model"] or ""),
+        "gatewayModels": load_json_value(row["gateway_models_json"], []),
+        "gatewayConfigured": bool(base_url and token_value),
+        "gatewayImageConfigured": bool((image_base_url or base_url) and (image_token or token_value)),
+        "gatewayVideoConfigured": bool((video_base_url or base_url) and (video_token or token_value)),
+        "updatedAt": str(row["updated_at"] or ""),
+    }
+    if include_secrets:
+        settings.update(
+            {
+                "gatewayToken": token_value,
+                "gatewayImageToken": image_token,
+                "gatewayVideoToken": video_token,
+            }
+        )
+    else:
+        settings.update(
+            {
+                "gatewayTokenConfigured": bool(token_value),
+                "gatewayImageTokenConfigured": bool(image_token),
+                "gatewayVideoTokenConfigured": bool(video_token),
+            }
+        )
+    return settings
+
+
+def get_account_gateway_settings(account_id: int, *, include_secrets: bool = False) -> dict[str, Any]:
+    normalized_account_id = int(account_id or 0)
+    if normalized_account_id <= 0:
+        return default_account_gateway_settings(normalized_account_id, include_secrets=include_secrets)
+    with connect() as conn:
+        row = conn.execute(
+            "select * from account_gateway_settings where account_id = ?",
+            (normalized_account_id,),
+        ).fetchone()
+    return account_gateway_settings_public(
+        row,
+        account_id=normalized_account_id,
+        include_secrets=include_secrets,
+    )
+
+
+def upsert_account_gateway_settings(account_id: int, body: dict[str, Any]) -> dict[str, Any]:
+    normalized_account_id = int(account_id or 0)
+    if normalized_account_id <= 0:
+        raise ActivationError("缺少账号 ID", 400)
+    account = get_account_by_id(normalized_account_id)
+    if not account or account["status"] != ACCOUNT_STATUS_ACTIVE:
+        raise ActivationError("账号不存在或已停用", 404)
+
+    existing = get_account_gateway_settings(normalized_account_id, include_secrets=True)
+    gateway_base_url = validate_gateway_url(body.get("gatewayBaseUrl") or existing.get("gatewayBaseUrl") or "", "通用 Base URL")
+    gateway_image_base_url = validate_gateway_url(body.get("gatewayImageBaseUrl") or body.get("gateway_image_base_url") or existing.get("gatewayImageBaseUrl") or "", "图片 Base URL")
+    gateway_video_base_url = validate_gateway_url(body.get("gatewayVideoBaseUrl") or body.get("gateway_video_base_url") or existing.get("gatewayVideoBaseUrl") or "", "视频 Base URL")
+    gateway_token = str(body.get("gatewayToken") or existing.get("gatewayToken") or "").strip()
+    gateway_image_token = str(body.get("gatewayImageToken") or body.get("gateway_image_token") or existing.get("gatewayImageToken") or "").strip()
+    gateway_video_token = str(body.get("gatewayVideoToken") or body.get("gateway_video_token") or existing.get("gatewayVideoToken") or "").strip()
+    gateway_default_model = str(body.get("gatewayDefaultModel") or existing.get("gatewayDefaultModel") or "").strip()
+    gateway_image_model = str(body.get("gatewayImageModel") or body.get("gateway_image_model") or existing.get("gatewayImageModel") or "").strip()
+    gateway_video_model = str(body.get("gatewayVideoModel") or body.get("gateway_video_model") or existing.get("gatewayVideoModel") or "").strip()
+    gateway_models = parse_optional_models(body.get("gatewayModels"), existing.get("gatewayModels") or [])
+    now = utc_now()
+
+    with connect() as conn:
+        row = conn.execute(
+            "select created_at from account_gateway_settings where account_id = ?",
+            (normalized_account_id,),
+        ).fetchone()
+        created_at = str(row["created_at"]) if row else now
+        conn.execute(
+            """
+            insert into account_gateway_settings (
+                account_id, gateway_base_url, gateway_image_base_url, gateway_video_base_url,
+                gateway_token, gateway_image_token, gateway_video_token,
+                gateway_default_model, gateway_image_model, gateway_video_model,
+                gateway_models_json, created_at, updated_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(account_id) do update set
+                gateway_base_url = excluded.gateway_base_url,
+                gateway_image_base_url = excluded.gateway_image_base_url,
+                gateway_video_base_url = excluded.gateway_video_base_url,
+                gateway_token = excluded.gateway_token,
+                gateway_image_token = excluded.gateway_image_token,
+                gateway_video_token = excluded.gateway_video_token,
+                gateway_default_model = excluded.gateway_default_model,
+                gateway_image_model = excluded.gateway_image_model,
+                gateway_video_model = excluded.gateway_video_model,
+                gateway_models_json = excluded.gateway_models_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_account_id,
+                gateway_base_url,
+                gateway_image_base_url,
+                gateway_video_base_url,
+                gateway_token,
+                gateway_image_token,
+                gateway_video_token,
+                gateway_default_model,
+                gateway_image_model,
+                gateway_video_model,
+                json.dumps(gateway_models, ensure_ascii=False),
+                created_at,
+                now,
+            ),
+        )
+        conn.commit()
+    return get_account_gateway_settings(normalized_account_id, include_secrets=False)
+
+
+def has_explicit_gateway_value(body: dict[str, Any], *names: str) -> bool:
+    return any(str(body.get(name) or "").strip() for name in names)
+
+
+def apply_account_gateway_defaults(
+    body: dict[str, Any],
+    account_id: int,
+    *,
+    explicit_body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_account_id = int(account_id or 0)
+    if normalized_account_id <= 0:
+        return body
+    settings = get_account_gateway_settings(normalized_account_id, include_secrets=True)
+    if not any(
+        str(settings.get(name) or "").strip()
+        for name in (
+            "gatewayBaseUrl",
+            "gatewayImageBaseUrl",
+            "gatewayVideoBaseUrl",
+            "gatewayToken",
+            "gatewayImageToken",
+            "gatewayVideoToken",
+            "gatewayDefaultModel",
+            "gatewayImageModel",
+            "gatewayVideoModel",
+        )
+    ) and not settings.get("gatewayModels"):
+        return body
+
+    source = explicit_body or body
+    merged = dict(body)
+    field_names = [
+        ("gatewayBaseUrl", ("gatewayBaseUrl", "gateway_base_url")),
+        ("gatewayImageBaseUrl", ("gatewayImageBaseUrl", "gateway_image_base_url")),
+        ("gatewayVideoBaseUrl", ("gatewayVideoBaseUrl", "gateway_video_base_url")),
+        ("gatewayToken", ("gatewayToken", "gateway_token")),
+        ("gatewayImageToken", ("gatewayImageToken", "gateway_image_token")),
+        ("gatewayVideoToken", ("gatewayVideoToken", "gateway_video_token")),
+        ("gatewayDefaultModel", ("gatewayDefaultModel", "gateway_default_model")),
+        ("gatewayImageModel", ("gatewayImageModel", "gateway_image_model")),
+        ("gatewayVideoModel", ("gatewayVideoModel", "gateway_video_model")),
+    ]
+    for canonical_name, aliases in field_names:
+        value = settings.get(canonical_name)
+        if value and not has_explicit_gateway_value(source, *aliases):
+            merged[canonical_name] = value
+    if settings.get("gatewayModels") and not has_explicit_gateway_value(source, "gatewayModels", "gateway_models"):
+        merged["gatewayModels"] = ",".join(settings.get("gatewayModels") or [])
+    if "memberMode" not in source and (
+        settings.get("gatewayConfigured")
+        or settings.get("gatewayImageConfigured")
+        or settings.get("gatewayVideoConfigured")
+    ):
+        merged["memberMode"] = True
+    return merged
+
+
 def upsert_plan_record(body: dict[str, Any]) -> dict[str, Any]:
     plan_key = normalize_plan_key(body.get("planKey") or body.get("plan") or body.get("key"))
     display_name = str(body.get("displayName") or body.get("name") or plan_key).strip() or plan_key
     duration_days = max(1, min(int(body.get("durationDays") or 31), 3660))
     features = parse_features(str(body.get("features", ",".join(DEFAULT_FEATURES))))
     gateway_base_url = str(body.get("gatewayBaseUrl", "")).strip().rstrip("/")
+    gateway_image_base_url = str(body.get("gatewayImageBaseUrl") or body.get("gateway_image_base_url") or "").strip().rstrip("/")
+    gateway_video_base_url = str(body.get("gatewayVideoBaseUrl") or body.get("gateway_video_base_url") or "").strip().rstrip("/")
     gateway_token = str(body.get("gatewayToken", "")).strip()
     gateway_image_token = str(body.get("gatewayImageToken") or body.get("gateway_image_token") or "").strip()
     gateway_video_token = str(body.get("gatewayVideoToken") or body.get("gateway_video_token") or "").strip()
@@ -578,13 +2196,18 @@ def upsert_plan_record(body: dict[str, Any]) -> dict[str, Any]:
     with connect() as conn:
         existing = conn.execute(
             """
-            select gateway_token, gateway_image_token, gateway_video_token,
+            select gateway_image_base_url, gateway_video_base_url,
+                   gateway_token, gateway_image_token, gateway_video_token,
                    gateway_image_model, gateway_video_model, created_at
             from plans
             where plan_key = ?
             """,
             (plan_key,),
         ).fetchone()
+        if existing and not gateway_image_base_url:
+            gateway_image_base_url = str(existing["gateway_image_base_url"] or "")
+        if existing and not gateway_video_base_url:
+            gateway_video_base_url = str(existing["gateway_video_base_url"] or "")
         if existing and not gateway_token:
             gateway_token = str(existing["gateway_token"] or "")
         if existing and not gateway_image_token:
@@ -600,17 +2223,20 @@ def upsert_plan_record(body: dict[str, Any]) -> dict[str, Any]:
             """
             insert into plans (
                 plan_key, display_name, duration_days, features_json, gateway_base_url,
+                gateway_image_base_url, gateway_video_base_url,
                 gateway_token, gateway_image_token, gateway_video_token,
                 gateway_default_model, gateway_image_model, gateway_video_model,
                 gateway_models_json, quotas_json,
                 disabled, created_at, updated_at
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(plan_key) do update set
                 display_name = excluded.display_name,
                 duration_days = excluded.duration_days,
                 features_json = excluded.features_json,
                 gateway_base_url = excluded.gateway_base_url,
+                gateway_image_base_url = excluded.gateway_image_base_url,
+                gateway_video_base_url = excluded.gateway_video_base_url,
                 gateway_token = excluded.gateway_token,
                 gateway_image_token = excluded.gateway_image_token,
                 gateway_video_token = excluded.gateway_video_token,
@@ -628,6 +2254,8 @@ def upsert_plan_record(body: dict[str, Any]) -> dict[str, Any]:
                 duration_days,
                 json.dumps(features, ensure_ascii=False),
                 gateway_base_url,
+                gateway_image_base_url,
+                gateway_video_base_url,
                 gateway_token,
                 gateway_image_token,
                 gateway_video_token,
@@ -684,6 +2312,10 @@ def apply_plan_template(body: dict[str, Any]) -> dict[str, Any]:
         merged["plan"] = row["plan_key"]
     if blank("gatewayBaseUrl"):
         merged["gatewayBaseUrl"] = row["gateway_base_url"]
+    if blank("gatewayImageBaseUrl"):
+        merged["gatewayImageBaseUrl"] = row["gateway_image_base_url"]
+    if blank("gatewayVideoBaseUrl"):
+        merged["gatewayVideoBaseUrl"] = row["gateway_video_base_url"]
     if blank("gatewayToken"):
         merged["gatewayToken"] = row["gateway_token"]
     if blank("gatewayImageToken"):
@@ -774,6 +2406,8 @@ def code_row_snapshot(row: sqlite3.Row | None) -> dict[str, Any] | None:
         "memberMode": bool(row["member_mode"]),
         "plan": row["plan"],
         "gatewayBaseUrl": row["gateway_base_url"],
+        "gatewayImageBaseUrl": row["gateway_image_base_url"],
+        "gatewayVideoBaseUrl": row["gateway_video_base_url"],
         "gatewayToken": masked_secret(row["gateway_token"]),
         "gatewayImageToken": masked_secret(row["gateway_image_token"]),
         "gatewayVideoToken": masked_secret(row["gateway_video_token"]),
@@ -782,29 +2416,39 @@ def code_row_snapshot(row: sqlite3.Row | None) -> dict[str, Any] | None:
         "gatewayVideoModel": row["gateway_video_model"],
         "gatewayModels": load_json_value(row["gateway_models_json"], []),
         "quotas": load_json_value(row["quotas_json"], {}),
+        "ownerAccountId": int(row["owner_account_id"]) if "owner_account_id" in row_keys and row["owner_account_id"] is not None else 0,
+        "ownerUsername": row["owner_username"] if "owner_username" in row_keys else "",
+        "ownerDisplayName": row["owner_display_name"] if "owner_display_name" in row_keys else "",
+        "ownerRole": row["owner_role"] if "owner_role" in row_keys else "",
         "activations": int(row["activations"]) if "activations" in row_keys else None,
         "createdAt": row["created_at"],
     }
 
 
-def get_code_snapshot(code_hash_value: str) -> dict[str, Any] | None:
+def get_code_snapshot(code_hash_value: str, current_account: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if not code_hash_value:
         return None
     with connect() as conn:
         row = conn.execute(
             """
-            select c.*, count(a.id) as activations
+            select c.*, count(a.id) as activations,
+                   coalesce(acc.username, '') as owner_username,
+                   coalesce(acc.display_name, '') as owner_display_name,
+                   coalesce(acc.role, '') as owner_role
             from codes c
             left join activations a on a.code_hash = c.code_hash
+            left join accounts acc on acc.id = c.owner_account_id
             where c.code_hash = ?
             group by c.code_hash
             """,
             (code_hash_value,),
         ).fetchone()
+    if row and current_account and not code_row_owned_by_context(row, current_account):
+        return None
     return code_row_snapshot(row)
 
 
-def get_code_snapshots(code_hashes: list[Any]) -> list[dict[str, Any]]:
+def get_code_snapshots(code_hashes: list[Any], current_account: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     clean_hashes = [str(item).strip() for item in code_hashes if str(item).strip()]
     if not clean_hashes:
         return []
@@ -812,16 +2456,23 @@ def get_code_snapshots(code_hashes: list[Any]) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             f"""
-            select c.*, count(a.id) as activations
+            select c.*, count(a.id) as activations,
+                   coalesce(acc.username, '') as owner_username,
+                   coalesce(acc.display_name, '') as owner_display_name,
+                   coalesce(acc.role, '') as owner_role
             from codes c
             left join activations a on a.code_hash = c.code_hash
+            left join accounts acc on acc.id = c.owner_account_id
             where c.code_hash in ({placeholders})
             group by c.code_hash
             order by c.created_at desc
             """,
             tuple(clean_hashes),
         ).fetchall()
-    return [snapshot for row in rows if (snapshot := code_row_snapshot(row))]
+    snapshots = [snapshot for row in rows if (snapshot := code_row_snapshot(row))]
+    if current_account and not is_super_admin_context(current_account):
+        snapshots = [row for row in snapshots if row.get("ownerAccountId", 0) == context_account_id(current_account)]
+    return snapshots
 
 
 def get_inventory_snapshot() -> dict[str, Any]:
@@ -886,6 +2537,8 @@ def create_codes(args: argparse.Namespace) -> None:
         member_mode=args.member_mode,
         plan=args.plan,
         gateway_base_url=args.gateway_base_url,
+        gateway_image_base_url=args.gateway_image_base_url,
+        gateway_video_base_url=args.gateway_video_base_url,
         gateway_token=args.gateway_token,
         gateway_image_token=args.gateway_image_token,
         gateway_video_token=args.gateway_video_token,
@@ -898,20 +2551,33 @@ def create_codes(args: argparse.Namespace) -> None:
         print(code)
 
 
-def get_code_rows() -> list[dict[str, Any]]:
+def get_code_rows(current_account: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    where_clause = ""
+    params: tuple[Any, ...] = ()
+    if current_account and not is_super_admin_context(current_account):
+        where_clause = "where c.owner_account_id = ?"
+        params = (context_account_id(current_account),)
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             select c.code_hash, c.code_label, c.full_code, c.licensee, c.edition, c.features_json, c.expires, c.max_activations,
-                   c.disabled, c.member_mode, c.plan, c.gateway_base_url, c.gateway_token,
+                   c.disabled, c.member_mode, c.plan, c.gateway_base_url,
+                   c.gateway_image_base_url, c.gateway_video_base_url, c.gateway_token,
                    c.gateway_image_token, c.gateway_video_token, c.gateway_default_model,
                    c.gateway_image_model, c.gateway_video_model, c.gateway_models_json,
-                   c.quotas_json, c.created_at, count(a.id) as activations
+                   c.quotas_json, c.owner_account_id,
+                   coalesce(acc.username, '') as owner_username,
+                   coalesce(acc.display_name, '') as owner_display_name,
+                   coalesce(acc.role, '') as owner_role,
+                   c.created_at, count(a.id) as activations
             from codes c
             left join activations a on a.code_hash = c.code_hash
+            left join accounts acc on acc.id = c.owner_account_id
+            {where_clause}
             group by c.code_hash
             order by c.created_at desc
-            """
+            """,
+            params,
         ).fetchall()
     return [
         {
@@ -928,6 +2594,8 @@ def get_code_rows() -> list[dict[str, Any]]:
             "memberMode": bool(row["member_mode"]),
             "plan": row["plan"],
             "gatewayBaseUrl": row["gateway_base_url"],
+            "gatewayImageBaseUrl": row["gateway_image_base_url"],
+            "gatewayVideoBaseUrl": row["gateway_video_base_url"],
             "gatewayToken": masked_secret(row["gateway_token"]),
             "gatewayImageToken": masked_secret(row["gateway_image_token"]),
             "gatewayVideoToken": masked_secret(row["gateway_video_token"]),
@@ -936,9 +2604,13 @@ def get_code_rows() -> list[dict[str, Any]]:
             "gatewayVideoModel": row["gateway_video_model"],
             "gatewayModels": json.loads(row["gateway_models_json"] or "[]"),
             "quotas": json.loads(row["quotas_json"] or "{}"),
+            "ownerAccountId": int(row["owner_account_id"] or 0),
+            "ownerUsername": row["owner_username"],
+            "ownerDisplayName": row["owner_display_name"],
+            "ownerRole": row["owner_role"],
             "gatewayConfigured": bool(row["gateway_base_url"] and row["gateway_token"]),
-            "gatewayImageConfigured": bool(row["gateway_base_url"] and (row["gateway_image_token"] or row["gateway_token"])),
-            "gatewayVideoConfigured": bool(row["gateway_base_url"] and (row["gateway_video_token"] or row["gateway_token"])),
+            "gatewayImageConfigured": bool((row["gateway_image_base_url"] or row["gateway_base_url"]) and (row["gateway_image_token"] or row["gateway_token"])),
+            "gatewayVideoConfigured": bool((row["gateway_video_base_url"] or row["gateway_base_url"]) and (row["gateway_video_token"] or row["gateway_token"])),
             "createdAt": row["created_at"],
         }
         for row in rows
@@ -962,8 +2634,16 @@ def activation_row_public(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def get_activation_rows(code_hash_value: str) -> list[dict[str, Any]]:
+def get_activation_rows(code_hash_value: str, current_account: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     with connect() as conn:
+        code_row = conn.execute(
+            "select owner_account_id from codes where code_hash = ?",
+            (code_hash_value,),
+        ).fetchone()
+        if not code_row:
+            return []
+        if current_account and not code_row_owned_by_context(code_row, current_account):
+            raise ActivationError("无权查看该授权码", 403)
         rows = conn.execute(
             """
             select id, code_hash, install_id, device_id, license_json, activated_at
@@ -1019,8 +2699,18 @@ def apply_member_fields(payload: dict[str, Any], code_row: sqlite3.Row) -> dict[
     if not bool(code_row["member_mode"]):
         return payload
 
-    gateway_base_url = str(code_row["gateway_base_url"] or DEFAULT_GATEWAY_BASE_URL).strip().rstrip("/")
-    gateway_token = str(code_row["gateway_token"] or DEFAULT_GATEWAY_TOKEN).strip()
+    allow_global_gateway_fallback = int(code_row["owner_account_id"] or 0) <= 0
+    default_gateway_base_url = DEFAULT_GATEWAY_BASE_URL if allow_global_gateway_fallback else ""
+    default_gateway_image_base_url = DEFAULT_GATEWAY_IMAGE_BASE_URL if allow_global_gateway_fallback else ""
+    default_gateway_video_base_url = DEFAULT_GATEWAY_VIDEO_BASE_URL if allow_global_gateway_fallback else ""
+    default_gateway_token = DEFAULT_GATEWAY_TOKEN if allow_global_gateway_fallback else ""
+    default_gateway_image_token = DEFAULT_GATEWAY_IMAGE_TOKEN if allow_global_gateway_fallback else ""
+    default_gateway_video_token = DEFAULT_GATEWAY_VIDEO_TOKEN if allow_global_gateway_fallback else ""
+
+    gateway_base_url = str(code_row["gateway_base_url"] or default_gateway_base_url).strip().rstrip("/")
+    gateway_image_base_url = str(code_row["gateway_image_base_url"] or default_gateway_image_base_url or gateway_base_url).strip().rstrip("/")
+    gateway_video_base_url = str(code_row["gateway_video_base_url"] or default_gateway_video_base_url or gateway_base_url).strip().rstrip("/")
+    gateway_token = str(code_row["gateway_token"] or default_gateway_token).strip()
     if not gateway_base_url or not gateway_token:
         raise ActivationError("会员网关未配置，缺少 Base URL 或 Token", 500)
 
@@ -1035,8 +2725,8 @@ def apply_member_fields(payload: dict[str, Any], code_row: sqlite3.Row) -> dict[
 
     image_model = str(code_row["gateway_image_model"] or DEFAULT_GATEWAY_IMAGE_MODEL or "").strip()
     video_model = str(code_row["gateway_video_model"] or DEFAULT_GATEWAY_VIDEO_MODEL or "").strip()
-    image_token = str(code_row["gateway_image_token"] or DEFAULT_GATEWAY_IMAGE_TOKEN or gateway_token).strip() or gateway_token
-    video_token = str(code_row["gateway_video_token"] or DEFAULT_GATEWAY_VIDEO_TOKEN or gateway_token).strip() or gateway_token
+    image_token = str(code_row["gateway_image_token"] or default_gateway_image_token or gateway_token).strip() or gateway_token
+    video_token = str(code_row["gateway_video_token"] or default_gateway_video_token or gateway_token).strip() or gateway_token
 
     quotas = load_json_value(code_row["quotas_json"], {})
     if not isinstance(quotas, dict):
@@ -1050,6 +2740,8 @@ def apply_member_fields(payload: dict[str, Any], code_row: sqlite3.Row) -> dict[
             "plan": str(code_row["plan"] or code_row["edition"] or "monthly").strip(),
             "leaseExpiresAt": payload.get("expires"),
             "gatewayBaseUrl": gateway_base_url,
+            "gatewayImageBaseUrl": gateway_image_base_url,
+            "gatewayVideoBaseUrl": gateway_video_base_url,
             "gatewayAccessToken": gateway_token,
             "gatewayToken": gateway_token,
             "gatewayImageAccessToken": image_token,
@@ -1097,6 +2789,8 @@ def build_signed_license(
 def member_response(license_data: dict[str, Any]) -> dict[str, Any]:
     gateway = {
         "baseUrl": license_data.get("gatewayBaseUrl"),
+        "imageBaseUrl": license_data.get("gatewayImageBaseUrl") or license_data.get("gatewayBaseUrl"),
+        "videoBaseUrl": license_data.get("gatewayVideoBaseUrl") or license_data.get("gatewayBaseUrl"),
         "accessToken": license_data.get("gatewayAccessToken"),
         "token": license_data.get("gatewayAccessToken"),
         "imageAccessToken": license_data.get("gatewayImageAccessToken") or license_data.get("gatewayImageToken") or license_data.get("gatewayAccessToken"),
@@ -1116,6 +2810,8 @@ def member_response(license_data: dict[str, Any]) -> dict[str, Any]:
         "expiresAt": license_data.get("expires"),
         "leaseExpiresAt": license_data.get("leaseExpiresAt") or license_data.get("expires"),
         "gatewayBaseUrl": license_data.get("gatewayBaseUrl"),
+        "gatewayImageBaseUrl": license_data.get("gatewayImageBaseUrl") or license_data.get("gatewayBaseUrl"),
+        "gatewayVideoBaseUrl": license_data.get("gatewayVideoBaseUrl") or license_data.get("gatewayBaseUrl"),
         "gatewayAccessToken": license_data.get("gatewayAccessToken"),
         "gatewayToken": license_data.get("gatewayAccessToken"),
         "gatewayImageAccessToken": license_data.get("gatewayImageAccessToken") or license_data.get("gatewayImageToken") or license_data.get("gatewayAccessToken"),
@@ -1137,6 +2833,8 @@ def member_response(license_data: dict[str, Any]) -> dict[str, Any]:
             "leaseExpiresAt": license_data.get("leaseExpiresAt") or license_data.get("expires"),
             "features": license_data.get("features") or [],
             "gatewayDefaultModel": license_data.get("gatewayDefaultModel"),
+            "gatewayImageBaseUrl": license_data.get("gatewayImageBaseUrl") or license_data.get("gatewayBaseUrl"),
+            "gatewayVideoBaseUrl": license_data.get("gatewayVideoBaseUrl") or license_data.get("gatewayBaseUrl"),
             "gatewayImageModel": license_data.get("gatewayImageModel"),
             "gatewayVideoModel": license_data.get("gatewayVideoModel"),
             "gatewayImageAccessToken": license_data.get("gatewayImageAccessToken") or license_data.get("gatewayImageToken") or license_data.get("gatewayAccessToken"),
@@ -1166,6 +2864,9 @@ def find_member_license(body: dict[str, Any]) -> dict[str, Any] | None:
         or ""
     ).strip()
     install_id = str(body.get("installId") or "").strip()
+    device_id = str(body.get("deviceId") or "").strip()
+    if not token or not install_id:
+        return None
     with connect() as conn:
         rows = conn.execute(
             """
@@ -1180,6 +2881,8 @@ def find_member_license(body: dict[str, Any]) -> dict[str, Any] | None:
             except (TypeError, json.JSONDecodeError):
                 continue
             if install_id and row["install_id"] != install_id:
+                continue
+            if device_id and row["device_id"] != device_id:
                 continue
             if member_id and str(old_license.get("memberId") or "") != member_id:
                 continue
@@ -1217,15 +2920,43 @@ def find_member_license(body: dict[str, Any]) -> dict[str, Any] | None:
 class Handler(BaseHTTPRequestHandler):
     server_version = "OpenClawLicense/1.0"
 
+    def admin_context(self, *, allow_legacy: bool = True) -> dict[str, Any] | None:
+        context = getattr(self, "_admin_context", None)
+        if context is not None:
+            return context
+        token = request_admin_token(self.headers)
+        context = load_admin_context_from_session(token)
+        if context is None and allow_legacy:
+            context = load_legacy_admin_context(token)
+        self._admin_context = context
+        return context
+
     def admin_actor(self) -> str:
-        provided = (self.headers.get("X-Admin-Token") or "").strip()
-        if not provided:
+        context = self.admin_context()
+        if not context:
             return "admin"
-        digest = hashlib.sha256(provided.encode("utf-8")).hexdigest()[:10]
-        return f"admin:{digest}"
+        return str(context.get("actor") or "admin")
+
+    def admin_role(self) -> str:
+        context = self.admin_context()
+        return str(context.get("role") or "") if context else ""
+
+    def admin_account_id(self) -> int:
+        context = self.admin_context()
+        return context_account_id(context)
 
     def request_ip(self) -> str:
         return self.client_address[0] if self.client_address else ""
+
+    def require_admin(self, role: str | None = None, *, allow_legacy: bool = True) -> bool:
+        context = self.admin_context(allow_legacy=allow_legacy)
+        if not context:
+            self.send_json(401, {"error": "请先登录"})
+            return False
+        if role and role_rank(str(context.get("role") or "")) < role_rank(role):
+            self.send_json(403, {"error": "权限不足"})
+            return False
+        return True
 
     def audit_admin_change(
         self,
@@ -1248,11 +2979,105 @@ class Handler(BaseHTTPRequestHandler):
             backup_path=backup_path,
         )
 
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_cors_headers()
+        self.end_headers()
+
+    def require_publish_relay_auth(self) -> bool:
+        if not publish_relay_configured():
+            self.send_json(503, {"ok": False, "error": "Relay token is not configured"})
+            return False
+        if publish_relay_token_valid(self.headers):
+            return True
+        self.send_json(
+            401,
+            {"ok": False, "error": "Relay auth required"},
+            headers={"WWW-Authenticate": 'Bearer realm="openclaw-publish-relay"'},
+        )
+        return False
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/health":
             self.send_json(200, {"ok": True, "time": utc_now()})
+            return
+        if path in {"/api/lumi/relay/health", "/api/lumi/publish/health"}:
+            authorized = publish_relay_token_valid(self.headers)
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "data": {
+                        "authRequired": publish_relay_auth_required(),
+                        "configured": publish_relay_configured(),
+                        "authenticated": authorized,
+                        "queue": publish_relay_stats() if authorized else None,
+                        "timestamp": utc_now(),
+                    },
+                },
+            )
+            return
+        if path in {"/api/lumi/relay/poll", "/api/lumi/publish/poll"}:
+            if not self.require_publish_relay_auth():
+                return
+            query = parse_qs(parsed.query)
+            channel_id = normalize_string((query.get("channelId") or query.get("channel_id") or [""])[0])
+            client_id = normalize_string((query.get("clientId") or query.get("client_id") or ["default-client"])[0]) or "default-client"
+            lease_ms = clamp_int((query.get("leaseMs") or query.get("lease_ms") or [PUBLISH_RELAY_DEFAULT_LEASE_MS])[0], 1_000, 15 * 60_000, PUBLISH_RELAY_DEFAULT_LEASE_MS)
+            wait_ms = clamp_int((query.get("waitMs") or query.get("wait_ms") or [PUBLISH_RELAY_DEFAULT_WAIT_MS])[0], 0, 15 * 60_000, PUBLISH_RELAY_DEFAULT_WAIT_MS)
+            try:
+                record = publish_relay_wait_for_packet(channel_id, client_id, lease_ms, wait_ms)
+                if not record:
+                    self.send_json(
+                        200,
+                        {
+                            "ok": True,
+                            "data": {
+                                "packet": None,
+                                "channelId": channel_id,
+                                "clientId": client_id,
+                                "waitMs": wait_ms,
+                                "leaseMs": lease_ms,
+                            },
+                        },
+                    )
+                    return
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "data": {
+                            "packetId": record["id"],
+                            "leaseId": record["leaseId"],
+                            "channelId": record["channelId"],
+                            "leaseUntil": record["leaseUntil"],
+                            "attempts": record["attempts"],
+                            "packet": record["packet"],
+                        },
+                    },
+                )
+            except ActivationError as error:
+                self.send_json(error.status, {"ok": False, "error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"ok": False, "error": f"server error: {error}"})
+            return
+        if path in {"/api/lumi/relay/status", "/api/lumi/publish/status"}:
+            if not self.require_publish_relay_auth():
+                return
+            query = parse_qs(parsed.query)
+            packet_id = normalize_string((query.get("id") or query.get("packetId") or query.get("packet_id") or [""])[0])
+            channel_id = normalize_string((query.get("channelId") or query.get("channel_id") or [""])[0])
+            try:
+                if packet_id:
+                    self.send_json(200, {"ok": True, "data": publish_relay_status(packet_id, include_packet=True)})
+                else:
+                    self.send_json(200, {"ok": True, "data": {"queue": publish_relay_stats(channel_id)}})
+            except ActivationError as error:
+                self.send_json(error.status, {"ok": False, "error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"ok": False, "error": f"server error: {error}"})
             return
         if path == "/public-key":
             self.send_json(200, {"publicKey": public_key_b64()})
@@ -1263,41 +3088,473 @@ class Handler(BaseHTTPRequestHandler):
         if path in {"/logo.ico", "/admin/logo.ico"}:
             self.send_file(200, LOGO_FILE, "image/x-icon")
             return
+        if path in {"/api/client/config", "/api/public/config", "/client/config"}:
+            self.send_json(200, client_public_config())
+            return
+        if path == "/admin/api/auth/status":
+            self.send_json(200, auth_status_snapshot())
+            return
+        if path == "/admin/api/me":
+            if not self.require_admin():
+                return
+            context = self.admin_context()
+            account = account_summary_row(context_account_id(context)) if context and context_account_id(context) else None
+            payload = {
+                "account": account or (context or {}),
+                "session": {
+                    "authType": context.get("authType") if context else "",
+                    "role": context.get("role") if context else "",
+                },
+                "authStatus": auth_status_snapshot(),
+            }
+            self.send_json(200, payload)
+            return
+        if path == "/admin/api/accounts":
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
+                return
+            self.send_json(200, {"accounts": list_account_rows()})
+            return
+        if path == "/admin/api/invites":
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
+                return
+            self.send_json(200, {"invites": list_invite_rows()})
+            return
         if path == "/admin/api/codes":
             if not self.require_admin():
                 return
-            self.send_json(200, {"codes": get_code_rows()})
+            self.send_json(200, {"codes": get_code_rows(self.admin_context())})
             return
         if path == "/admin/api/plans":
             if not self.require_admin():
                 return
             self.send_json(200, {"plans": get_plan_rows(include_disabled=True)})
             return
+        if path == "/admin/api/account-gateway":
+            if not self.require_admin():
+                return
+            account_id = context_account_id(self.admin_context())
+            self.send_json(200, {"settings": get_account_gateway_settings(account_id, include_secrets=False)})
+            return
         if path == "/admin/api/codes/activations":
             if not self.require_admin():
                 return
             query = parse_qs(parsed.query)
             code_hash_value = str((query.get("codeHash") or [""])[0]).strip()
-            self.send_json(200, {"activations": get_activation_rows(code_hash_value)})
+            try:
+                self.send_json(200, {"activations": get_activation_rows(code_hash_value, self.admin_context())})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
             return
         if path == "/admin/api/audit-logs":
-            if not self.require_admin():
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
                 return
             query = parse_qs(parsed.query)
             limit = int((query.get("limit") or ["100"])[0] or "100")
             self.send_json(200, {"logs": get_audit_rows(limit)})
             return
+        if path == "/admin/api/public-settings":
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
+                return
+            self.send_json(200, {"settings": public_settings(), "clientConfig": client_public_config()})
+            return
         self.send_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/admin/api/auth/status":
+            self.send_json(405, {"error": "method not allowed"})
+            return
+        if path == "/admin/api/auth/login":
+            try:
+                body = self.read_json()
+                username = normalize_username(body.get("username"))
+                password = str(body.get("password") or "").strip()
+                login_rate_key = f"{self.request_ip()}:{username or '-'}"
+                rate_limit_check("admin-login", login_rate_key)
+                account = get_account_by_username(username)
+                if not account or account["status"] != ACCOUNT_STATUS_ACTIVE or not verify_password(password, account["password_hash"]):
+                    rate_limit_record_failure(
+                        "admin-login",
+                        login_rate_key,
+                        limit=LOGIN_RATE_LIMIT_ATTEMPTS,
+                        window_seconds=LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+                        lockout_seconds=LOGIN_RATE_LIMIT_LOCKOUT_SECONDS,
+                    )
+                    self.send_json(401, {"error": "用户名或密码错误"})
+                    return
+                rate_limit_clear("admin-login", login_rate_key)
+                session_token, expires_at = create_admin_session(
+                    int(account["id"]),
+                    request_ip=self.request_ip(),
+                    user_agent=str(self.headers.get("User-Agent", "") or ""),
+                )
+                with connect() as conn:
+                    conn.execute(
+                        "update accounts set last_login_at = ?, last_login_ip = ?, updated_at = ? where id = ?",
+                        (utc_now(), self.request_ip(), utc_now(), int(account["id"])),
+                    )
+                    conn.commit()
+                account = get_account_by_id(int(account["id"]))
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "sessionToken": session_token,
+                        "expiresAt": expires_at,
+                        "account": account_row_public(account),
+                        "authStatus": auth_status_snapshot(),
+                    },
+                )
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path == "/admin/api/auth/register":
+            try:
+                rate_limit_consume(
+                    "admin-register",
+                    self.request_ip(),
+                    limit=REGISTER_RATE_LIMIT_ATTEMPTS,
+                    window_seconds=REGISTER_RATE_LIMIT_WINDOW_SECONDS,
+                    lockout_seconds=REGISTER_RATE_LIMIT_LOCKOUT_SECONDS,
+                )
+                body = self.read_json()
+                account, invite_code, _ = register_account_with_invite(
+                    invite_code=str(body.get("inviteCode") or body.get("invite_code") or ""),
+                    username=str(body.get("username") or ""),
+                    display_name=str(body.get("displayName") or body.get("display_name") or ""),
+                    password=str(body.get("password") or ""),
+                    request_ip=self.request_ip(),
+                    user_agent=str(self.headers.get("User-Agent", "") or ""),
+                )
+                account_id = int(account.get("accountId") or 0)
+                session_token, expires_at = create_admin_session(
+                    account_id,
+                    request_ip=self.request_ip(),
+                    user_agent=str(self.headers.get("User-Agent", "") or ""),
+                )
+                with connect() as conn:
+                    conn.execute(
+                        "update accounts set last_login_at = ?, last_login_ip = ?, updated_at = ? where id = ?",
+                        (utc_now(), self.request_ip(), utc_now(), account_id),
+                    )
+                    conn.commit()
+                account = get_account_by_id(account_id)
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "inviteCode": invite_code,
+                        "sessionToken": session_token,
+                        "expiresAt": expires_at,
+                        "account": account_row_public(account),
+                        "authStatus": auth_status_snapshot(),
+                    },
+                )
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path == "/admin/api/auth/bootstrap":
+            try:
+                if count_accounts() > 0:
+                    self.send_json(409, {"error": "系统已经初始化"})
+                    return
+                provided = str(
+                    self.headers.get("X-Admin-Token")
+                    or self.headers.get("Authorization", "")
+                    or ""
+                ).strip()
+                if provided.lower().startswith("bearer "):
+                    provided = provided.split(" ", 1)[1].strip()
+                expected = load_admin_token()
+                if not expected or not provided or not secrets.compare_digest(provided, expected):
+                    self.send_json(401, {"error": "初始化口令错误"})
+                    return
+                body = self.read_json()
+                bootstrap_password = str(body.get("password") or "").strip()
+                if not bootstrap_password:
+                    raise ActivationError("首次初始化必须设置密码", 400)
+                account, _ = create_account_record(
+                    username=str(body.get("username") or "admin").strip(),
+                    display_name=str(body.get("displayName") or body.get("display_name") or "超级管理员").strip(),
+                    password=bootstrap_password,
+                    role=ACCOUNT_ROLE_SUPER_ADMIN,
+                    status=ACCOUNT_STATUS_ACTIVE,
+                    note=str(body.get("note") or "").strip(),
+                    created_by=0,
+                )
+                session_token, expires_at = create_admin_session(
+                    int(account.get("accountId") or 0),
+                    request_ip=self.request_ip(),
+                    user_agent=str(self.headers.get("User-Agent", "") or ""),
+                )
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "account": account,
+                        "sessionToken": session_token,
+                        "expiresAt": expires_at,
+                        "authStatus": auth_status_snapshot(),
+                    },
+                )
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path == "/admin/api/auth/logout":
+            if not self.require_admin():
+                return
+            token = request_admin_token(self.headers)
+            revoked = revoke_admin_session(token)
+            self.send_json(200, {"ok": True, "revoked": revoked})
+            return
+        if path == "/admin/api/accounts":
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
+                return
+            try:
+                body = self.read_json()
+                account_id = int(body.get("accountId") or 0)
+                current = self.admin_context()
+                if account_id:
+                    before_row = get_account_by_id(account_id)
+                    if not before_row:
+                        self.send_json(404, {"error": "账号不存在"})
+                        return
+                    next_role = normalize_account_role(body.get("role")) if body.get("role") is not None else str(before_row["role"])
+                    next_status = normalize_account_status(body.get("status")) if body.get("status") is not None else str(before_row["status"])
+                    removing_active_super = (
+                        before_row["role"] == ACCOUNT_ROLE_SUPER_ADMIN
+                        and before_row["status"] == ACCOUNT_STATUS_ACTIVE
+                        and (next_role != ACCOUNT_ROLE_SUPER_ADMIN or next_status != ACCOUNT_STATUS_ACTIVE)
+                    )
+                    if removing_active_super and count_active_super_admins() <= 1:
+                        self.send_json(409, {"error": "至少需要保留一个启用中的超级管理员账号"})
+                        return
+                    before = account_row_public(before_row)
+                    backup_path = make_db_backup("accounts-update")
+                    after = update_account_record(
+                        account_id=account_id,
+                        display_name=body.get("displayName"),
+                        role=body.get("role"),
+                        status=body.get("status"),
+                        password=body.get("password"),
+                        note=body.get("note"),
+                    )
+                    self.audit_admin_change(
+                        "accounts.update",
+                        target_type="account",
+                        target_id=str(account_id),
+                        before=before,
+                        after=after,
+                        backup_path=backup_path,
+                    )
+                    self.send_json(200, {"ok": True, "account": after})
+                else:
+                    account_password = str(body.get("password") or "").strip()
+                    if not account_password:
+                        raise ActivationError("新建账号必须设置密码", 400)
+                    backup_path = make_db_backup("accounts-create")
+                    account, _ = create_account_record(
+                        username=str(body.get("username") or "").strip(),
+                        display_name=str(body.get("displayName") or body.get("display_name") or "").strip(),
+                        password=account_password,
+                        role=body.get("role") or ACCOUNT_ROLE_MERCHANT,
+                        status=body.get("status") or ACCOUNT_STATUS_ACTIVE,
+                        note=str(body.get("note") or "").strip(),
+                        created_by=int(current.get("accountId") or 0) if current else 0,
+                    )
+                    self.audit_admin_change(
+                        "accounts.create",
+                        target_type="account",
+                        target_id=str(account.get("accountId") or ""),
+                        before={},
+                        after=account,
+                        backup_path=backup_path,
+                    )
+                    self.send_json(200, {"ok": True, "account": account})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path == "/admin/api/accounts/toggle":
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
+                return
+            try:
+                body = self.read_json()
+                account_id = int(body.get("accountId") or 0)
+                if account_id <= 0:
+                    self.send_json(400, {"error": "缺少账号 ID"})
+                    return
+                before_row = get_account_by_id(account_id)
+                if not before_row:
+                    self.send_json(404, {"error": "账号不存在"})
+                    return
+                before = account_row_public(before_row)
+                next_status = ACCOUNT_STATUS_DISABLED if before_row["status"] == ACCOUNT_STATUS_ACTIVE else ACCOUNT_STATUS_ACTIVE
+                if (
+                    before_row["role"] == ACCOUNT_ROLE_SUPER_ADMIN
+                    and before_row["status"] == ACCOUNT_STATUS_ACTIVE
+                    and next_status == ACCOUNT_STATUS_DISABLED
+                    and count_active_super_admins() <= 1
+                ):
+                    self.send_json(409, {"error": "至少需要保留一个启用中的超级管理员账号"})
+                    return
+                backup_path = make_db_backup("accounts-toggle")
+                after = update_account_record(account_id=account_id, status=next_status)
+                self.audit_admin_change(
+                    "accounts.toggle",
+                    target_type="account",
+                    target_id=str(account_id),
+                    before=before,
+                    after=after,
+                    backup_path=backup_path,
+                )
+                self.send_json(200, {"ok": True, "account": after})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path == "/admin/api/invites":
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
+                return
+            try:
+                body = self.read_json()
+                current = self.admin_context()
+                backup_path = make_db_backup("invites-create")
+                invite, raw_code = create_invite_record(
+                    note=str(body.get("note") or "").strip(),
+                    max_uses=int(body.get("maxUses") or body.get("max_uses") or 1),
+                    expires_at=str(body.get("expiresAt") or body.get("expires_at") or "").strip(),
+                    created_by=int(current.get("accountId") or 0) if current else 0,
+                )
+                self.audit_admin_change(
+                    "invites.create",
+                    target_type="invite",
+                    target_id=str(invite.get("inviteId") or invite.get("inviteCode") or ""),
+                    before={},
+                    after={**invite, "rawInviteCode": raw_code},
+                    backup_path=backup_path,
+                )
+                self.send_json(200, {"ok": True, "invite": invite, "inviteCode": raw_code})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path == "/admin/api/invites/toggle":
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
+                return
+            try:
+                body = self.read_json()
+                invite_id = int(body.get("inviteId") or body.get("invite_id") or 0)
+                if invite_id <= 0:
+                    self.send_json(400, {"error": "缺少邀请码 ID"})
+                    return
+                with connect() as conn:
+                    before_row = conn.execute("select * from invite_codes where id = ?", (invite_id,)).fetchone()
+                if not before_row:
+                    self.send_json(404, {"error": "邀请码不存在"})
+                    return
+                backup_path = make_db_backup("invites-toggle")
+                after = toggle_invite_record(invite_id)
+                self.audit_admin_change(
+                    "invites.toggle",
+                    target_type="invite",
+                    target_id=str(invite_id),
+                    before=invite_row_public(before_row),
+                    after=after,
+                    backup_path=backup_path,
+                )
+                self.send_json(200, {"ok": True, "invite": after})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path == "/admin/api/account-gateway":
+            if not self.require_admin():
+                return
+            try:
+                account_id = context_account_id(self.admin_context())
+                if account_id <= 0:
+                    raise ActivationError("请先使用账号登录", 401)
+                before = get_account_gateway_settings(account_id, include_secrets=False)
+                backup_path = make_db_backup("account-gateway-update")
+                settings = upsert_account_gateway_settings(account_id, self.read_json())
+                self.audit_admin_change(
+                    "account_gateway.update",
+                    target_type="account_gateway",
+                    target_id=str(account_id),
+                    before=before,
+                    after=settings,
+                    backup_path=backup_path,
+                )
+                self.send_json(200, {"ok": True, "settings": settings})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path in {"/api/lumi/relay/packet", "/api/lumi/publish/packet"}:
+            if not self.require_publish_relay_auth():
+                return
+            try:
+                record = publish_relay_enqueue(self.read_json())
+                self.send_json(
+                    202,
+                    {
+                        "ok": True,
+                        "data": {
+                            "packetId": record["id"],
+                            "channelId": record["channelId"],
+                            "status": record["status"],
+                            "attempts": record["attempts"],
+                            "createdAt": record["createdAt"],
+                            "updatedAt": record["updatedAt"],
+                            "statusUrl": f"/api/lumi/relay/status?id={record['id']}",
+                        },
+                    },
+                )
+            except ActivationError as error:
+                self.send_json(error.status, {"ok": False, "error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"ok": False, "error": f"server error: {error}"})
+            return
+        if path in {"/api/lumi/relay/complete", "/api/lumi/publish/complete"}:
+            if not self.require_publish_relay_auth():
+                return
+            try:
+                record = publish_relay_complete(self.read_json())
+                self.send_json(200, {"ok": True, "data": record})
+            except ActivationError as error:
+                self.send_json(error.status, {"ok": False, "error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"ok": False, "error": f"server error: {error}"})
+            return
         if path == "/admin/api/codes":
             if not self.require_admin():
                 return
             try:
-                body = apply_plan_template(self.read_json())
+                current = self.admin_context()
+                raw_body = self.read_json()
+                body = apply_plan_template(raw_body) if is_super_admin_context(current) else raw_body
+                owner_account_id = context_account_id(current)
+                if current and is_super_admin_context(current):
+                    owner_account_id = int(body.get("ownerAccountId") or body.get("owner_account_id") or owner_account_id or 0)
+                body = apply_account_gateway_defaults(body, owner_account_id, explicit_body=raw_body)
                 features = parse_features(str(body.get("features", ",".join(DEFAULT_FEATURES))))
                 backup_path = make_db_backup("codes-create")
+                if owner_account_id:
+                    owner = get_account_by_id(owner_account_id)
+                    if not owner or owner["status"] != ACCOUNT_STATUS_ACTIVE:
+                        raise ActivationError("归属账号不存在或已停用")
                 codes = create_code_records(
                     count=int(body.get("count", 1)),
                     licensee=str(body.get("licensee", "客户")).strip() or "客户",
@@ -1308,6 +3565,8 @@ class Handler(BaseHTTPRequestHandler):
                     member_mode=bool(body.get("memberMode")),
                     plan=str(body.get("plan", "")).strip(),
                     gateway_base_url=str(body.get("gatewayBaseUrl", "")).strip(),
+                    gateway_image_base_url=str(body.get("gatewayImageBaseUrl") or body.get("gateway_image_base_url") or "").strip(),
+                    gateway_video_base_url=str(body.get("gatewayVideoBaseUrl") or body.get("gateway_video_base_url") or "").strip(),
                     gateway_token=str(body.get("gatewayToken", "")).strip(),
                     gateway_image_token=str(body.get("gatewayImageToken") or body.get("gateway_image_token") or "").strip(),
                     gateway_video_token=str(body.get("gatewayVideoToken") or body.get("gateway_video_token") or "").strip(),
@@ -1316,6 +3575,7 @@ class Handler(BaseHTTPRequestHandler):
                     gateway_video_model=str(body.get("gatewayVideoModel") or body.get("gateway_video_model") or "").strip(),
                     gateway_models=parse_models(body.get("gatewayModels", "")),
                     quotas=parse_json_object(body.get("quotas", "")),
+                    owner_account_id=owner_account_id,
                 )
                 self.audit_admin_change(
                     "codes.create",
@@ -1324,10 +3584,12 @@ class Handler(BaseHTTPRequestHandler):
                     before={},
                     after={
                         "count": len(codes),
+                        "codes": codes,
                         "codeLabels": [code[-9:] for code in codes],
                         "licensee": str(body.get("licensee", "客户")).strip() or "客户",
                         "memberMode": bool(body.get("memberMode")),
                         "plan": str(body.get("plan", "")).strip(),
+                        "ownerAccountId": owner_account_id,
                     },
                     backup_path=backup_path,
                 )
@@ -1339,12 +3601,14 @@ class Handler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             try:
-                body = apply_plan_template(self.read_json())
+                current = self.admin_context()
+                raw_body = self.read_json()
+                body = apply_plan_template(raw_body) if is_super_admin_context(current) else raw_body
                 code_hash_value = str(body.get("codeHash", "")).strip()
-                before = get_code_snapshot(code_hash_value)
+                before = get_code_snapshot(code_hash_value, current)
                 backup_path = make_db_backup("codes-update")
-                update_code_record(body)
-                after = get_code_snapshot(code_hash_value)
+                update_code_record(body, current_account=current)
+                after = get_code_snapshot(code_hash_value, current)
                 self.audit_admin_change(
                     "codes.update",
                     target_type="code",
@@ -1363,12 +3627,15 @@ class Handler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             try:
-                body = apply_plan_template(self.read_json())
-                code_hashes = body.get("codeHashes") if isinstance(body.get("codeHashes"), list) else []
-                before = get_code_snapshots(code_hashes)
+                current = self.admin_context()
+                raw_body = self.read_json()
+                body = apply_plan_template(raw_body) if is_super_admin_context(current) else dict(raw_body)
+                code_hashes = normalize_code_hashes(body.get("codeHashes"))
+                body["codeHashes"] = code_hashes
+                before = get_code_snapshots(code_hashes, current)
                 backup_path = make_db_backup("codes-bulk-update")
-                updated = bulk_update_code_records(body)
-                after = get_code_snapshots(code_hashes)
+                updated = bulk_update_code_records(body, current_account=current)
+                after = get_code_snapshots(code_hashes, current)
                 self.audit_admin_change(
                     "codes.bulk_update",
                     target_type="codes",
@@ -1384,7 +3651,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(error)})
             return
         if path == "/admin/api/plans/update":
-            if not self.require_admin():
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
                 return
             try:
                 body = self.read_json()
@@ -1408,7 +3675,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(error)})
             return
         if path == "/admin/api/plans/delete":
-            if not self.require_admin():
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
                 return
             try:
                 body = self.read_json()
@@ -1438,18 +3705,25 @@ class Handler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             try:
+                current = self.admin_context()
                 body = self.read_json()
                 code_hash_value = str(body.get("codeHash", ""))
                 disabled = 1 if body.get("disabled") else 0
-                before = get_code_snapshot(code_hash_value)
+                before = get_code_snapshot(code_hash_value, current)
                 backup_path = make_db_backup("codes-toggle")
                 with connect() as conn:
-                    result = conn.execute("update codes set disabled = ? where code_hash = ?", (disabled, code_hash_value))
+                    if current and not is_super_admin_context(current):
+                        result = conn.execute(
+                            "update codes set disabled = ? where code_hash = ? and owner_account_id = ?",
+                            (disabled, code_hash_value, context_account_id(current)),
+                        )
+                    else:
+                        result = conn.execute("update codes set disabled = ? where code_hash = ?", (disabled, code_hash_value))
                     conn.commit()
                 if result.rowcount == 0:
                     self.send_json(404, {"error": "授权码不存在"})
                 else:
-                    after = get_code_snapshot(code_hash_value)
+                    after = get_code_snapshot(code_hash_value, current)
                     self.audit_admin_change(
                         "codes.toggle",
                         target_type="code",
@@ -1463,7 +3737,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(error)})
             return
         if path == "/admin/api/codes/clear":
-            if not self.require_admin():
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
                 return
             try:
                 before = get_inventory_snapshot()
@@ -1488,6 +3762,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             try:
+                current = self.admin_context()
                 body = self.read_json()
                 code = str(body.get("code", "")).strip().upper()
                 h = code_hash(code)
@@ -1499,13 +3774,21 @@ class Handler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             try:
+                current = self.admin_context()
                 body = self.read_json()
                 code_hash_value = str(body.get("codeHash", ""))
-                before = get_code_snapshot(code_hash_value)
+                before = get_code_snapshot(code_hash_value, current)
+                if not before:
+                    self.send_json(404, {"error": "授权码不存在或无权访问"})
+                    return
                 backup_path = make_db_backup("codes-delete")
                 with connect() as conn:
-                    conn.execute("delete from codes where code_hash = ?", (code_hash_value,))
-                    conn.execute("delete from activations where code_hash = ?", (code_hash_value,))
+                    if current and not is_super_admin_context(current):
+                        conn.execute("delete from activations where code_hash = ?", (code_hash_value,))
+                        conn.execute("delete from codes where code_hash = ? and owner_account_id = ?", (code_hash_value, context_account_id(current)))
+                    else:
+                        conn.execute("delete from activations where code_hash = ?", (code_hash_value,))
+                        conn.execute("delete from codes where code_hash = ?", (code_hash_value,))
                     conn.commit()
                 self.audit_admin_change(
                     "codes.delete",
@@ -1523,12 +3806,18 @@ class Handler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             try:
+                current = self.admin_context()
                 body = self.read_json()
                 activation_id = int(body.get("id") or 0)
                 before = get_activation_snapshot(activation_id)
                 if before is None:
                     self.send_json(404, {"error": "激活记录不存在"})
                     return
+                if current and not is_super_admin_context(current):
+                    code_snapshot = get_code_snapshot(before["codeHash"], current)
+                    if not code_snapshot:
+                        self.send_json(403, {"error": "无权删除该激活记录"})
+                        return
                 backup_path = make_db_backup("activations-delete")
                 with connect() as conn:
                     conn.execute("delete from activations where id = ?", (activation_id,))
@@ -1542,6 +3831,27 @@ class Handler(BaseHTTPRequestHandler):
                     backup_path=backup_path,
                 )
                 self.send_json(200, {"ok": True})
+            except Exception as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path == "/admin/api/public-settings":
+            if not self.require_admin(ACCOUNT_ROLE_SUPER_ADMIN):
+                return
+            try:
+                before = public_settings()
+                backup_path = make_db_backup("public-settings-update")
+                settings = update_public_settings(self.read_json())
+                self.audit_admin_change(
+                    "settings.update",
+                    target_type="settings",
+                    target_id="public",
+                    before=before,
+                    after=settings,
+                    backup_path=backup_path,
+                )
+                self.send_json(200, {"ok": True, "settings": settings, "clientConfig": client_public_config()})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
             except Exception as error:
                 self.send_json(400, {"error": str(error)})
             return
@@ -1594,11 +3904,25 @@ class Handler(BaseHTTPRequestHandler):
         data = self.rfile.read(length)
         return json.loads(data.decode("utf-8-sig"))
 
-    def send_json(self, status: int, payload: dict[str, Any]) -> None:
+    def send_cors_headers(self) -> None:
+        origin = str(self.headers.get("Origin") or "").strip()
+        if is_admin_request_path(self.path):
+            if origin and admin_cors_origin_allowed(origin):
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-OpenClaw-Relay-Token, X-Admin-Token, X-Admin-Session")
+
+    def send_json(self, status: int, payload: dict[str, Any], headers: dict[str, str] | None = None) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_cors_headers()
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -1607,6 +3931,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_cors_headers()
         self.end_headers()
         self.wfile.write(data)
 
@@ -1621,22 +3946,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "public, max-age=3600")
+        self.send_cors_headers()
         self.end_headers()
         self.wfile.write(data)
-
-    def require_admin(self) -> bool:
-        expected = load_admin_token()
-        if not expected:
-            self.send_json(503, {"error": "管理员后台未配置 Token"})
-            return False
-        provided = self.headers.get("X-Admin-Token", "")
-        auth = self.headers.get("Authorization", "")
-        if auth.lower().startswith("bearer "):
-            provided = auth.split(" ", 1)[1]
-        if not secrets.compare_digest(provided, expected):
-            self.send_json(401, {"error": "管理员 Token 错误"})
-            return False
-        return True
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[{utc_now()}] {self.address_string()} {fmt % args}")
@@ -1703,6 +4015,8 @@ def main() -> None:
     create_parser.add_argument("--member-mode", action="store_true")
     create_parser.add_argument("--plan", default="monthly")
     create_parser.add_argument("--gateway-base-url", default=DEFAULT_GATEWAY_BASE_URL)
+    create_parser.add_argument("--gateway-image-base-url", default=DEFAULT_GATEWAY_IMAGE_BASE_URL)
+    create_parser.add_argument("--gateway-video-base-url", default=DEFAULT_GATEWAY_VIDEO_BASE_URL)
     create_parser.add_argument("--gateway-token", default=DEFAULT_GATEWAY_TOKEN)
     create_parser.add_argument("--gateway-image-token", default=DEFAULT_GATEWAY_IMAGE_TOKEN)
     create_parser.add_argument("--gateway-video-token", default=DEFAULT_GATEWAY_VIDEO_TOKEN)

@@ -274,8 +274,8 @@ export const DesktopAgentPage: React.FC = () => {
               <div>Token：{status?.config.tokenPreview || '未生成'}</div>
             </div>
             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-              <Button variant="success" onClick={() => run('启动 Luminode', () => desktopAgentApi.start())} disabled={busy || status?.running}>启动</Button>
-              <Button variant="danger" onClick={() => run('停止 Luminode', () => desktopAgentApi.stop())} disabled={busy || !status?.running}>停止</Button>
+              <Button variant="success" onClick={() => run('启动桌面代理', () => desktopAgentApi.start())} disabled={busy || status?.running}>启动</Button>
+              <Button variant="danger" onClick={() => run('停止桌面代理', () => desktopAgentApi.stop())} disabled={busy || !status?.running}>停止</Button>
               <Button variant="quiet" onClick={() => run('健康检查', () => desktopAgentApi.health())} disabled={busy}>健康检查</Button>
               <Button variant="quiet" onClick={captureScreenshot} disabled={busy || !status?.apiReady}>截图测试</Button>
             </div>

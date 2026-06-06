@@ -12,7 +12,7 @@ import { useTheme } from './hooks/useTheme';
 import { getFeatureDefinition } from './features/registry';
 import { renderFeaturePage } from './features/pages';
 import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
-import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
+import { DingtalkConfigDialog, FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
 
 function formatError(error: unknown): string {
   if (typeof error === 'string') return error;
@@ -76,7 +76,7 @@ export default function App() {
   } = useAppStore();
   const appendLog = useLogStore((s) => s.append);
   const replaceLog = useLogStore((s) => s.replace);
-  const [activeDialog, setActiveDialog] = useState<'api' | 'feishu' | 'weixin' | null>(null);
+  const [activeDialog, setActiveDialog] = useState<'api' | 'feishu' | 'weixin' | 'dingtalk' | null>(null);
   const [apiConfigured, setApiConfigured] = useState(false);
   const logInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const logOffset = useRef(0);
@@ -272,6 +272,7 @@ export default function App() {
         {activeDialog === 'api' && <ModernApiConfigDialog onClose={() => setActiveDialog(null)} onSaved={refreshApiConfigured} />}
         {activeDialog === 'feishu' && <FeishuConfigDialog onClose={() => setActiveDialog(null)} />}
         {activeDialog === 'weixin' && <WeixinConfigDialog onClose={() => setActiveDialog(null)} />}
+        {activeDialog === 'dingtalk' && <DingtalkConfigDialog onClose={() => setActiveDialog(null)} />}
       </div>
     </ThemeProvider>
   );

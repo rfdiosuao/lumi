@@ -16,7 +16,7 @@ from core.paths import AppPaths
 from core.storage import read_json, write_json
 
 DEFAULT_THEME: dict[str, Any] = {
-    "name": "Lumi Obsidian Gold",
+    "name": "Lumi Graphite Gold",
     "colors": {
         "app_bg": "#05060A",
         "sidebar_bg": "#070912",
