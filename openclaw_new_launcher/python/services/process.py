@@ -769,6 +769,7 @@ class OpenClawProcessService:
                 "imageToPhoneCli": os.path.join(self.paths.base_path, "scripts", "openclaw-image-phone.mjs"),
                 "phoneVerifier": os.path.join(self.paths.base_path, "scripts", "verify-phone-agent.ps1"),
                 "phoneFleetCli": os.path.join(self.paths.base_path, "scripts", "openclaw-phone-fleet.mjs"),
+                "desktopAgentCli": os.path.join(self.paths.base_path, "scripts", "openclaw-desktop-agent.mjs"),
             },
             "capabilities": {
                 "imageGeneration": {
@@ -816,13 +817,22 @@ class OpenClawProcessService:
                     "localPort": desktop_port,
                     "configPath": "data/.openclaw/launcher/desktop-agent.json",
                     "tokenAvailable": desktop_token_available,
+                    "agentCli": "npm run desktop:agent --",
+                    "replyCli": "npm run desktop:reply --",
+                    "replyPolicy": "observe first; send only with explicit --confirmed user approval",
                     "tokenPolicy": "never expose token; call through launcher Bridge /api/desktop-agent/*",
                     "tools": [
+                        "desktop.status",
+                        "desktop.health",
+                        "desktop.start",
+                        "desktop.stop",
                         "desktop.screenshot",
                         "desktop.click",
                         "desktop.type",
                         "wechat.send",
                         "wechat.unread",
+                        "desktop.reply.observe",
+                        "desktop.reply.once",
                     ],
                 },
                 "portableRuntime": {

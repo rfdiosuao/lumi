@@ -32,6 +32,17 @@ POST /api/desktop-agent/wechat/unread
 POST /api/desktop-agent/wechat/send
 ```
 
+Preferred CLI wrappers:
+
+```powershell
+npm run desktop:agent -- status
+npm run desktop:agent -- start
+npm run desktop:agent -- screenshot --out .\data\desktop.png
+npm run desktop:agent -- wechat unread
+npm run desktop:reply -- observe
+npm run desktop:reply -- once --text "reply text" --confirmed
+```
+
 Never request or print the raw token.
 If the Bridge returns `blocked=true`, stop and report the launcher policy reason. Do not bypass with direct SightFlow calls.
 

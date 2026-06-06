@@ -162,6 +162,26 @@ class DesktopAgentService:
         if not command:
             raise FileNotFoundError(f"未找到 SightFlow 可启动入口：{agent_dir}")
 
+        # Start the agent explicitly in sidecar mode so the local HTTP API is
+        # always opened with the launcher-owned port/token.
+        sidecar_port = int(config.get("port") or self.DEFAULT_PORT)
+        sidecar_token = str(config.get("token") or "")
+        sidecar_app_type = str(config.get("appType") or "weixin")
+        command = [
+            *command,
+            "--luminode-sidecar",
+            "--port", str(sidecar_port),
+            "--token", sidecar_token,
+            "--app-type", sidecar_app_type,
+        ]
+        sidecar_provider = self._primary_provider()
+        if sidecar_provider.get("apiKey"):
+            command += ["--api-key", sidecar_provider["apiKey"]]
+        if sidecar_provider.get("baseUrl"):
+            command += ["--base-url", sidecar_provider["baseUrl"]]
+        if sidecar_provider.get("model"):
+            command += ["--model", sidecar_provider["model"]]
+
         env = os.environ.copy()
         env.update({
             "LUMINODE_HTTP_API_AUTOSTART": "1" if config.get("autoStartHttpApi", True) else "0",
@@ -169,12 +189,22 @@ class DesktopAgentService:
             "LUMINODE_AGENT_TOKEN": str(config.get("token") or ""),
             "LUMINODE_APP_TYPE": str(config.get("appType") or "weixin"),
             "LUMINODE_POLICY_JSON": json.dumps(self.public_config(config), ensure_ascii=False),
+            "SIGHTFLOW_HTTP_API_AUTOSTART": "1" if config.get("autoStartHttpApi", True) else "0",
+            "SIGHTFLOW_HTTP_API_PORT": str(sidecar_port),
+            "SIGHTFLOW_AGENT_TOKEN": sidecar_token,
+            "SIGHTFLOW_APP_TYPE": sidecar_app_type,
         })
         api_key = self._primary_api_key()
         if api_key:
             env["LUMINODE_API_KEY"] = api_key
+        if sidecar_provider.get("apiKey"):
+            env["SIGHTFLOW_API_KEY"] = sidecar_provider["apiKey"]
+        if sidecar_provider.get("baseUrl"):
+            env["SIGHTFLOW_BASE_URL"] = sidecar_provider["baseUrl"]
+        if sidecar_provider.get("model"):
+            env["SIGHTFLOW_MODEL"] = sidecar_provider["model"]
 
-        self.append_log(f"[DesktopAgent] Starting Luminode: {' '.join(command)}\n")
+        self.append_log(f"[DesktopAgent] Starting Luminode: {' '.join(self._redact_command(command))}\n")
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         self.process = subprocess.Popen(
             command,
@@ -193,6 +223,8 @@ class DesktopAgentService:
         return self.status()
 
     def stop(self) -> dict:
+        config = self.read_config()
+        stopped = False
         if self.process and self.process.poll() is None:
             pid = self.process.pid
             self.append_log(f"[DesktopAgent] Stopping PID {pid}\n")
@@ -206,6 +238,9 @@ class DesktopAgentService:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
+            stopped = True
+        if not stopped:
+            stopped = self._stop_process_on_port(int(config.get("port") or self.DEFAULT_PORT))
         self.process = None
         return self.status()
 
@@ -229,6 +264,7 @@ class DesktopAgentService:
         port = int(config.get("port") or self.DEFAULT_PORT)
         url = f"http://127.0.0.1:{port}{path}"
         payload = json.dumps(self._augment_body(path, body, config), ensure_ascii=False).encode("utf-8")
+        timeout = 8 if path == "/health" else 35
         request = urllib.request.Request(
             url,
             data=None if method.upper() == "GET" else payload,
@@ -241,7 +277,7 @@ class DesktopAgentService:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=8) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 text = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as error:
             text = error.read().decode("utf-8", errors="replace")
@@ -295,6 +331,66 @@ class DesktopAgentService:
         if os.path.exists(dev_launch) and os.path.exists(self.paths.node_exe):
             return [self.paths.node_exe, dev_launch]
         return []
+
+    def _redact_command(self, command: list[str]) -> list[str]:
+        redacted: list[str] = []
+        hide_next = False
+        sensitive_flags = {"--token", "--api-key"}
+        for part in command:
+            if hide_next:
+                redacted.append("[redacted]")
+                hide_next = False
+                continue
+            redacted.append(part)
+            if part in sensitive_flags:
+                hide_next = True
+        return redacted
+
+    def _stop_process_on_port(self, port: int) -> bool:
+        if port <= 0:
+            return False
+        pids = self._listening_pids_for_port(port)
+        stopped = False
+        for pid in pids:
+            if not pid or pid == str(os.getpid()):
+                continue
+            self.append_log(f"[DesktopAgent] Stopping listener on port {port}: PID {pid}\n")
+            if os.name == "nt":
+                result = subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", pid],
+                    capture_output=True,
+                    text=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                stopped = stopped or result.returncode == 0
+            else:
+                result = subprocess.run(["kill", "-TERM", pid], capture_output=True, text=True)
+                stopped = stopped or result.returncode == 0
+        return stopped
+
+    def _listening_pids_for_port(self, port: int) -> set[str]:
+        if os.name == "nt":
+            try:
+                result = subprocess.run(
+                    ["netstat", "-ano", "-p", "tcp"],
+                    capture_output=True,
+                    text=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception:
+                return set()
+            pids: set[str] = set()
+            suffix = f":{port}"
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[1].endswith(suffix) and parts[3].upper() == "LISTENING":
+                    pids.add(parts[-1])
+            return pids
+        try:
+            result = subprocess.run(["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True)
+        except Exception:
+            return set()
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
     def _deep_merge(self, base: dict, updates: dict) -> dict:
         merged = dict(base)
@@ -383,6 +479,31 @@ class DesktopAgentService:
         elif path in {"/click", "/type", "/wechat/send"}:
             enriched.setdefault("action", self._public_action(config))
         return enriched
+
+    def _primary_provider(self) -> dict:
+        result = {"apiKey": "", "baseUrl": "", "model": ""}
+        try:
+            with open(self.paths.auth_profiles, "r", encoding="utf-8") as handle:
+                profiles = json.load(handle)
+            models = profiles.get("models") if isinstance(profiles, dict) else {}
+            providers = models.get("providers") if isinstance(models, dict) else {}
+            primary = models.get("primary") if isinstance(models, dict) else ""
+            provider = providers.get(primary) if primary else None
+            if not isinstance(provider, dict) and isinstance(providers, dict):
+                provider = next((item for item in providers.values() if isinstance(item, dict)), None)
+            provider = provider if isinstance(provider, dict) else {}
+            result["apiKey"] = str(provider.get("apiKey") or "").strip()
+            result["baseUrl"] = str(provider.get("baseUrl") or "").strip()
+            model_list = provider.get("models")
+            if isinstance(model_list, list) and model_list:
+                result["model"] = str(model_list[0] or "").strip()
+            elif isinstance(provider.get("model"), str):
+                result["model"] = str(provider.get("model")).strip()
+        except Exception:
+            pass
+        if not result["apiKey"]:
+            result["apiKey"] = self._primary_api_key()
+        return result
 
     def _primary_api_key(self) -> str:
         try:

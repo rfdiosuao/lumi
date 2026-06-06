@@ -44,11 +44,13 @@ SightFlow Desktop Agent is the local PC executor. The launcher owns process life
 
 Current first-stage tools:
 
+- status, health, start, and stop via `npm run desktop:agent`;
 - desktop screenshot;
 - coordinate click;
 - keyboard text input;
 - WeChat send text;
-- WeChat unread inspection.
+- WeChat unread inspection;
+- explicit desktop reply flow via `npm run desktop:reply`.
 
 Private config:
 
@@ -57,6 +59,13 @@ data/.openclaw/launcher/desktop-agent.json
 ```
 
 Do not expose the token, infer the local port, or call Luminode endpoints directly. Use `runtime-context.json` and `/api/desktop-agent/*` routes. Mutating routes may require `confirmed=true` and can be blocked by launcher policy.
+
+Safe CLI flow:
+
+```powershell
+npm run desktop:reply -- observe
+npm run desktop:reply -- once --text "reply text" --confirmed
+```
 
 ## Phone Agent Capabilities
 

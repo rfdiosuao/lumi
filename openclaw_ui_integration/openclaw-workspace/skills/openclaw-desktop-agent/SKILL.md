@@ -34,6 +34,17 @@ Use launcher Bridge routes:
 - `POST /api/desktop-agent/wechat/send`
 - `POST /api/desktop-agent/wechat/unread`
 
+Prefer the CLI wrappers when available:
+
+```powershell
+npm run desktop:agent -- status
+npm run desktop:agent -- health
+npm run desktop:agent -- start
+npm run desktop:agent -- screenshot --out .\data\desktop.png
+npm run desktop:reply -- observe
+npm run desktop:reply -- once --text "reply text" --confirmed
+```
+
 ## Safety Rules
 
 - Prefer screenshot and observe before clicking or typing.
@@ -50,3 +61,5 @@ Use launcher Bridge routes:
 - `desktop.type`: type text into the currently focused control.
 - `wechat.send`: send text through the currently supported WeChat flow.
 - `wechat.unread`: inspect unread state when Luminode has a measured layout.
+- `desktop.reply.observe`: inspect status, health, unread state, and screenshot summary.
+- `desktop.reply.once`: send one explicit reply text after user confirmation.
