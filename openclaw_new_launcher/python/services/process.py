@@ -649,6 +649,18 @@ class OpenClawProcessService:
                 or gateway.get("model")
                 or ""
             ).strip()
+            member_gateway_image_base = str(
+                gateway_source.get("gatewayImageBaseUrl")
+                or gateway_source.get("imageBaseUrl")
+                or gateway.get("imageBaseUrl")
+                or member_gateway_base
+            ).strip()
+            member_gateway_video_base = str(
+                gateway_source.get("gatewayVideoBaseUrl")
+                or gateway_source.get("videoBaseUrl")
+                or gateway.get("videoBaseUrl")
+                or member_gateway_base
+            ).strip()
             member_gateway_image_model = str(
                 gateway_source.get("gatewayImageModel")
                 or gateway_source.get("imageModel")
@@ -738,6 +750,8 @@ class OpenClawProcessService:
                 "memberGateway": {
                     "configured": member_gateway_configured,
                     "baseUrl": member_gateway_base or None,
+                    "imageBaseUrl": member_gateway_image_base or member_gateway_base or None,
+                    "videoBaseUrl": member_gateway_video_base or member_gateway_base or None,
                     "defaultModel": member_gateway_default_model or None,
                     "imageModel": member_gateway_image_model or None,
                     "videoModel": member_gateway_video_model or None,

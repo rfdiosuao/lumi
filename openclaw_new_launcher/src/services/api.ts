@@ -4,6 +4,37 @@ let bridgeStartup: Promise<void> | null = null;
 const BRIDGE_STARTUP_RETRIES = 480;
 const BRIDGE_STARTUP_INTERVAL_MS = 500;
 
+function getErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    if (typeof record.error === 'string') return record.error;
+    if (typeof record.message === 'string') return record.message;
+  }
+  return '';
+}
+
+function isTransientStatusReadError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  if (!message) return false;
+  return [
+    'live_bridge_unavailable',
+    'bridge unavailable',
+    'bridge not available',
+    'bridge not ready',
+    'bridge未启动',
+    'bridge unavailable',
+    'failed to fetch',
+    'fetch failed',
+    'econnrefused',
+    'connection refused',
+    'service unavailable',
+    '502',
+    '503',
+    '504',
+  ].some((token) => message.includes(token));
+}
+
 async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) {
   const currentPort = await invoke<number>('get_bridge_port');
   if (currentPort > 0) return;
@@ -35,8 +66,7 @@ async function proxyRequest(path: string, method: string = 'GET', body?: Record<
       body: body ? JSON.stringify(body) : null,
     });
   } catch (error: any) {
-    const message = typeof error === 'string' ? error : (error?.message || '');
-    if (message.includes('Bridge 未启动')) {
+    if (isTransientStatusReadError(error)) {
       await ensureBridgeStarted(invoke);
       responseText = await invoke<string>('proxy_request', {
         path,
@@ -106,7 +136,17 @@ export async function waitForProcessReady(options: WaitForProcessReadyOptions = 
   let lastStatus: ProcessStatus | null = null;
 
   while (Date.now() < deadline) {
-    const status = await processApi.status();
+    let status: ProcessStatus;
+    try {
+      status = await processApi.status();
+    } catch (error) {
+      if (!isTransientStatusReadError(error)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      continue;
+    }
+
     lastStatus = status;
     options.onProgress?.(status);
 
@@ -144,6 +184,7 @@ export const logApi = {
 // === License API ===
 export const licenseApi = {
   current: (): Promise<{ license: object | null; gatewayProfile?: object | null; member?: object | null }> => api('/api/license/current'),
+  clientConfig: (): Promise<{ cardSite?: { enabled?: boolean; label?: string; url?: string } }> => api('/api/license/client-config'),
   activate: (code: string): Promise<{ license: object }> => api('/api/license/activate', 'POST', { code }),
   authorized: (feature?: string): Promise<{ authorized: boolean }> => api('/api/license/authorized', 'POST', { feature }),
 };

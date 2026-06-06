@@ -1,7 +1,7 @@
 export const OPENCLAW_CONFIG_PATH = 'data/.openclaw/openclaw.json';
 
 export type PluginStatus = 'unknown' | 'installed' | 'missing' | 'error';
-export type BotChannelKey = 'feishu' | 'weixin';
+export type BotChannelKey = 'feishu' | 'weixin' | 'dingtalk';
 
 export interface InstallStep {
   label: string;

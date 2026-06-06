@@ -63,6 +63,8 @@ const PHONE_AGENTS_PATH = 'data/.openclaw/launcher/phone-agents.json';
 const TERMINAL_TASK_STATES = new Set(['success', 'error', 'cancelled', 'canceled']);
 const CORE_SNAPSHOT_TIMEOUT_MS = 7000;
 const EXTRA_SNAPSHOT_TIMEOUT_MS = 2200;
+const PHONE_AGENT_TASK_TIMEOUT_SEC = 600;
+const PHONE_AGENT_TASK_POLL_SECONDS = PHONE_AGENT_TASK_TIMEOUT_SEC + 20;
 
 function createEmptySnapshot(): PhoneSnapshot {
   return {
@@ -525,7 +527,7 @@ export function PhonePage() {
           force_agent: false,
           read_only: false,
           tool_policy: 'safe_action',
-          timeout_sec: 120,
+          timeout_sec: PHONE_AGENT_TASK_TIMEOUT_SEC,
         },
         { timeoutMs: 60_000 },
       );
@@ -536,7 +538,7 @@ export function PhonePage() {
       pushToast({ tone: 'ok', title: '任务已提交', detail: selectedDevice.name });
       addTaskLog('ok', '任务已提交', taskId);
 
-      for (let i = 0; i < 120; i += 1) {
+      for (let i = 0; i < PHONE_AGENT_TASK_POLL_SECONDS; i += 1) {
         if (taskRunRef.current !== runId) return;
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         const result = await requestPhoneData<any>(

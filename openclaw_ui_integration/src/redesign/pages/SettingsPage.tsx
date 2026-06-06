@@ -1,6 +1,6 @@
 import React from 'react';
 import { Command } from '@tauri-apps/plugin-shell';
-import { Copy, ExternalLink, RefreshCcw, Save } from 'lucide-react';
+import { Copy, ExternalLink, RefreshCcw, Save, Terminal } from 'lucide-react';
 import { Button, Chip, Field, Input, Panel, SectionHeader, Select, TextArea } from '../components/ui';
 import { loadSettingsSnapshot, readConfigValue, saveAuthProfiles, writeConfigValue } from '../api/adapters';
 import { makeCommandOptions, resolvePortableBasePath } from '../api/runtimeCommand';
@@ -32,21 +32,87 @@ const AUTH_PROFILES_PATH = 'data/.openclaw/agents/main/agent/auth-profiles.json'
 const IMAGE_CONFIG_PATH = 'imgapi_config.json';
 const VIDEO_CONFIG_PATH = 'videoapi_config.json';
 const OPENCLAW_CONFIG_PATH = 'data/.openclaw/openclaw.json';
-const OPENAI_CODEX_MANUAL_LOGIN_COMMAND = [
-  "$env:OPENCLAW_HOME=(Join-Path $PWD 'data')",
-  "$env:OPENCLAW_STATE_DIR=(Join-Path $PWD 'data\\.openclaw')",
-  "$env:OPENCLAW_CONFIG_PATH=(Join-Path $env:OPENCLAW_STATE_DIR 'openclaw.json')",
-  '$env:OPENCLAW_CONFIG=$env:OPENCLAW_CONFIG_PATH',
-  "$env:OPENCLAW_GATEWAY_PORT='18790'",
-  "$env:NO_COLOR='1'",
-  "$env:Path=(Join-Path $PWD 'node')+';'+(Join-Path $PWD 'node_modules\\.bin')+';'+$env:Path",
-  '.\\node\\node.exe .\\node_modules\\openclaw\\openclaw.mjs models auth login --provider openai --method oauth --set-default',
-].join('; ');
+const OPENAI_OAUTH_FALLBACK_MS = '120000';
+
+function psQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function normalizeOpenAiProxy(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+function openAiProxyEnv(proxy: string): Record<string, string> {
+  if (!proxy) return {};
+  return {
+    OPENCLAW_OAUTH_PROXY: proxy,
+    HTTPS_PROXY: proxy,
+    HTTP_PROXY: proxy,
+    ALL_PROXY: proxy,
+    https_proxy: proxy,
+    http_proxy: proxy,
+    all_proxy: proxy,
+  };
+}
+
+function withOpenAiOAuthEnv<T extends object>(options: T, proxy: string): T & { env: Record<string, string> } {
+  const existingEnv = 'env' in options && options.env && typeof options.env === 'object'
+    ? options.env as Record<string, string>
+    : {};
+  return {
+    ...options,
+    env: {
+      ...existingEnv,
+      OPENCLAW_OAUTH_MANUAL_FALLBACK_MS: OPENAI_OAUTH_FALLBACK_MS,
+      ...openAiProxyEnv(proxy),
+    },
+  };
+}
+
+function buildOpenClawManualCommand(proxyValue: string, commandArgs: string): string {
+  const proxy = normalizeOpenAiProxy(proxyValue);
+  const lines = [
+    "$env:OPENCLAW_HOME=(Join-Path $PWD 'data')",
+    "$env:OPENCLAW_STATE_DIR=(Join-Path $PWD 'data\\.openclaw')",
+    "$env:OPENCLAW_CONFIG_PATH=(Join-Path $env:OPENCLAW_STATE_DIR 'openclaw.json')",
+    '$env:OPENCLAW_CONFIG=$env:OPENCLAW_CONFIG_PATH',
+    "$env:OPENCLAW_GATEWAY_PORT='18790'",
+    "$env:NO_COLOR='1'",
+    `$env:OPENCLAW_OAUTH_MANUAL_FALLBACK_MS=${psQuote(OPENAI_OAUTH_FALLBACK_MS)}`,
+    "$env:Path=(Join-Path $PWD 'node')+';'+(Join-Path $PWD 'node_modules\\.bin')+';'+$env:Path",
+  ];
+
+  Object.entries(openAiProxyEnv(proxy)).forEach(([key, value]) => {
+    lines.push(`$env:${key}=${psQuote(value)}`);
+  });
+
+  lines.push(`.\\node\\node.exe .\\node_modules\\openclaw\\openclaw.mjs ${commandArgs}`);
+  return lines.join('; ');
+}
+
+function buildOpenAiCodexManualLoginCommand(proxyValue: string): string {
+  return buildOpenClawManualCommand(proxyValue, 'models auth login --provider openai --method oauth --set-default');
+}
+
+function buildOpenClawOnboardManualCommand(proxyValue: string): string {
+  return buildOpenClawManualCommand(proxyValue, 'onboard');
+}
 
 export function SettingsPage() {
   const storeSettings = usePreviewStore((state) => state.settings);
   const updateSettings = usePreviewStore((state) => state.updateSettings);
   const pushToast = usePreviewStore((state) => state.pushToast);
+  const openAiProxy = normalizeOpenAiProxy(storeSettings.openaiProxy || '');
+  const openAiManualLoginCommand = React.useMemo(
+    () => buildOpenAiCodexManualLoginCommand(storeSettings.openaiProxy || ''),
+    [storeSettings.openaiProxy],
+  );
+  const onboardManualCommand = React.useMemo(
+    () => buildOpenClawOnboardManualCommand(storeSettings.openaiProxy || ''),
+    [storeSettings.openaiProxy],
+  );
   const { data, loading, error, refresh } = useAsync(() => loadSettingsSnapshot(storeSettings), [storeSettings]);
   const [authProfiles, setAuthProfiles] = React.useState<any>({});
   const [imageConfig, setImageConfig] = React.useState<any>({});
@@ -55,6 +121,7 @@ export function SettingsPage() {
   const [gatewayForm, setGatewayForm] = React.useState<GatewayForm>({ baseUrl: '', apiKey: '', model: 'gpt-4o' });
   const [imageForm, setImageForm] = React.useState<ImageForm>({ baseUrl: '', apiKey: '', model: 'gpt-image-2' });
   const [videoForm, setVideoForm] = React.useState<VideoForm>({ providerId: 'agnes', apiBase: 'https://apihub.agnes-ai.com/v1', apiKey: '', model: 'agnes-video-v2.0' });
+  const [onboardRunning, setOnboardRunning] = React.useState(false);
   const [codexLoginRunning, setCodexLoginRunning] = React.useState(false);
   const [jsonDrafts, setJsonDrafts] = React.useState({
     authProfiles: '{}',
@@ -122,13 +189,48 @@ export function SettingsPage() {
     loadConfigs();
   }, [loadConfigs]);
 
+  const handleOpenClawOnboard = React.useCallback(async () => {
+    if (onboardRunning) return;
+    setOnboardRunning(true);
+    try {
+      const cwd = await resolvePortableBasePath(storeSettings);
+      const args = ['scripts/openclaw-auth-terminal.mjs', 'onboard'];
+      const options = withOpenAiOAuthEnv(makeCommandOptions(cwd), openAiProxy);
+      let result;
+
+      try {
+        result = await Command.create('openclaw-onboard-terminal', args, options).execute();
+      } catch {
+        result = await Command.create('openclaw-onboard-terminal-node-exe', args, options).execute();
+      }
+
+      if (result.code === 0) {
+        pushToast({
+          tone: 'ok',
+          title: 'OpenClaw 引导终端已打开',
+          detail: 'PowerShell 会自动运行 openclaw onboard，你可以在终端里完整配置 OpenClaw。',
+        });
+      } else {
+        pushToast({
+          tone: 'danger',
+          title: 'OpenClaw 引导终端启动失败',
+          detail: commandResultDetail(result),
+        });
+      }
+    } catch (err) {
+      pushToast({ tone: 'danger', title: 'OpenClaw 引导终端启动失败', detail: String(err) });
+    } finally {
+      setOnboardRunning(false);
+    }
+  }, [onboardRunning, openAiProxy, pushToast, storeSettings]);
+
   const handleOpenAiCodexLogin = React.useCallback(async () => {
     if (codexLoginRunning) return;
     setCodexLoginRunning(true);
     try {
       const cwd = await resolvePortableBasePath(storeSettings);
       const args = ['scripts/openclaw-auth-terminal.mjs', 'openai-browser'];
-      const options = makeCommandOptions(cwd);
+      const options = withOpenAiOAuthEnv(makeCommandOptions(cwd), openAiProxy);
       let result;
 
       try {
@@ -155,11 +257,11 @@ export function SettingsPage() {
     } finally {
       setCodexLoginRunning(false);
     }
-  }, [codexLoginRunning, pushToast, storeSettings]);
+  }, [codexLoginRunning, openAiProxy, pushToast, storeSettings]);
 
   const handleCopyOpenAiCodexCommand = React.useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(OPENAI_CODEX_MANUAL_LOGIN_COMMAND);
+      await navigator.clipboard.writeText(openAiManualLoginCommand);
       pushToast({
         tone: 'ok',
         title: '登录命令已复制',
@@ -168,7 +270,7 @@ export function SettingsPage() {
     } catch (err) {
       pushToast({ tone: 'danger', title: '复制失败', detail: String(err) });
     }
-  }, [pushToast]);
+  }, [openAiManualLoginCommand, pushToast]);
 
   const handleSaveConfigs = async () => {
     const nextAuth = withPrimaryProvider(authProfiles, gatewayForm);
@@ -278,11 +380,28 @@ export function SettingsPage() {
           />
           <div className="settings-card-grid">
             <section className="settings-card">
-              <div className="settings-card-title">OpenAI Codex 账号</div>
-              <p className="settings-card-copy">点击后会打开 PowerShell 登录窗口，OpenClaw 会自动弹出 OpenAI/ChatGPT 网页授权。这个窗口需要保留到授权写入完成。</p>
+              <div className="settings-card-title">OpenClaw 引导终端</div>
+              <p className="settings-card-copy">点击后会打开 PowerShell 终端并自动运行 openclaw onboard。模型、OAuth、Provider 和运行时配置都可以在原生 OpenClaw 引导流程里完成。</p>
+              <Field label="OpenAI OAuth 代理" hint="用于 auth.openai.com 登录；留空则继承系统代理环境。">
+                <Input
+                  value={storeSettings.openaiProxy || ''}
+                  onChange={(event) => updateSettings({ openaiProxy: event.target.value })}
+                  onBlur={(event) => updateSettings({ openaiProxy: normalizeOpenAiProxy(event.target.value) })}
+                  placeholder="http://127.0.0.1:7890"
+                />
+              </Field>
               <div className="settings-card-actions">
                 <Button
                   variant="primary"
+                  icon={Terminal}
+                  onClick={handleOpenClawOnboard}
+                  disabled={onboardRunning}
+                  className="settings-card-action"
+                >
+                  {onboardRunning ? '正在打开...' : '运行 openclaw onboard'}
+                </Button>
+                <Button
+                  variant="secondary"
                   icon={ExternalLink}
                   onClick={handleOpenAiCodexLogin}
                   disabled={codexLoginRunning}
@@ -296,12 +415,16 @@ export function SettingsPage() {
                   onClick={handleCopyOpenAiCodexCommand}
                   className="settings-card-action"
                 >
-                  复制备用命令
+                  复制 OpenAI 命令
                 </Button>
               </div>
               <div className="settings-login-command">
-                <span>PowerShell 备用命令</span>
-                <code>{OPENAI_CODEX_MANUAL_LOGIN_COMMAND}</code>
+                <span>onboard 备用命令</span>
+                <code>{onboardManualCommand}</code>
+              </div>
+              <div className="settings-login-command">
+                <span>OpenAI 登录备用命令</span>
+                <code>{openAiManualLoginCommand}</code>
               </div>
               <div className="settings-card-note">如果没有弹出终端：进入 OpenClaw.exe 同级的 OpenClawFiles 目录，打开 PowerShell，粘贴备用命令。授权完成后重启核心服务让模型登录生效。</div>
             </section>

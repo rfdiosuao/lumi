@@ -51,7 +51,7 @@ The Android phone Agent currently supports:
 
 - connection status and version checks;
 - screenshots and screen tree inspection;
-- device profile initialization, including model, memory, storage, installed apps, current UI, and preferred browser;
+- device profile initialization, including model, RAM, storage, installed apps, current UI, and preferred browser;
 - device profile vision hints for low-node, image-heavy, or game-like screens;
 - signed game/vision mode frame capture through `npm run phone:vision`, including optional grid overlay and image-to-screen coordinate mapping;
 - productized game/canvas loop through `npm run phone:game`: APKClaw Agent probe, signed vision frame, OpenClaw visual plan, launcher safety guard, APKClaw Agent guided execution, and after-frame verification;

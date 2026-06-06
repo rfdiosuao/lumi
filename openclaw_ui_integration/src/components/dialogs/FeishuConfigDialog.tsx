@@ -185,8 +185,8 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
 
       const config = (configResp.data as any) || {};
       const savedChannel = getSavedChannelConfig(config, channel);
-      if (savedChannel?.appId || savedChannel?.robotId) {
-        setIdValue(String(savedChannel.appId || savedChannel.robotId));
+      if (savedChannel?.appId || savedChannel?.robotId || savedChannel?.clientId) {
+        setIdValue(String(savedChannel.appId || savedChannel.robotId || savedChannel.clientId));
       }
 
       packageInstalled = packageResponses.some((resp) => isInstalledPackage(resp.data, channel.packageName));
@@ -295,7 +295,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
 
         childRef.current = child;
         pushCommandLog(`[launcher] ${step.label}已启动，PID ${child.pid}\n`);
-        if (channel.key === 'weixin' || channel.key === 'feishu') {
+        if (channel.key === 'weixin' || channel.key === 'feishu' || channel.key === 'dingtalk') {
           pushCommandLog('[launcher] 如果右侧出现二维码或网页登录链接，请直接扫码/打开链接完成绑定。\n');
         }
       };
@@ -448,7 +448,7 @@ const BotConfigDialog: React.FC<{ channel: BotChannel; onClose: () => void }> = 
             <div className="rounded-xl border border-border bg-surface-alt/70 p-4">
               <p className="text-sm font-semibold text-text">扫码绑定</p>
               <p className="mt-1 text-xs leading-5 text-text-muted">
-                微信机器人不支持输入 ID 和 Key 绑定。点击安装后，请在右侧命令行输出区扫描二维码，或按输出提示打开绑定链接。
+                {channel.title}通过命令行扫码授权完成绑定。点击安装后，请在右侧输出区扫描二维码，或按输出提示打开绑定链接。
               </p>
               <div className="mt-4 whitespace-pre-wrap rounded-lg border border-border bg-terminal-bg px-3 py-2 font-mono text-xs leading-5 text-terminal-text">
                 {commandSummary}
@@ -474,4 +474,8 @@ export const FeishuConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose 
 
 export const WeixinConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
   <BotConfigDialog channel={CHANNELS.weixin} onClose={onClose} />
+);
+
+export const DingtalkConfigDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
+  <BotConfigDialog channel={CHANNELS.dingtalk} onClose={onClose} />
 );

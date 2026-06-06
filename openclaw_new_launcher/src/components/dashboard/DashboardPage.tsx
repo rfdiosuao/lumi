@@ -191,12 +191,13 @@ export const DashboardPage: React.FC = () => {
     { key: 'storyboard', label: '广告视频', desc: '分镜工作台', icon: 'AD', featured: true },
     { key: 'image', label: 'AI 生图', desc: '创作图片', icon: 'IMG', featured: true },
     { key: 'video', label: 'AI 视频', desc: '生成视频', icon: 'VID', featured: true },
+    { key: 'publish', label: '平台发布', desc: '手机发帖/发视频', icon: 'PUB', featured: true },
     { key: 'skills', label: 'Skills', desc: '扩展中心', icon: 'SK' },
     { key: 'license', label: '授权码', desc: '激活管理', icon: 'LIC' },
   ];
 
   const handleQuickAction = (key: string) => {
-    if (key === 'storyboard' || key === 'image' || key === 'video') {
+    if (key === 'storyboard' || key === 'image' || key === 'video' || key === 'phone' || key === 'publish' || key === 'desktop') {
       if (!isAuthorized) {
         showToast('请先完成授权', 'info');
         setCurrentPage('license');

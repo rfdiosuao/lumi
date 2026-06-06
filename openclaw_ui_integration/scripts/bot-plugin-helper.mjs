@@ -44,6 +44,12 @@ const channels = {
     packageName: '@tencent-weixin/openclaw-weixin',
     packageDir: packageRoot('@tencent-weixin', 'openclaw-weixin'),
   },
+  dingtalk: {
+    title: '钉钉机器人',
+    pluginId: 'dingtalk-connector',
+    packageName: '@dingtalk-real-ai/dingtalk-connector',
+    packageDir: packageRoot('@dingtalk-real-ai', 'dingtalk-connector'),
+  },
 };
 
 function log(message = '') {
@@ -158,11 +164,15 @@ function readChannelConfig(channelKey, channel) {
     ? loadPaths.some((item) => String(item).toLowerCase().includes(channel.pluginId.toLowerCase()))
     : false;
 
+  const defaultAccount = saved?.defaultAccount && saved?.accounts?.[saved.defaultAccount]
+    ? saved.accounts[saved.defaultAccount]
+    : null;
+
   return {
     packageInstalled: packageData?.name === channel.packageName,
     extensionInstalled: extensionPackageData?.name === channel.packageName,
     configured: Boolean(entries?.[channel.pluginId]?.enabled || configuredByPath || saved?.enabled),
-    savedId: saved?.appId || saved?.robotId || '',
+    savedId: saved?.appId || saved?.robotId || saved?.clientId || defaultAccount?.clientId || '',
     paths: {
       packageJsonPath,
       extensionPath,
@@ -217,6 +227,14 @@ function openclawEnv() {
     OPENCLAW_HOME: dataDir,
     OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT || '18790',
     NO_COLOR: '1',
+  };
+}
+
+function portableConnectorEnv() {
+  return {
+    ...openclawEnv(),
+    HOME: dataDir,
+    USERPROFILE: dataDir,
   };
 }
 
@@ -275,6 +293,52 @@ function runOpenClaw(args, options = {}) {
       }
       if (code !== 0) {
         finish(() => reject(new Error(`OpenClaw 命令退出码：${code}`)));
+        return;
+      }
+      finish(resolve);
+    });
+  });
+}
+
+function runDingtalkConnector(args, options = {}) {
+  const channel = channels.dingtalk;
+  const binPath = path.join(channel.packageDir, 'bin', 'dingtalk-connector.js');
+  if (!fs.existsSync(binPath)) {
+    fail(`找不到钉钉连接器入口：${binPath}`);
+  }
+
+  const timeoutMs = Number(options.timeoutMs || 0);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const child = spawn(nodeExe, [binPath, ...args], {
+      cwd: channel.packageDir,
+      env: portableConnectorEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback();
+    };
+
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      child.kill();
+      finish(() => reject(new Error(`钉钉连接器命令超时：${args.join(' ')}`)));
+    }, timeoutMs) : null;
+
+    child.stdout.on('data', (chunk) => process.stdout.write(chunk));
+    child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+    child.on('error', (error) => finish(() => reject(error)));
+    child.on('close', (code, signal) => {
+      if (signal) {
+        finish(() => reject(new Error(`钉钉连接器命令被终止：${signal}`)));
+        return;
+      }
+      if (code !== 0) {
+        finish(() => reject(new Error(`钉钉连接器命令退出码：${code}`)));
         return;
       }
       finish(resolve);
@@ -369,6 +433,14 @@ async function loginWeixin() {
   }
 
   throw new Error(waitResult.message || '微信扫码绑定未完成');
+}
+
+async function loginDingtalk() {
+  await install('dingtalk');
+  log('[launcher] 正在启动钉钉官方 OpenClaw 连接器，请使用钉钉扫描二维码完成授权。');
+  log('[launcher] 已使用便携 HOME/USERPROFILE，授权配置会写入启动器 data/.openclaw/openclaw.json。');
+  await runDingtalkConnector(['install', '--local', '--skip-dws'], { timeoutMs: 15 * 60_000 });
+  log('[launcher] 钉钉扫码授权流程已结束。请重启核心服务或执行 openclaw gateway restart 后生效。');
 }
 
 async function printQrCode(url, options = {}) {
@@ -509,8 +581,10 @@ try {
     await loginFeishu();
   } else if (command === 'login-weixin') {
     await loginWeixin();
+  } else if (command === 'login-dingtalk') {
+    await loginDingtalk();
   } else {
-    fail('用法：node scripts/bot-plugin-helper.mjs check|install feishu|weixin 或 login-feishu 或 login-weixin');
+    fail('用法：node scripts/bot-plugin-helper.mjs check|install feishu|weixin|dingtalk 或 login-feishu 或 login-weixin 或 login-dingtalk');
   }
 } catch (error) {
   fail(error?.message || String(error));

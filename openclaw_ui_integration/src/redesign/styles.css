@@ -1832,6 +1832,51 @@ a {
   color: var(--text);
 }
 
+.settings-card-copy,
+.settings-card-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.settings-card-note {
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.settings-card-action {
+  align-self: flex-start;
+}
+
+.settings-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.settings-login-command {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(216, 189, 130, 0.16);
+  background: rgba(2, 6, 12, 0.28);
+}
+
+.settings-login-command span {
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.settings-login-command code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .integration-nav-panel {
   align-self: start;
 }

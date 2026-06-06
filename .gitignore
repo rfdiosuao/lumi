@@ -43,6 +43,70 @@ license_server/license.db
 release/
 *.zip
 
+# Local scratch / downloaded runtimes
+/scratch/
+/electron*.zip
+/electron-extract*/
+/tmp_license_admin_*/
+/austart-electron-fix/
+/dev-env-profile/
+/lumiu-official-site/
+/lumiu-partner-film/
+/sightflow-desktop-agent/
+/austart-electron-fix.skill
+/dev-env-profile.skill
+
+# Desktop control source is tracked; keep generated payload out.
+/sightflow-desktop-agent-main/**/node_modules/
+/sightflow-desktop-agent-main/**/dist/
+/sightflow-desktop-agent-main/**/out/
+/sightflow-desktop-agent-main/**/*.tsbuildinfo
+/sightflow-desktop-agent-main/**/*.bak-*
+
+# Local Electron/Luminode repair probes
+/check_electron.ps1
+/copy_electron*
+/copy_utils.js
+/cp_ps1.ps1
+/create_electron_*.js
+/debug_electron_start.ps1
+/dl_electron*
+/download_electron*
+/find_node*.ps1
+/find_python.ps1
+/fix_electron*.ps1
+/fix_path_txt*.js
+/init_skill_backup.py
+/install_e*
+/install_missing_deps.js
+/launch_electron*.ps1
+/launch_luminode_final.ps1
+/link_electron_toolkit.js
+/list_d.ps1
+/manual_init_skill.py
+/npm_install*.ps1
+/package_skill_simple.py
+/pack_electron.bat
+/run_copy.ps1
+/shortpath.ps1
+/start_luminode*.ps1
+/test_electron*.ps1
+/test_luminode_final.ps1
+/test_require_utils.js
+/test_utils_detailed.js
+/tmp_pack*.js
+
+# Local logs / runtime state
+*.log
+*.bak
+/license_server/*.bak-*
+/license_server.zip
+/openclaw_new_launcher/docs/*.bak-*
+/openclaw_new_launcher/data/logs/
+/openclaw_new_launcher/data/phone-frames/
+/openclaw_new_launcher/data/phone-videos/
+/openclaw_new_launcher/releases/
+
 # IDE
 .vscode/
 .idea/
@@ -55,6 +119,9 @@ release/
 !openclaw_new_launcher/src/assets/*.png
 !openclaw_new_launcher/data/themes/**/*.png
 !openclaw_new_launcher/src-tauri/icons/**/*.png
+!sightflow-desktop-agent-main/**/build/
+!sightflow-desktop-agent-main/**/build/**
+!sightflow-desktop-agent-main/**/*.png
 
 # OS
 .DS_Store

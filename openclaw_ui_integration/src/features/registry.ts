@@ -2,7 +2,7 @@ import type { NavItem } from '../types/theme';
 
 export type FeatureAction =
   | { type: 'page' }
-  | { type: 'dialog'; dialog: 'api' | 'feishu' | 'weixin' }
+  | { type: 'dialog'; dialog: 'api' | 'feishu' | 'weixin' | 'dingtalk' }
   | { type: 'external'; url: string }
   | { type: 'command'; command: 'update' };
 
@@ -31,6 +31,7 @@ export const FEATURE_DEFINITIONS: FeatureDefinition[] = [
   { key: 'api', label: 'API 配置', desc: '设置模型密钥', icon: 'KEY', group: '配置', action: { type: 'dialog', dialog: 'api' } },
   { key: 'feishu', label: '飞书机器人', desc: '绑定消息通道', icon: 'BOT', group: '配置', action: { type: 'dialog', dialog: 'feishu' } },
   { key: 'weixin', label: '微信机器人', desc: '扫码绑定微信', icon: 'WX', group: '配置', action: { type: 'dialog', dialog: 'weixin' } },
+  { key: 'dingtalk', label: '钉钉机器人', desc: '扫码绑定钉钉', icon: 'DD', group: '配置', action: { type: 'dialog', dialog: 'dingtalk' } },
   { key: 'skills', label: 'Skills', desc: '安装/启用能力模块', icon: 'SK', group: '扩展', action: { type: 'page' } },
   { key: 'web', label: '网页界面', desc: '打开本地控制台', icon: 'WEB', group: '维护', action: { type: 'external', url: 'http://127.0.0.1:18790' } },
   { key: 'diagnostics', label: '环境诊断', desc: '检查/修复启动环境', icon: 'FIX', group: '维护', accent: true, action: { type: 'page' } },

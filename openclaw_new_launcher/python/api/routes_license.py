@@ -24,6 +24,12 @@ def register_license_routes(app, ctx) -> None:
             "member": member,
         })
 
+    @app.get("/api/license/client-config")
+    async def license_client_config(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(ctx.get_license_mgr().client_config())
+
     @app.post("/api/license/authorized")
     async def license_authorized(request: Request):
         if error := ctx.auth_error(request):

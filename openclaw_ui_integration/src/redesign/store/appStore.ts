@@ -7,6 +7,7 @@ export interface PreviewSettings {
   bridgeBaseUrl: string;
   bridgeToken: string;
   proxyTarget: string;
+  openaiProxy: string;
   phoneBaseUrl: string;
   phoneToken: string;
 }
@@ -31,12 +32,20 @@ const DEFAULT_SETTINGS: PreviewSettings = {
   bridgeBaseUrl: '',
   bridgeToken: '',
   proxyTarget: '',
+  openaiProxy: '',
   phoneBaseUrl: '',
   phoneToken: '',
 };
 
+const TOAST_DEDUPE_WINDOW_MS = 3000;
+
 function safeId() {
   return `toast_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function toastCreatedAt(id: string): number {
+  const value = Number(id.split('_')[1]);
+  return Number.isFinite(value) ? value : 0;
 }
 
 export const usePreviewStore = create<AppState>()(
@@ -52,9 +61,18 @@ export const usePreviewStore = create<AppState>()(
       setSelectedPhoneId: (selectedPhoneId) => set({ selectedPhoneId }),
       updateSettings: (patch) => set((state) => ({ settings: { ...state.settings, ...patch } })),
       pushToast: (toast) =>
-        set((state) => ({
-          toasts: [...state.toasts, { id: safeId(), ...toast }].slice(-5),
-        })),
+        set((state) => {
+          const now = Date.now();
+          const duplicate = state.toasts.some(
+            (item) =>
+              item.tone === toast.tone &&
+              item.title === toast.title &&
+              (item.detail || '') === (toast.detail || '') &&
+              now - toastCreatedAt(item.id) < TOAST_DEDUPE_WINDOW_MS,
+          );
+          if (duplicate) return state;
+          return { toasts: [...state.toasts, { id: safeId(), ...toast }].slice(-5) };
+        }),
       dismissToast: (id) =>
         set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) })),
       clearToasts: () => set({ toasts: [] }),

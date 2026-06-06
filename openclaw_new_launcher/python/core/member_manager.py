@@ -173,6 +173,22 @@ class MemberManager:
                 lease.get("gatewayBaseUrl") if isinstance(lease, dict) else "",
                 data.get("baseUrl"),
             ) or None,
+            "gatewayImageBaseUrl": self._pick_text(
+                data.get("gatewayImageBaseUrl"),
+                license_data.get("gatewayImageBaseUrl") if isinstance(license_data, dict) else "",
+                member.get("gatewayImageBaseUrl") if isinstance(member, dict) else "",
+                lease.get("gatewayImageBaseUrl") if isinstance(lease, dict) else "",
+                gateway.get("imageBaseUrl") if isinstance(gateway, dict) else "",
+                gateway.get("baseUrl") if isinstance(gateway, dict) else "",
+            ) or None,
+            "gatewayVideoBaseUrl": self._pick_text(
+                data.get("gatewayVideoBaseUrl"),
+                license_data.get("gatewayVideoBaseUrl") if isinstance(license_data, dict) else "",
+                member.get("gatewayVideoBaseUrl") if isinstance(member, dict) else "",
+                lease.get("gatewayVideoBaseUrl") if isinstance(lease, dict) else "",
+                gateway.get("videoBaseUrl") if isinstance(gateway, dict) else "",
+                gateway.get("baseUrl") if isinstance(gateway, dict) else "",
+            ) or None,
             "gatewayDefaultModel": self._pick_text(
                 data.get("gatewayDefaultModel"),
                 license_data.get("gatewayDefaultModel") if isinstance(license_data, dict) else "",
@@ -286,6 +302,8 @@ class MemberManager:
             return None
 
         gateway_base = self._pick_text(provider.get("gatewayBaseUrl"), provider.get("baseUrl"), provider.get("url"))
+        gateway_image_base = self._pick_text(provider.get("gatewayImageBaseUrl"), provider.get("imageBaseUrl"), provider.get("imageUrl"), gateway_base)
+        gateway_video_base = self._pick_text(provider.get("gatewayVideoBaseUrl"), provider.get("videoBaseUrl"), provider.get("videoUrl"), gateway_base)
         token = self._pick_text(provider.get("memberToken"), provider.get("apiKey"), provider.get("token"))
         if not gateway_base and not token:
             return None
@@ -305,6 +323,8 @@ class MemberManager:
                 "expiresAt": provider.get("expiresAt"),
                 "leaseExpiresAt": provider.get("leaseExpiresAt"),
                 "gatewayBaseUrl": gateway_base,
+                "gatewayImageBaseUrl": gateway_image_base,
+                "gatewayVideoBaseUrl": gateway_video_base,
                 "memberToken": token,
                 "gatewayImageAccessToken": self._pick_text(provider.get("gatewayImageAccessToken"), provider.get("gatewayImageToken")),
                 "gatewayVideoAccessToken": self._pick_text(provider.get("gatewayVideoAccessToken"), provider.get("gatewayVideoToken")),
@@ -317,6 +337,8 @@ class MemberManager:
                 "lease": provider.get("lease") if isinstance(provider.get("lease"), dict) else {},
                 "gateway": {
                     "baseUrl": gateway_base,
+                    "imageBaseUrl": gateway_image_base,
+                    "videoBaseUrl": gateway_video_base,
                     "accessToken": token,
                     "imageAccessToken": self._pick_text(provider.get("gatewayImageAccessToken"), provider.get("gatewayImageToken"), token),
                     "videoAccessToken": self._pick_text(provider.get("gatewayVideoAccessToken"), provider.get("gatewayVideoToken"), token),

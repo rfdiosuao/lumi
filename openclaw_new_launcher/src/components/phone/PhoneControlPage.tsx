@@ -6,11 +6,13 @@ import {
   buildAgentPromptWithDeviceProfile,
   buildPhoneInitializationReport,
   clearPhoneDeviceProfile,
+  hasRelayScreenshotConfig,
   getSelectedPhoneConfig,
   loadPhoneDeviceStore,
   loadPhoneDevices,
   loadPhoneDeviceProfile,
   phoneApi,
+  PhoneApiResult,
   PhoneAgentAsyncTask,
   PhoneAgentEvent,
   PhoneAgentTaskResult,
@@ -18,6 +20,8 @@ import {
   PhoneDeviceStore,
   PhoneDeviceProfileCache,
   PhoneInitializationReport,
+  PhoneScreenRecordFile,
+  PhoneScreenRecordStatus,
   PhoneScreenNode,
   PhoneScreenTree,
   PhoneScreenshot,
@@ -179,6 +183,14 @@ function errorMessage(error?: string): string {
       return '请先填写 APKClaw 地址';
     case 'missing_token':
       return '请先填写 Token';
+    case 'missing_relay_config':
+      return '请先填写 relay 配置';
+    case 'missing_relay_base_url':
+      return '请先填写 relay 根地址';
+    case 'missing_relay_channel_id':
+      return '请先填写 relay Channel ID';
+    case 'missing_relay_token':
+      return '请先填写 relay Token';
     case 'unauthorized':
       return 'Token 无效或未配置';
     case 'empty_screenshot':
@@ -187,12 +199,21 @@ function errorMessage(error?: string): string {
       return '手机端返回格式异常';
     case 'network_error':
       return '无法连接手机端';
+    case 'relay_timeout':
+      return 'relay 轮询超时';
+    case 'relay_packet_failed':
+      return 'relay 请求失败';
+    case 'relay_status_failed':
+      return 'relay 状态查询失败';
+    case 'relay_missing_packet_id':
+      return 'relay 返回缺少 packetId';
     default:
       if (error?.includes('A task is already running')) return '手机端已有任务在执行，请稍后再试';
       if (error?.includes('Task timeout')) return '手机端任务超时';
       if (error?.includes('System dialog blocked')) return '手机上有系统弹窗遮挡，请手动处理后重试';
       if (error?.includes('fetch') || error?.includes('ECONNREFUSED') || error?.includes('Failed to fetch')) return '无法连接手机端，请确认手机亮屏且 APKClaw 服务在线';
       if (error?.startsWith('http_')) return `手机端 HTTP ${error.replace('http_', '')}`;
+      if (error?.startsWith('relay_http_')) return `relay HTTP ${error.replace('relay_http_', '')}`;
       return error || '请求失败';
   }
 }
@@ -210,6 +231,34 @@ function snapshotFrom(screenshot: PhoneScreenshot | null, screenTree: PhoneScree
     capturedAt: screenshot.capturedAt,
     nodeCount: screenTree?.nodes.length,
   };
+}
+
+interface ScreenshotCaptureOptions {
+  relayOnly?: boolean;
+}
+
+async function capturePhoneScreenshot(
+  saved: PhoneConnectionConfig,
+  options: ScreenshotCaptureOptions = {}
+): Promise<PhoneApiResult<PhoneScreenshot>> {
+  const relayAvailable = hasRelayScreenshotConfig(saved);
+  if (options.relayOnly) {
+    if (!relayAvailable) {
+      return { ok: false, error: 'missing_relay_config' };
+    }
+    return phoneApi.relayScreenshot(saved);
+  }
+
+  const direct = await phoneApi.screenshot(saved);
+  if (direct.ok || !relayAvailable) {
+    return direct;
+  }
+
+  const relay = await phoneApi.relayScreenshot(saved);
+  if (relay.ok) {
+    return relay;
+  }
+  return relay.error ? relay : direct;
 }
 
 function formatTime(value: string): string {
@@ -250,6 +299,12 @@ function formatDuration(startedAt?: string, finishedAt?: string): string {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
+function formatDurationMs(value?: number): string {
+  if (!value || value <= 0) return '0s';
+  const seconds = Math.max(0, Math.floor(value / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 function formatBytes(value: unknown): string {
   const bytes = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(bytes) || bytes <= 0) return '-';
@@ -261,6 +316,25 @@ function formatBytes(value: unknown): string {
     unit += 1;
   }
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+}
+
+function screenRecordStateLabel(status?: PhoneScreenRecordStatus | null): string {
+  if (status?.recording) return '录制中';
+  if (status?.state === 'requesting_permission') return '等待授权';
+  if (status?.state === 'error') return '录屏异常';
+  return '待命';
+}
+
+function screenRecordStateTone(status?: PhoneScreenRecordStatus | null): string {
+  if (status?.recording) return 'text-status-success';
+  if (status?.state === 'requesting_permission') return 'text-accent';
+  if (status?.state === 'error') return 'text-status-danger';
+  return 'text-text';
+}
+
+function screenRecordFileTitle(file?: PhoneScreenRecordFile | null): string {
+  if (!file?.exists) return '';
+  return file.filename || file.id || 'screen-record.mp4';
 }
 
 function formatEventTime(event: PhoneAgentEvent): string {
@@ -351,8 +425,10 @@ export const PhoneControlPage: React.FC = () => {
   const [status, setStatus] = React.useState<PhoneStatus | null>(null);
   const [screenshot, setScreenshot] = React.useState<PhoneScreenshot | null>(null);
   const [screenTree, setScreenTree] = React.useState<PhoneScreenTree | null>(null);
+  const [screenRecordStatus, setScreenRecordStatus] = React.useState<PhoneScreenRecordStatus | null>(null);
+  const [screenRecordings, setScreenRecordings] = React.useState<PhoneScreenRecordFile[]>([]);
   const [naturalSize, setNaturalSize] = React.useState<{ width: number; height: number } | null>(null);
-  const [loading, setLoading] = React.useState<'connect' | 'screenshot' | 'tree' | 'action' | 'agent' | 'fleet' | 'cancel' | 'cursor' | 'profile' | 'acceptance' | null>(null);
+  const [loading, setLoading] = React.useState<'connect' | 'screenshot' | 'tree' | 'action' | 'agent' | 'fleet' | 'cancel' | 'cursor' | 'profile' | 'acceptance' | 'record' | null>(null);
   const [logs, setLogs] = React.useState<ActionLog[]>([]);
   const [traces, setTraces] = React.useState<ActionTrace[]>([]);
   const [deviceProfileCache, setDeviceProfileCache] = React.useState<PhoneDeviceProfileCache | null>(() => loadPhoneDeviceProfile(getSelectedPhoneConfig()));
@@ -367,10 +443,33 @@ export const PhoneControlPage: React.FC = () => {
   const [dragPickMode, setDragPickMode] = React.useState(false);
   const [dragDraft, setDragDraft] = React.useState<{ x: number; y: number } | null>(null);
   const imageRef = React.useRef<HTMLImageElement | null>(null);
+  const screenshotViewportRef = React.useRef<HTMLDivElement | null>(null);
+  const [screenshotViewportSize, setScreenshotViewportSize] = React.useState<{ width: number; height: number } | null>(null);
+  const [screenshotZoom, setScreenshotZoom] = React.useState(1);
   const setPhoneAgentSnapshot = useAppStore((state) => state.setPhoneAgentSnapshot);
   const deviceProfile = deviceProfileCache?.profile || null;
   const agentReadOnly = agentTaskMode === 'observe_only';
   const selectedDeviceId = deviceStore.selectedDeviceId || config.id || null;
+
+  React.useEffect(() => {
+    const node = screenshotViewportRef.current;
+    if (!node) return;
+
+    const updateViewportSize = () => {
+      setScreenshotViewportSize((current) => {
+        const next = { width: node.clientWidth, height: node.clientHeight };
+        if (current && current.width === next.width && current.height === next.height) return current;
+        return next;
+      });
+    };
+
+    updateViewportSize();
+    if (typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(() => updateViewportSize());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   React.useEffect(() => {
     const cache = loadPhoneDeviceProfile(config);
@@ -399,6 +498,9 @@ export const PhoneControlPage: React.FC = () => {
         name: selected.name || 'Android Phone',
         baseUrl: selected.baseUrl,
         token: selected.token,
+        relayBaseUrl: selected.relayBaseUrl || '',
+        relayChannelId: selected.relayChannelId || '',
+        relayToken: selected.relayToken || '',
         visualizeActions: selected.visualizeActions !== false,
         useDeviceProfileContext: selected.useDeviceProfileContext !== false,
         album: 'OpenClaw',
@@ -412,6 +514,9 @@ export const PhoneControlPage: React.FC = () => {
           name: device.name || 'Android Phone',
           baseUrl: device.baseUrl,
           token: device.token,
+          relayBaseUrl: device.relayBaseUrl || '',
+          relayChannelId: device.relayChannelId || '',
+          relayToken: device.relayToken || '',
           launcherId: device.launcherId,
           launcherSecret: device.launcherSecret,
           secureChannelPairedAt: device.secureChannelPairedAt,
@@ -464,6 +569,9 @@ export const PhoneControlPage: React.FC = () => {
       name: saved.name || 'Android Phone',
       baseUrl: saved.baseUrl,
       token: saved.token,
+      relayBaseUrl: saved.relayBaseUrl || '',
+      relayChannelId: saved.relayChannelId || '',
+      relayToken: saved.relayToken || '',
       visualizeActions: saved.visualizeActions !== false,
       useDeviceProfileContext: saved.useDeviceProfileContext !== false,
       album: 'OpenClaw',
@@ -495,6 +603,9 @@ export const PhoneControlPage: React.FC = () => {
       name: `Android Phone ${nextIndex}`,
       baseUrl: '',
       token: '',
+      relayBaseUrl: '',
+      relayChannelId: '',
+      relayToken: '',
       launcherId: undefined,
       launcherSecret: undefined,
       secureChannelPairedAt: undefined,
@@ -540,9 +651,17 @@ export const PhoneControlPage: React.FC = () => {
     [addLog]
   );
 
+  const refreshScreenRecordings = React.useCallback(async (saved: PhoneConnectionConfig) => {
+    const result = await phoneApi.listScreenRecordings(saved);
+    if (result.ok && result.data) {
+      setScreenRecordings(result.data.recordings.filter((file) => file.exists).slice(0, 5));
+    }
+    return result;
+  }, []);
+
   const refreshPhoneViewAfterAction = React.useCallback(
     async (saved: PhoneConnectionConfig): Promise<TraceSnapshot | undefined> => {
-      const shot = await phoneApi.screenshot(saved);
+      const shot = await capturePhoneScreenshot(saved);
       if (!shot.ok || !shot.data) {
         addLog(`动作后截图失败：${errorMessage(shot.error)}`, 'error');
         return undefined;
@@ -580,12 +699,16 @@ export const PhoneControlPage: React.FC = () => {
     setStatus(result.data);
     addLog(`连接成功：APKClaw ${result.data.version || 'unknown'}`, 'success');
     showToast('APKClaw 连接成功', 'success');
+    void phoneApi.screenRecordStatus(saved).then((recordResult) => {
+      if (recordResult.ok && recordResult.data) setScreenRecordStatus(recordResult.data);
+    });
+    void refreshScreenRecordings(saved);
   };
 
   const handleScreenshot = async () => {
     const saved = persistConfig();
     setLoading('screenshot');
-    const result = await phoneApi.screenshot(saved);
+    const result = await capturePhoneScreenshot(saved);
     setLoading(null);
     if (!result.ok || !result.data) {
       const message = errorMessage(result.error);
@@ -598,12 +721,118 @@ export const PhoneControlPage: React.FC = () => {
       setNaturalSize({ width: result.data.width, height: result.data.height });
     }
     addLog(`截图已刷新：${result.data.width || '?'} x ${result.data.height || '?'}`, 'success');
-    void refreshScreenTree(saved, false);
+    if (canDirectRequest) {
+      void refreshScreenTree(saved, false);
+    }
+  };
+
+  const handleRelayScreenshot = async () => {
+    const saved = persistConfig();
+    setLoading('screenshot');
+    const result = await capturePhoneScreenshot(saved, { relayOnly: true });
+    setLoading(null);
+    if (!result.ok || !result.data) {
+      const message = errorMessage(result.error);
+      addLog(`Relay 截图失败: ${message}`, 'error');
+      showToast(`Relay 截图失败：${message}`, 'error');
+      return;
+    }
+    setScreenshot(result.data);
+    if (result.data.width && result.data.height) {
+      setNaturalSize({ width: result.data.width, height: result.data.height });
+    }
+    addLog(`Relay 截图已刷新：${result.data.width || '?'} x ${result.data.height || '?'}`, 'success');
+    if (canDirectRequest) {
+      void refreshScreenTree(saved, false);
+    }
   };
 
   const handleScreenTree = async () => {
     const saved = persistConfig();
     await refreshScreenTree(saved, true);
+  };
+
+  const handleScreenRecordStatus = async () => {
+    const saved = persistConfig();
+    setLoading('record');
+    const [statusResult, listResult] = await Promise.all([
+      phoneApi.screenRecordStatus(saved),
+      phoneApi.listScreenRecordings(saved),
+    ]);
+    setLoading(null);
+
+    if (listResult.ok && listResult.data) {
+      setScreenRecordings(listResult.data.recordings.filter((file) => file.exists).slice(0, 5));
+    }
+
+    if (!statusResult.ok || !statusResult.data) {
+      const message = errorMessage(statusResult.error);
+      addLog(`录屏状态失败: ${message}`, 'error');
+      showToast(`录屏状态失败：${message}`, 'error');
+      return;
+    }
+
+    setScreenRecordStatus(statusResult.data);
+    addLog(`录屏状态：${screenRecordStateLabel(statusResult.data)}`, statusResult.data.state === 'error' ? 'error' : 'success');
+  };
+
+  const handleStartScreenRecord = async () => {
+    const saved = persistConfig();
+    const filename = `openclaw-record-${new Date().toISOString().replace(/[:.]/g, '-')}.mp4`;
+    setLoading('record');
+    const result = await phoneApi.startScreenRecord(saved, {
+      filename,
+      maxSeconds: 180,
+      fps: 30,
+      bitRate: 4_000_000,
+    });
+    await refreshScreenRecordings(saved);
+    setLoading(null);
+
+    if (!result.ok || !result.data) {
+      const message = errorMessage(result.error);
+      addLog(`启动录屏失败: ${message}`, 'error');
+      showToast(`启动录屏失败：${message}`, 'error');
+      return;
+    }
+
+    setScreenRecordStatus(result.data);
+    if (result.data.accepted === false) {
+      const message = result.data.reason || 'screen_record_not_accepted';
+      addLog(`启动录屏未接受: ${message}`, 'error');
+      showToast(`启动录屏未接受：${message}`, 'error');
+      return;
+    }
+
+    addLog('录屏请求已发送，等待手机端授权', 'success');
+    showToast(result.data.requiresUserConsent ? '请在手机上确认录屏授权' : '录屏已开始', 'success');
+  };
+
+  const handleStopScreenRecord = async () => {
+    const saved = persistConfig();
+    setLoading('record');
+    const result = await phoneApi.stopScreenRecord(saved);
+    await refreshScreenRecordings(saved);
+    setLoading(null);
+
+    if (!result.ok || !result.data) {
+      const message = errorMessage(result.error);
+      addLog(`停止录屏失败: ${message}`, 'error');
+      showToast(`停止录屏失败：${message}`, 'error');
+      return;
+    }
+
+    setScreenRecordStatus(result.data);
+    await refreshScreenRecordings(saved);
+    if (result.data.accepted === false) {
+      const message = result.data.reason || 'screen_record_not_running';
+      addLog(`停止录屏未执行: ${message}`, 'error');
+      showToast(`停止录屏未执行：${message}`, 'error');
+      return;
+    }
+
+    addLog('录屏停止请求已发送', 'success');
+    showToast('录屏停止请求已发送', 'success');
   };
 
   const handleCursorPreview = async () => {
@@ -630,7 +859,7 @@ export const PhoneControlPage: React.FC = () => {
     addLog(`AI 指针预览：${result.data.action} @ ${result.data.x},${result.data.y}`, 'success');
     showToast('AI 指针已显示在手机画面中', 'success');
     await new Promise((resolve) => window.setTimeout(resolve, 500));
-    const shot = await phoneApi.screenshot(saved);
+    const shot = await capturePhoneScreenshot(saved);
     if (shot.ok && shot.data) {
       setScreenshot(shot.data);
       if (shot.data.width && shot.data.height) {
@@ -648,7 +877,7 @@ export const PhoneControlPage: React.FC = () => {
       phoneApi.status(saved),
       phoneApi.deviceProfile(saved),
       phoneApi.screenTree(saved),
-      phoneApi.screenshot(saved),
+      capturePhoneScreenshot(saved),
     ]);
     setLoading(null);
     if (statusResult.ok && statusResult.data) {
@@ -713,7 +942,7 @@ export const PhoneControlPage: React.FC = () => {
       pass(!statusResult.data.taskRunning, '任务空闲');
     }
 
-    const shot = await phoneApi.screenshot(saved);
+    const shot = await capturePhoneScreenshot(saved);
     pass(Boolean(shot.ok && shot.data?.dataUrl), '截图接口');
     if (shot.ok && shot.data) {
       setScreenshot(shot.data);
@@ -1352,6 +1581,22 @@ export const PhoneControlPage: React.FC = () => {
     setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
   };
 
+  const clampScreenshotZoom = React.useCallback((value: number) => Math.min(4, Math.max(0.5, Math.round(value * 100) / 100)), []);
+  const screenshotFitScale = React.useMemo(() => {
+    if (!naturalSize || !screenshotViewportSize) return 1;
+    if (!naturalSize.width || !naturalSize.height || !screenshotViewportSize.width || !screenshotViewportSize.height) return 1;
+    return Math.min(screenshotViewportSize.width / naturalSize.width, screenshotViewportSize.height / naturalSize.height);
+  }, [naturalSize, screenshotViewportSize]);
+  const screenshotDisplayScale = screenshotFitScale * screenshotZoom;
+  const screenshotDisplaySize = React.useMemo(() => {
+    if (!naturalSize) return null;
+    return {
+      width: Math.max(1, Math.round(naturalSize.width * screenshotDisplayScale)),
+      height: Math.max(1, Math.round(naturalSize.height * screenshotDisplayScale)),
+    };
+  }, [naturalSize, screenshotDisplayScale]);
+  const screenshotZoomLabel = `${Math.round(screenshotZoom * 100)}%`;
+
   const handleImageClick = async (event: React.MouseEvent<HTMLImageElement>) => {
     if (!screenshot || loading) return;
     const img = imageRef.current;
@@ -1391,6 +1636,12 @@ export const PhoneControlPage: React.FC = () => {
     await performAction({ action: 'tap', x, y, label: '截图坐标', source: 'screenshot' });
   };
 
+  const handleScreenshotWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    setScreenshotZoom((current) => clampScreenshotZoom(current + (event.deltaY > 0 ? -0.12 : 0.12)));
+  };
+
   const handleNodeClick = async (node: PhoneScreenNode) => {
     if (loading || !node.enabled) return;
     const x = Math.round(node.bounds.centerX);
@@ -1405,7 +1656,33 @@ export const PhoneControlPage: React.FC = () => {
     await performAction({ action: 'long_press', x, y, durationMs: 750, label: nodeLabel(node), source: 'node', node });
   };
 
-  const canRequest = Boolean(config.baseUrl.trim() && config.token.trim());
+  const canDirectRequest = Boolean(config.baseUrl.trim() && config.token.trim());
+  const canRelayScreenshot = hasRelayScreenshotConfig(config);
+  const canScreenshot = canDirectRequest || canRelayScreenshot;
+  const screenRecordBusy = Boolean(screenRecordStatus?.recording || screenRecordStatus?.state === 'requesting_permission');
+  const latestScreenRecordFile = screenRecordStatus?.latest?.exists
+    ? screenRecordStatus.latest
+    : screenRecordings.find((file) => file.exists) || null;
+
+  React.useEffect(() => {
+    if (!canDirectRequest || !screenRecordBusy) return;
+    const timer = window.setInterval(() => {
+      void phoneApi.screenRecordStatus(config).then((result) => {
+        if (result.ok && result.data) setScreenRecordStatus(result.data);
+      });
+      void refreshScreenRecordings(config);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [
+    canDirectRequest,
+    config.baseUrl,
+    config.launcherId,
+    config.launcherSecret,
+    config.token,
+    refreshScreenRecordings,
+    screenRecordBusy,
+  ]);
+
   const treeStats = React.useMemo(() => {
     const nodes = screenTree?.nodes || [];
     return {
@@ -1558,10 +1835,10 @@ export const PhoneControlPage: React.FC = () => {
       <header className="shrink-0 border-b border-border/70 bg-surface px-8 py-6">
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-[11px] font-bold uppercase tracking-[0.42em] text-accent">LUMI PHONE AGENT</div>
+            <div className="text-[11px] font-bold uppercase tracking-[0.42em] text-accent">OPENCLAW PHONE AGENT</div>
             <h1 className="mt-2 text-[28px] font-black leading-tight text-text">手机 Agent 工作台</h1>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-text-muted">
-              Lumi 发起任务，APKClaw Agent 在手机上观察、规划、调用工具、验证结果，并把每一步回传给桌面端。
+              OpenClaw 发起任务，APKClaw Agent 在手机上观察、规划、调用工具、验证结果，并把每一步回传给桌面端。
             </p>
           </div>
           <div className="grid shrink-0 grid-cols-[auto_auto] gap-3">
@@ -1641,6 +1918,31 @@ export const PhoneControlPage: React.FC = () => {
                   placeholder="X-AGENT-PHONE-TOKEN"
                 />
               </div>
+              <div>
+                <FieldLabel text="Relay 根地址" />
+                <Input
+                  value={config.relayBaseUrl || ''}
+                  onChange={(event) => updateConfig({ relayBaseUrl: event.target.value })}
+                  placeholder="https://relay.example.com"
+                />
+              </div>
+              <div>
+                <FieldLabel text="Relay Channel ID" />
+                <Input
+                  value={config.relayChannelId || ''}
+                  onChange={(event) => updateConfig({ relayChannelId: event.target.value })}
+                  placeholder="publish-channel-01"
+                />
+              </div>
+              <div>
+                <FieldLabel text="Relay Token" />
+                <Input
+                  value={config.relayToken || ''}
+                  onChange={(event) => updateConfig({ relayToken: event.target.value })}
+                  type="password"
+                  placeholder="共享 relay token"
+                />
+              </div>
               <label className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-surface/35 px-3 py-2">
                 <span className="text-xs font-semibold text-text-muted">AI 指针</span>
                 <span className="flex items-center gap-2">
@@ -1656,25 +1958,95 @@ export const PhoneControlPage: React.FC = () => {
                 </span>
               </label>
               <div className="grid grid-cols-2 gap-2 pt-1">
-                <Button onClick={handleConnect} disabled={!canRequest || loading !== null} variant="primary">
+                <Button onClick={handleConnect} disabled={!canDirectRequest || loading !== null} variant="primary">
                   {loading === 'connect' ? '连接中...' : '连接测试'}
                 </Button>
-                <Button onClick={handleScreenshot} disabled={!canRequest || loading !== null} variant="quiet">
+                <Button onClick={handleScreenshot} disabled={!canScreenshot || loading !== null} variant="quiet">
                   {loading === 'screenshot' ? '截图中...' : '刷新截图'}
                 </Button>
               </div>
-              <Button onClick={handleScreenTree} disabled={!canRequest || loading !== null} variant="quiet" className="w-full">
+              <Button onClick={handleRelayScreenshot} disabled={!canRelayScreenshot || loading !== null} variant="quiet" className="w-full">
+                {loading === 'screenshot' ? 'Relay 截图中...' : 'Relay 截图'}
+              </Button>
+              <div className="rounded-xl border border-border/60 bg-surface/35 p-3">
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold uppercase tracking-[0.18em] text-text-subtle">Screen Record</div>
+                    <div className={`mt-1 text-sm font-black ${screenRecordStateTone(screenRecordStatus)}`}>
+                      {screenRecordStateLabel(screenRecordStatus)}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-[11px] font-bold text-text">{formatDurationMs(screenRecordStatus?.durationMs)}</div>
+                    <div className="mt-0.5 text-[10px] text-text-subtle">
+                      {screenRecordStatus?.width && screenRecordStatus?.height ? `${screenRecordStatus.width}x${screenRecordStatus.height}` : 'MP4'}
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <Button
+                    onClick={handleStartScreenRecord}
+                    disabled={!canDirectRequest || loading !== null || screenRecordBusy}
+                    variant="primary"
+                    className="px-2 text-xs"
+                  >
+                    {loading === 'record' ? '处理中' : '开始'}
+                  </Button>
+                  <Button
+                    onClick={handleStopScreenRecord}
+                    disabled={!canDirectRequest || loading !== null || !screenRecordStatus?.recording}
+                    variant="danger"
+                    className="px-2 text-xs"
+                  >
+                    停止
+                  </Button>
+                  <Button
+                    onClick={handleScreenRecordStatus}
+                    disabled={!canDirectRequest || loading !== null}
+                    variant="quiet"
+                    className="px-2 text-xs"
+                  >
+                    状态
+                  </Button>
+                </div>
+                {screenRecordStatus?.requiresUserConsent && (
+                  <div className="mt-2 rounded-lg border border-accent/25 bg-accent/10 px-2 py-1.5 text-xs font-semibold text-accent">
+                    手机端需要确认录屏授权。
+                  </div>
+                )}
+                {screenRecordStatus?.lastError && (
+                  <div className="mt-2 rounded-lg border border-status-danger/25 bg-status-danger/10 px-2 py-1.5 text-xs text-status-danger">
+                    {screenRecordStatus.lastError}
+                  </div>
+                )}
+                {latestScreenRecordFile?.exists && (
+                  <div className="mt-2 truncate text-xs text-text-subtle">
+                    最新：{screenRecordFileTitle(latestScreenRecordFile)} · {formatBytes(latestScreenRecordFile.sizeBytes)}
+                  </div>
+                )}
+                {screenRecordings.length > 1 && (
+                  <div className="mt-2 space-y-1">
+                    {screenRecordings.slice(0, 2).map((file) => (
+                      <div key={file.id || file.filename} className="flex items-center justify-between gap-2 text-[11px] text-text-subtle">
+                        <span className="truncate">{screenRecordFileTitle(file)}</span>
+                        <span className="shrink-0">{formatBytes(file.sizeBytes)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <Button onClick={handleScreenTree} disabled={!canDirectRequest || loading !== null} variant="quiet" className="w-full">
                 {loading === 'tree' ? '读取中...' : '刷新结构树'}
               </Button>
               <div className="grid grid-cols-2 gap-2 pt-1">
-                <Button onClick={handleCursorPreview} disabled={!canRequest || loading !== null} variant="quiet" className="px-2">
+                <Button onClick={handleCursorPreview} disabled={!canDirectRequest || loading !== null} variant="quiet" className="px-2">
                   {loading === 'cursor' ? '预览中...' : '预览AI指针'}
                 </Button>
-                <Button onClick={handleDeviceProfile} disabled={!canRequest || loading !== null} variant="quiet" className="px-2">
+                <Button onClick={handleDeviceProfile} disabled={!canDirectRequest || loading !== null} variant="quiet" className="px-2">
                   {loading === 'profile' ? '体检中...' : '初始化体检'}
                 </Button>
               </div>
-              <Button onClick={handleAcceptanceCheck} disabled={!canRequest || loading !== null} variant="primary" className="w-full">
+              <Button onClick={handleAcceptanceCheck} disabled={!canDirectRequest || loading !== null} variant="primary" className="w-full">
                 {loading === 'acceptance' ? '验收中...' : '一键验收'}
               </Button>
             </div>
@@ -1815,7 +2187,7 @@ export const PhoneControlPage: React.FC = () => {
                     <Button onClick={handleFillVisionTask} disabled={loading !== null} variant="quiet" className="px-3 py-1.5 text-[11px]">
                       填入视觉探针
                     </Button>
-                    <Button onClick={handleScreenshot} disabled={!canRequest || loading !== null} variant="quiet" className="px-3 py-1.5 text-[11px]">
+                    <Button onClick={handleScreenshot} disabled={!canScreenshot || loading !== null} variant="quiet" className="px-3 py-1.5 text-[11px]">
                       刷新截图
                     </Button>
                   </div>
@@ -1925,28 +2297,28 @@ export const PhoneControlPage: React.FC = () => {
               <div className="text-xs font-bold text-text">{actionScreenSize ? `${actionScreenSize.width}x${actionScreenSize.height}` : '—'}</div>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              <Button onClick={() => handleSwipe('up')} disabled={!canRequest || loading !== null} variant="quiet" className="col-start-2 px-2">
+              <Button onClick={() => handleSwipe('up')} disabled={!canDirectRequest || loading !== null} variant="quiet" className="col-start-2 px-2">
                 上滑
               </Button>
-              <Button onClick={() => handleSwipe('left')} disabled={!canRequest || loading !== null} variant="quiet" className="px-2">
+              <Button onClick={() => handleSwipe('left')} disabled={!canDirectRequest || loading !== null} variant="quiet" className="px-2">
                 左滑
               </Button>
-              <Button onClick={handleLongPressCenter} disabled={!canRequest || loading !== null} variant="quiet" className="px-2">
+              <Button onClick={handleLongPressCenter} disabled={!canDirectRequest || loading !== null} variant="quiet" className="px-2">
                 长按
               </Button>
-              <Button onClick={() => handleSwipe('right')} disabled={!canRequest || loading !== null} variant="quiet" className="px-2">
+              <Button onClick={() => handleSwipe('right')} disabled={!canDirectRequest || loading !== null} variant="quiet" className="px-2">
                 右滑
               </Button>
-              <Button onClick={handleDragCenterUp} disabled={!canRequest || loading !== null} variant="quiet" className="px-2">
+              <Button onClick={handleDragCenterUp} disabled={!canDirectRequest || loading !== null} variant="quiet" className="px-2">
                 拖拽
               </Button>
-              <Button onClick={() => handleSwipe('down')} disabled={!canRequest || loading !== null} variant="quiet" className="col-start-2 px-2">
+              <Button onClick={() => handleSwipe('down')} disabled={!canDirectRequest || loading !== null} variant="quiet" className="col-start-2 px-2">
                 下滑
               </Button>
             </div>
             <Button
               onClick={toggleDragPickMode}
-              disabled={!canRequest || loading !== null || !screenshot}
+              disabled={!canDirectRequest || loading !== null || !screenshot}
               variant={dragPickMode ? 'primary' : 'quiet'}
               className="mt-2 w-full px-3 py-2 text-xs"
             >
@@ -2114,10 +2486,10 @@ export const PhoneControlPage: React.FC = () => {
                       />
                     </label>
                   </div>
-                  <Button onClick={handleRunAgentTask} disabled={!canRequest || loading !== null || Boolean(status?.taskRunning)} variant="primary">
+                  <Button onClick={handleRunAgentTask} disabled={!canDirectRequest || loading !== null || Boolean(status?.taskRunning)} variant="primary">
                     {loading === 'agent' ? '执行中...' : '运行任务'}
                   </Button>
-                  <Button onClick={handleCancelAgentTask} disabled={!canRequest || (loading !== 'agent' && !status?.taskRunning)} variant="danger">
+                  <Button onClick={handleCancelAgentTask} disabled={!canDirectRequest || (loading !== 'agent' && !status?.taskRunning)} variant="danger">
                     {loading === 'cancel' ? '取消中...' : '停止'}
                   </Button>
                 </div>
@@ -2223,20 +2595,77 @@ export const PhoneControlPage: React.FC = () => {
             </div>
           </div>
           <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden bg-surface-deeper/70 xl:grid-cols-[minmax(0,1fr)_300px]">
-            <div className="flex min-h-0 items-center justify-center overflow-auto p-5">
-              {screenshot ? (
-                <img
-                  ref={imageRef}
-                  src={screenshot.dataUrl}
-                  alt="APKClaw screenshot"
-                  onLoad={handleImageLoad}
-                  onClick={handleImageClick}
-                  className={`max-h-full max-w-full rounded-[14px] border border-border/80 bg-black object-contain shadow-[0_24px_80px_rgba(0,0,0,0.38)] ${
-                    loading ? 'cursor-wait opacity-80' : 'cursor-crosshair'
-                  }`}
-                  draggable={false}
-                />
-              ) : (
+            <div
+              ref={screenshotViewportRef}
+              onWheel={handleScreenshotWheel}
+              className="flex min-h-0 flex-col overflow-auto p-5"
+            >
+              <div className="mb-3 flex w-full items-center justify-end gap-2">
+                <span className="text-xs font-semibold text-text-subtle">缩放</span>
+                <Button
+                  variant="quiet"
+                  type="button"
+                  onClick={() => setScreenshotZoom((current) => clampScreenshotZoom(current - 0.25))}
+                  disabled={!screenshot}
+                  className="h-7 px-2 text-[11px]"
+                >
+                  -
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setScreenshotZoom(1)}
+                  disabled={!screenshot}
+                  className="min-w-[54px] rounded-lg border border-border/60 bg-surface/55 px-2 py-1 text-[11px] font-bold text-text transition hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+                  title="重置到适配视图"
+                >
+                  {screenshotZoomLabel}
+                </button>
+                <Button
+                  variant="quiet"
+                  type="button"
+                  onClick={() => setScreenshotZoom((current) => clampScreenshotZoom(current + 0.25))}
+                  disabled={!screenshot}
+                  className="h-7 px-2 text-[11px]"
+                >
+                  +
+                </Button>
+              </div>
+              <div className="flex min-h-0 flex-1 items-center justify-center">
+                {screenshot ? (
+                  screenshotDisplaySize ? (
+                    <div
+                      className="shrink-0"
+                      style={{
+                        width: `${screenshotDisplaySize.width}px`,
+                        height: `${screenshotDisplaySize.height}px`,
+                      }}
+                    >
+                      <img
+                        ref={imageRef}
+                        src={screenshot.dataUrl}
+                        alt="APKClaw screenshot"
+                        onLoad={handleImageLoad}
+                        onClick={handleImageClick}
+                        className={`block h-full w-full rounded-[14px] border border-border/80 bg-black object-contain shadow-[0_24px_80px_rgba(0,0,0,0.38)] ${
+                          loading ? 'cursor-wait opacity-80' : 'cursor-crosshair'
+                        }`}
+                        draggable={false}
+                      />
+                    </div>
+                  ) : (
+                    <img
+                      ref={imageRef}
+                      src={screenshot.dataUrl}
+                      alt="APKClaw screenshot"
+                      onLoad={handleImageLoad}
+                      onClick={handleImageClick}
+                      className={`max-h-full max-w-full rounded-[14px] border border-border/80 bg-black object-contain shadow-[0_24px_80px_rgba(0,0,0,0.38)] ${
+                        loading ? 'cursor-wait opacity-80' : 'cursor-crosshair'
+                      }`}
+                      draggable={false}
+                    />
+                  )
+                ) : (
                 <div className="flex max-w-md flex-col items-center justify-center rounded-[18px] border border-dashed border-border/80 bg-surface-alt/25 px-10 py-12 text-center">
                   <div className="flex h-14 w-14 items-center justify-center rounded-[16px] border border-border-strong/60 bg-accent/[0.08] text-sm font-black text-accent">
                     PH
@@ -2247,6 +2676,7 @@ export const PhoneControlPage: React.FC = () => {
                   </p>
                 </div>
               )}
+            </div>
             </div>
             <aside className="hidden min-h-0 overflow-y-auto border-l border-border/70 bg-surface/45 p-4 xl:block">
               <div className="mb-3 text-xs font-bold uppercase tracking-[0.22em] text-text-subtle">可见节点</div>

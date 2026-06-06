@@ -1,6 +1,4 @@
 import React from 'react';
-import logoImg from '../../assets/logo.png';
-import { BrandLogo } from '../common';
 import { useTheme } from '../../hooks/useTheme';
 import { DEFAULT_NAV_ITEMS, normalizeNavItems } from '../../theme/default';
 import type { NavItem } from '../../types/theme';
@@ -75,9 +73,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onStart,
   onStop,
 }) => {
-  const { theme, navItems, themeMode, toggleTheme, logoUrl } = useTheme();
+  const { theme, navItems, themeMode, toggleTheme } = useTheme();
   const items = React.useMemo(() => normalizeNavItems(navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS), [navItems]);
-  const brandLogo = logoUrl || logoImg;
 
   const groups = React.useMemo(() => {
     const groupSet = new Set(items.map((item) => item.group));
@@ -88,14 +85,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="relative z-10 flex h-full w-[260px] shrink-0 flex-col border-r border-border/80 bg-app-sidebar">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.025),transparent_46%)]" />
 
-      <div className="relative flex shrink-0 items-center gap-3 px-5 pb-5 pt-6">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] border border-border-strong/60 bg-surface-alt/75 shadow-[0_0_22px_rgba(216,184,102,0.09)]">
-          <BrandLogo src={brandLogo} fallbackSrc={logoImg} alt="Lumi" className="h-7 w-7 rounded-lg object-contain" />
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-black tracking-wide text-text">{theme.brand.name}</div>
-          <div className="mt-0.5 truncate text-[11px] text-text-subtle">{theme.brand.subtitle}</div>
-        </div>
+      <div className="relative flex shrink-0 flex-col items-center px-5 pb-5 pt-6 text-center">
+        <div className="text-[11px] font-black uppercase tracking-[0.42em] text-text-subtle">Launcher</div>
+        <div className="mt-2 text-base font-black tracking-[0.14em] text-text">{theme.brand.name}</div>
+        <div className="mt-1 max-w-[16rem] text-[11px] text-text-subtle">{theme.brand.subtitle}</div>
       </div>
 
       <div className="relative shrink-0 px-4 pb-5">

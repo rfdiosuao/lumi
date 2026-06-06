@@ -4,6 +4,7 @@ param(
     [string]$OpenClawRuntimeVersion = "2026.6.1",
     [string]$SeedPortableDir = "",
     [string]$BrandProfile = "openclaw",
+    [string]$DesktopAgentSourceRoot = "",
     [string]$PhoneAgentVerifiedVersion = "",
     [int]$PhoneAgentVerifiedVersionCode = 0,
     [switch]$SkipBuild,
@@ -876,7 +877,11 @@ function Copy-WebView2Redist {
 function Copy-DesktopAgentSidecar {
     param([string]$PackageDir)
 
-    $sourceRoots = @(
+    $sourceRoots = @()
+    if (-not [string]::IsNullOrWhiteSpace($DesktopAgentSourceRoot)) {
+        $sourceRoots += $DesktopAgentSourceRoot
+    }
+    $sourceRoots += @(
         # sightflow-desktop-agent-main 是集成版:-main 更全的自动回复能力(多渠道/更可配置)
         # + 移植进来的 http-api-server/sidecar(路由与启动器 desktop_agent.py 的
         # ALLOWED_PROXY_PATHS 对应)。优先取它;sightflow-desktop-agent 为回退。
@@ -1095,6 +1100,146 @@ function Install-BundledBotPlugins {
     }
 }
 
+function Patch-OpenClawPortableRuntime {
+    param([string]$PackageDir)
+
+    $openclawRoot = Join-Path $PackageDir "node_modules\openclaw"
+    $distDir = Join-Path $openclawRoot "dist"
+    if (-not (Test-Path -LiteralPath $distDir)) {
+        throw "OpenClaw dist directory missing after install: $distDir"
+    }
+
+    $runtimeFiles = @(Get-ChildItem -LiteralPath $distDir -File -Filter "openai-chatgpt-oauth.runtime-*.js")
+    if ($runtimeFiles.Count -eq 0) {
+        throw "OpenAI Codex OAuth runtime file missing under $distDir"
+    }
+    foreach ($file in $runtimeFiles) {
+        $content = Get-Content -LiteralPath $file.FullName -Raw
+        $patched = $content.Replace(
+            "const localManualFallbackDelayMs = 15e3;",
+            "const localManualFallbackDelayMs = Number(process.env.OPENCLAW_OAUTH_MANUAL_FALLBACK_MS || 120000);"
+        ).Replace(
+            "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry ``openclaw models auth login --provider openai``.",
+            "If you normally use a proxy, set the OpenAI OAuth proxy in OpenClaw Settings or verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process, then retry ``openclaw models auth login --provider openai``."
+        )
+        if ($patched -eq $content) {
+            throw "OpenAI Codex OAuth runtime patch did not match expected content: $($file.FullName)"
+        }
+        Set-Content -LiteralPath $file.FullName -Value $patched -Encoding UTF8
+    }
+
+    $flowFiles = @(Get-ChildItem -LiteralPath $distDir -File -Filter "openai-chatgpt-oauth-flow.runtime-*.js")
+    if ($flowFiles.Count -eq 0) {
+        throw "OpenAI Codex OAuth flow runtime file missing under $distDir"
+    }
+    foreach ($file in $flowFiles) {
+        $content = Get-Content -LiteralPath $file.FullName -Raw
+        $patched = $content.Replace(
+            "const MANUAL_PROMPT_FALLBACK_MS = 15e3;",
+            "const MANUAL_PROMPT_FALLBACK_MS = Number(process.env.OPENCLAW_OAUTH_MANUAL_FALLBACK_MS || 120000);"
+        )
+        if ($patched -eq $content) {
+            throw "OpenAI Codex OAuth flow patch did not match expected content: $($file.FullName)"
+        }
+        Set-Content -LiteralPath $file.FullName -Value $patched -Encoding UTF8
+    }
+
+    Ensure-OpenClawWorkspaceTemplates -OpenClawRoot $openclawRoot
+
+    Write-Host "Patched OpenClaw OAuth runtime fallback to OPENCLAW_OAUTH_MANUAL_FALLBACK_MS (default 120000ms)." -ForegroundColor DarkGray
+}
+
+function Get-OpenClawTemplateRawContent {
+    param(
+        [string]$RelativePath,
+        [string]$TemplateName
+    )
+
+    $versionTag = "v$OpenClawRuntimeVersion"
+    $urls = @(
+        "https://raw.githubusercontent.com/openclaw/openclaw/$versionTag/$RelativePath/$TemplateName",
+        "https://raw.githubusercontent.com/openclaw/openclaw/main/$RelativePath/$TemplateName"
+    )
+
+    foreach ($url in $urls) {
+        try {
+            $response = Invoke-WebRequest -Uri $url -Headers @{ "User-Agent" = "OpenClaw-Portable-Packager" } -TimeoutSec 30 -UseBasicParsing
+            if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300 -and -not [string]::IsNullOrWhiteSpace([string]$response.Content)) {
+                return [string]$response.Content
+            }
+        } catch {
+            # Try the next source URL.
+        }
+    }
+
+    throw "Unable to fetch OpenClaw workspace template: $RelativePath/$TemplateName"
+}
+
+function Write-Utf8NoBomFile {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $parent = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
+function Ensure-OpenClawWorkspaceTemplates {
+    param([string]$OpenClawRoot)
+
+    $primaryTemplateDir = Join-Path $OpenClawRoot "src\agents\templates"
+    $docsTemplateNames = @(
+        "AGENTS.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "USER.md",
+        "IDENTITY.md",
+        "BOOTSTRAP.md",
+        "HEARTBEAT.md"
+    )
+    $primaryTemplateNamesFromDocs = @(
+        "AGENTS.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "USER.md",
+        "IDENTITY.md",
+        "BOOTSTRAP.md"
+    )
+
+    foreach ($templateName in $docsTemplateNames) {
+        $content = Get-OpenClawTemplateRawContent -RelativePath "docs/reference/templates" -TemplateName $templateName
+        if ($primaryTemplateNamesFromDocs -contains $templateName) {
+            Write-Utf8NoBomFile -Path (Join-Path $primaryTemplateDir $templateName) -Content $content
+        }
+    }
+
+    $heartbeatContent = Get-OpenClawTemplateRawContent -RelativePath "src/agents/templates" -TemplateName "HEARTBEAT.md"
+    Write-Utf8NoBomFile -Path (Join-Path $primaryTemplateDir "HEARTBEAT.md") -Content $heartbeatContent
+
+    $requiredPrimaryTemplates = @(
+        "AGENTS.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "USER.md",
+        "IDENTITY.md",
+        "BOOTSTRAP.md",
+        "HEARTBEAT.md"
+    )
+    foreach ($templateName in $requiredPrimaryTemplates) {
+        $path = Join-Path $primaryTemplateDir $templateName
+        if (-not (Test-Path -LiteralPath $path)) {
+            throw "OpenClaw agent template missing after repair: $path"
+        }
+    }
+
+    Write-Host "Verified OpenClaw workspace templates: $primaryTemplateDir" -ForegroundColor DarkGray
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = Assert-SourceVersionConsistency
 }
@@ -1216,6 +1361,7 @@ Invoke-Step "Create portable directory" {
     Copy-DesktopAgentSidecar -PackageDir $packageDir
 
     Install-BundledBotPlugins -PackageDir $packageDir
+    Patch-OpenClawPortableRuntime -PackageDir $packageDir
     Remove-OpenClawKnowledgeArtifacts -PackageDir $packageDir
     Remove-NodeCacheDirectories -PackageDir $packageDir
 

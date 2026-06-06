@@ -19,7 +19,7 @@ const BASE_FONTS: ThemeConfig['fonts'] = {
 export const DEFAULT_NAV_ITEMS: NavItem[] = DEFAULT_FEATURE_NAV_ITEMS;
 
 export const LIGHT_THEME: ThemeConfig = {
-  name: 'Lumi Porcelain Theme',
+  name: 'OpenClaw Porcelain Theme',
   colors: {
     app_bg: '#F6F3EC',
     sidebar_bg: '#FBF8F0',
@@ -48,15 +48,15 @@ export const LIGHT_THEME: ThemeConfig = {
   },
   fonts: BASE_FONTS,
   brand: {
-    name: 'Lumi',
+    name: 'OpenClaw',
     subtitle: 'AI Creative Console',
-    app_user_model_id: 'Lumi.Launcher',
-    terminal_header: 'Lumi Console',
+    app_user_model_id: 'OpenClaw.Launcher',
+    terminal_header: 'OpenClaw Console',
     logoUrl: 'logo.png',
   },
   navItems: DEFAULT_NAV_ITEMS,
   window: {
-    title: 'Lumi - AI Creative Console',
+    title: 'OpenClaw - AI Creative Console',
     width: 1200,
     height: 800,
   },
@@ -64,7 +64,7 @@ export const LIGHT_THEME: ThemeConfig = {
 
 export const DARK_THEME: ThemeConfig = {
   ...LIGHT_THEME,
-  name: 'Lumi Obsidian Gold',
+  name: 'OpenClaw Graphite Gold',
   colors: {
     app_bg: '#07080D',
     sidebar_bg: '#0A0C14',

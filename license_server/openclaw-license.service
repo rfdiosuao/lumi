@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/openclaw-license
+EnvironmentFile=-/opt/openclaw-license/openclaw-license.env
 Environment=LICENSE_HOST=0.0.0.0
 Environment=LICENSE_PORT=18791
 Environment=LICENSE_DB=/opt/openclaw-license/license.db

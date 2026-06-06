@@ -3,6 +3,8 @@ import { Button, Input, TextArea, Select, Loading, showToast, FieldLabel } from 
 import { imageApi, configApi } from '../../services/api';
 import { loadPhoneConfig, phoneApi } from '../../services/phoneApi';
 import { useLogStore } from '../../stores/logStore';
+import { useAppStore } from '../../stores/appStore';
+import { getDefaultPublishDraftSeed, usePublishHandoffStore } from '../../stores/publishStore';
 import { readGatewayStoredConfig, readMemberGatewayDefaults, type GatewayMode } from '../../services/gatewayConfig';
 
 const SIZES = ['1024x1024', '1024x1536', '1536x1024', '512x512'];
@@ -25,6 +27,8 @@ export const ImagePage: React.FC = () => {
   const [phoneSyncStatus, setPhoneSyncStatus] = useState('');
 
   const appendLog = useLogStore((s) => s.append);
+  const setCurrentPage = useAppStore((state) => state.setCurrentPage);
+  const setPublishDraftSeed = usePublishHandoffStore((state) => state.setDraftSeed);
   const managedMode = gatewayMode === 'member';
 
   const loadConfig = async () => {
@@ -47,7 +51,7 @@ export const ImagePage: React.FC = () => {
 
       if (storedMode === 'member') {
         setGatewayMode('member');
-        setBaseUrl(memberGateway.baseUrl || storedBaseUrl);
+        setBaseUrl(memberGateway.imageBaseUrl || memberGateway.baseUrl || storedBaseUrl);
         setApiKey(memberGateway.imageApiKey || memberGateway.apiKey || storedApiKey);
         return;
       }
@@ -68,7 +72,7 @@ export const ImagePage: React.FC = () => {
 
       if (memberGateway.hasGateway) {
         setGatewayMode('member');
-        setBaseUrl(memberGateway.baseUrl);
+        setBaseUrl(memberGateway.imageBaseUrl || memberGateway.baseUrl);
         setApiKey(memberGateway.imageApiKey || memberGateway.apiKey);
       }
     } catch {
@@ -102,7 +106,7 @@ export const ImagePage: React.FC = () => {
     try {
       const memberGateway = await readMemberGatewayDefaults();
       if (memberGateway.hasGateway) {
-        setBaseUrl(memberGateway.baseUrl);
+        setBaseUrl(memberGateway.imageBaseUrl || memberGateway.baseUrl);
         setApiKey(memberGateway.imageApiKey || memberGateway.apiKey);
       }
     } catch {
@@ -137,6 +141,29 @@ export const ImagePage: React.FC = () => {
     } finally {
       setGenerating(false);
     }
+  };
+
+  const handleSendToPublish = () => {
+    if (!resultImage) return;
+    const name = resultFile?.split(/[\\/]/).pop() || `openclaw-image-${Date.now()}.png`;
+    setPublishDraftSeed({
+      ...getDefaultPublishDraftSeed(),
+      platformId: 'xiaohongshu',
+      transportMode: 'direct',
+      contentType: 'image',
+      title: prompt.trim().slice(0, 60) || 'OpenClaw 图文发布',
+      body: prompt.trim(),
+      hashtags: ['OpenClaw', 'AI创作'],
+      assets: [{
+        id: `image-${Date.now()}`,
+        kind: 'image',
+        name,
+        mime: 'image/png',
+        dataUrl: resultImage,
+        sourcePath: resultFile || undefined,
+      }],
+    });
+    setCurrentPage('publish');
   };
 
   const TRIPLE_PROMPTS = [
@@ -315,6 +342,11 @@ export const ImagePage: React.FC = () => {
               <div className="mt-3 space-y-1 text-xs text-text-muted">
                 {resultFile && <div>本地：{resultFile}</div>}
                 {phoneSyncStatus && <div>{phoneSyncStatus}</div>}
+                <div className="mt-4">
+                <Button onClick={handleSendToPublish} variant="default">
+                  去平台发布
+                </Button>
+                </div>
               </div>
             </div>
           )}
