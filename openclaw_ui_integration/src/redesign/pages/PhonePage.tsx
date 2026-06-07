@@ -616,9 +616,7 @@ export function PhonePage() {
   const handleAddDevice = () => {
     const draft = createPhoneDeviceDraft(devices);
     setDeviceDraft(draft);
-    setSelectedId(draft.id);
     setConfigOpen(true);
-    setSnapshot(createEmptySnapshot());
     setAuthState({ tone: 'neutral', title: '新设备待验证', detail: '输入局域网 IP 会自动补全 http:// 和 9527 端口。' });
   };
 
