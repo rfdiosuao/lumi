@@ -97,7 +97,7 @@ interface FleetRun {
   deviceName: string;
   prompt: string;
   mode: AgentTaskMode;
-  status: 'queued' | 'running' | 'success' | 'error';
+  status: 'queued' | 'running' | 'success' | 'error' | 'cancelled';
   startedAt: string;
   finishedAt?: string;
   answer?: string;
@@ -440,6 +440,9 @@ export const PhoneControlPage: React.FC = () => {
   const [agentRuns, setAgentRuns] = React.useState<AgentRun[]>([]);
   const [fleetTargetIds, setFleetTargetIds] = React.useState<string[]>([]);
   const [fleetRuns, setFleetRuns] = React.useState<FleetRun[]>([]);
+  const [fleetCancelling, setFleetCancelling] = React.useState(false);
+  const fleetCancelRef = React.useRef(false);
+  const fleetInFlightRef = React.useRef<Map<number, PhoneConnectionConfig>>(new Map());
   const [dragPickMode, setDragPickMode] = React.useState(false);
   const [dragDraft, setDragDraft] = React.useState<{ x: number; y: number } | null>(null);
   const imageRef = React.useRef<HTMLImageElement | null>(null);
@@ -1361,18 +1364,47 @@ export const PhoneControlPage: React.FC = () => {
     setFleetTargetIds(devices.map((device) => device.id).filter(Boolean) as string[]);
   }, [devices]);
 
+  const handleCancelFleet = React.useCallback(async () => {
+    if (!fleetCancelRef.current) {
+      fleetCancelRef.current = true;
+      setFleetCancelling(true);
+      addLog('正在停止群控批次…', 'info');
+    }
+    // Mark not-yet-started runs as cancelled immediately for snappy feedback,
+    // then ask each in-flight device to abort its agent task server-side.
+    const cancelledAt = new Date().toISOString();
+    setFleetRuns((items) =>
+      items.map((item) =>
+        item.status === 'queued' ? { ...item, status: 'cancelled' as const, finishedAt: cancelledAt, error: 'cancelled' } : item
+      )
+    );
+    const inflight = Array.from(fleetInFlightRef.current.values());
+    await Promise.all(inflight.map((device) => phoneApi.cancelTask(device).catch(() => undefined)));
+  }, [addLog]);
+
   const handleRunFleetTask = async () => {
     const prompt = agentPrompt.trim();
     if (!prompt) {
-      showToast('Write a fleet task first', 'info');
+      showToast('请先填写群控任务', 'info');
       return;
     }
-    const targets = devices.filter((device) => device.id && fleetTargetIds.includes(device.id));
+    // Pull targets from the store (not the possibly-stale component state) so
+    // each device carries its latest secure-channel credentials — otherwise an
+    // unpaired device would re-pair (new launcherId) on every fleet run. Also
+    // skip entries that are not actually configured yet.
+    const storeNow = loadPhoneDeviceStore();
+    const selectedTargets = storeNow.devices.filter((device) => device.id && fleetTargetIds.includes(device.id));
+    const targets = selectedTargets.filter((device) => device.baseUrl.trim() && device.token.trim());
     if (!targets.length) {
-      showToast('Select at least one device', 'info');
+      showToast(selectedTargets.length ? '所选设备还没配置 APKClaw 地址/Token' : '请至少选择一台设备', 'info');
       return;
     }
+    const skipped = selectedTargets.length - targets.length;
+    if (skipped > 0) addLog(`已跳过 ${skipped} 台未配置的设备`, 'info');
 
+    fleetCancelRef.current = false;
+    fleetInFlightRef.current = new Map();
+    setFleetCancelling(false);
     setLoading('fleet');
     const startedAt = new Date().toISOString();
     const batchRuns = targets.map((device) => ({
@@ -1384,12 +1416,19 @@ export const PhoneControlPage: React.FC = () => {
       status: 'queued' as const,
       startedAt,
     }));
-    setFleetRuns((items) => [...batchRuns, ...items].slice(0, 24));
-    addLog(`Fleet task started: ${targets.length} device(s)`, 'info');
+    // Keep at least the whole current batch so per-device status updates below
+    // are never silently dropped (the map() would otherwise find no match).
+    setFleetRuns((items) => [...batchRuns, ...items].slice(0, Math.max(24, batchRuns.length)));
+    addLog(`群控任务已启动：${targets.length} 台`, 'info');
+
+    let success = 0;
+    let failed = 0;
+    let cancelled = 0;
 
     const runOneFleetDevice = async (device: PhoneConnectionConfig, index: number) => {
+      const runId = batchRuns[index].id;
+      fleetInFlightRef.current.set(runId, device);
       try {
-        const runId = batchRuns[index].id;
         setFleetRuns((items) =>
           items.map((item) => item.id === runId ? { ...item, status: 'running' as const } : item)
         );
@@ -1403,13 +1442,18 @@ export const PhoneControlPage: React.FC = () => {
         });
         const finishedAt = new Date().toISOString();
         if (!result.ok || !result.data) {
-          const message = errorMessage(result.error);
+          const aborted = fleetCancelRef.current;
+          const message = aborted ? '已取消' : errorMessage(result.error);
+          if (aborted) cancelled += 1; else failed += 1;
           setFleetRuns((items) =>
-            items.map((item) => item.id === runId ? { ...item, status: 'error' as const, finishedAt, error: message } : item)
+            items.map((item) => item.id === runId
+              ? { ...item, status: aborted ? 'cancelled' as const : 'error' as const, finishedAt, error: message }
+              : item)
           );
-          addLog(`Fleet ${device.name || device.id}: ${message}`, 'error');
+          addLog(`群控 ${device.name || device.id}：${message}`, aborted ? 'info' : 'error');
           return;
         }
+        success += 1;
         setFleetRuns((items) =>
           items.map((item) =>
             item.id === runId
@@ -1422,15 +1466,20 @@ export const PhoneControlPage: React.FC = () => {
               : item
           )
         );
-        addLog(`Fleet ${device.name || device.id}: completed`, 'success');
+        addLog(`群控 ${device.name || device.id}：完成`, 'success');
       } catch (error: any) {
-        const runId = batchRuns[index].id;
         const finishedAt = new Date().toISOString();
-        const message = errorMessage(error?.message || 'device_failed');
+        const aborted = fleetCancelRef.current;
+        const message = aborted ? '已取消' : errorMessage(error?.message || 'device_failed');
+        if (aborted) cancelled += 1; else failed += 1;
         setFleetRuns((items) =>
-          items.map((item) => item.id === runId ? { ...item, status: 'error' as const, finishedAt, error: message } : item)
+          items.map((item) => item.id === runId
+            ? { ...item, status: aborted ? 'cancelled' as const : 'error' as const, finishedAt, error: message }
+            : item)
         );
-        addLog(`Fleet ${device.name || device.id}: ${message}`, 'error');
+        addLog(`群控 ${device.name || device.id}：${message}`, aborted ? 'info' : 'error');
+      } finally {
+        fleetInFlightRef.current.delete(runId);
       }
     };
 
@@ -1440,15 +1489,30 @@ export const PhoneControlPage: React.FC = () => {
       await Promise.all(
         Array.from({ length: concurrency }, async () => {
           while (nextTargetIndex < targets.length) {
+            if (fleetCancelRef.current) break;
             const index = nextTargetIndex;
             nextTargetIndex += 1;
             await runOneFleetDevice(targets[index], index);
           }
         })
       );
-      showToast('Fleet task finished', 'success');
+      // Account for targets that never started because the batch was cancelled.
+      cancelled += Math.max(0, targets.length - (success + failed + cancelled));
+      if (fleetCancelRef.current) {
+        showToast(`群控已停止：成功 ${success}，失败 ${failed}，取消 ${cancelled}`, 'info');
+      } else if (failed > 0) {
+        showToast(`群控完成：成功 ${success}/${targets.length}（失败 ${failed}）`, failed === targets.length ? 'error' : 'info');
+      } else {
+        showToast(`群控完成：${success} 台全部成功`, 'success');
+      }
     } finally {
+      fleetCancelRef.current = false;
+      fleetInFlightRef.current = new Map();
+      setFleetCancelling(false);
       setLoading(null);
+      // Refresh in-memory devices with credentials persisted during the run so
+      // the next batch does not re-pair already-paired devices.
+      applyDeviceStore(loadPhoneDeviceStore(), selectedDeviceId);
     }
   };
 
@@ -2080,16 +2144,16 @@ export const PhoneControlPage: React.FC = () => {
           <section className="rounded-[16px] border border-border/80 bg-surface-alt/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <div className="text-xs font-bold uppercase tracking-[0.22em] text-text-subtle">Fleet</div>
-                <div className="mt-1 text-xs text-text-muted">{fleetTargetIds.length}/{devices.length} selected</div>
+                <div className="text-xs font-bold uppercase tracking-[0.22em] text-text-subtle">群控 Fleet</div>
+                <div className="mt-1 text-xs text-text-muted">已选 {fleetTargetIds.length}/{devices.length}</div>
               </div>
               <Button onClick={selectAllFleetTargets} disabled={loading !== null || devices.length === 0} variant="quiet" className="px-3 py-1.5 text-xs">
-                All
+                全选
               </Button>
             </div>
             <div className="space-y-2">
-              {devices.map((device) => (
-                <label key={device.id || device.baseUrl || device.name} className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-surface/35 px-3 py-2">
+              {devices.map((device, index) => (
+                <label key={device.id || `fleet-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-surface/35 px-3 py-2">
                   <span className="min-w-0">
                     <span className="block truncate text-xs font-bold text-text">{device.name || 'Android Phone'}</span>
                     <span className="block truncate text-[11px] text-text-subtle">{device.id || 'no-id'}</span>
@@ -2103,14 +2167,20 @@ export const PhoneControlPage: React.FC = () => {
                 </label>
               ))}
             </div>
-            <Button onClick={handleRunFleetTask} disabled={loading !== null || fleetTargetIds.length === 0} variant="primary" className="mt-3 w-full">
-              {loading === 'fleet' ? 'Fleet running...' : 'Run on selected'}
-            </Button>
+            {loading === 'fleet' ? (
+              <Button onClick={handleCancelFleet} disabled={fleetCancelling} variant="danger" className="mt-3 w-full">
+                {fleetCancelling ? '停止中…' : '停止群控'}
+              </Button>
+            ) : (
+              <Button onClick={handleRunFleetTask} disabled={loading !== null || fleetTargetIds.length === 0} variant="primary" className="mt-3 w-full">
+                运行选中设备
+              </Button>
+            )}
             {latestFleetRuns.length > 0 && (
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-[0.18em] text-text-subtle">
-                  <span>Batch Trace</span>
-                  <span>{activeFleetRuns ? `${activeFleetRuns} active` : 'idle'}</span>
+                  <span>批次记录</span>
+                  <span>{activeFleetRuns ? `${activeFleetRuns} 运行中` : '空闲'}</span>
                 </div>
                 {latestFleetRuns.map((run) => (
                   <div key={run.id} className="rounded-xl border border-border/60 bg-surface/35 px-3 py-2">
