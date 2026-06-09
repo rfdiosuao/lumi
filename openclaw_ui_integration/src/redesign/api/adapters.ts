@@ -14,7 +14,6 @@ import type {
   VideoResult,
 } from '../types';
 import { bridgeRequest, isTauriRuntime, phoneRequest, resolveBridgeBaseUrl, type PhoneRequestOptions } from './client';
-import { mockBridgeRequest, mockPhoneRequest } from './mock';
 import { cleanArray, maskSecret, pickText, toBool, toNumber, toText } from '../lib/format';
 import type { PreviewSettings } from '../store/appStore';
 
@@ -146,6 +145,7 @@ export async function requestBridgeData<T = any>(
 ): Promise<RequestResult<T>> {
   const mode = effectiveMode(settings);
   if (mode === 'mock') {
+    const { mockBridgeRequest } = await import('./mock');
     return { data: await mockBridgeRequest(path, method, body) as T, source: 'mock' };
   }
 
@@ -173,6 +173,7 @@ export async function requestPhoneData<T = any>(
 ): Promise<RequestResult<T>> {
   const mode = effectiveMode(settings);
   if (mode === 'mock') {
+    const { mockPhoneRequest } = await import('./mock');
     return { data: await mockPhoneRequest(phone.baseUrl, phone.token, path, method, body) as T, source: 'mock' };
   }
 

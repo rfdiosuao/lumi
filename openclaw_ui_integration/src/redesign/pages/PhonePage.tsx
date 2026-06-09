@@ -1,10 +1,9 @@
 import React from 'react';
 import { Camera, CheckCircle2, Copy, KeyRound, PlayCircle, Plus, RefreshCcw, Save, ShieldCheck, Smartphone, StopCircle, Trash2, Unlock } from 'lucide-react';
 import { Button, Chip, EmptyState, Field, Input, InlineState, Modal, Panel, SectionHeader, TextArea, Toggle } from '../components/ui';
-import { getMockPhoneInventory, removeMockPhoneDevice, setMockPhoneSelection, upsertMockPhoneDevice } from '../api/mock';
 import { formatDateTime, maskSecret } from '../lib/format';
 import { readConfigValue, requestPhoneData, writeConfigValue } from '../api/adapters';
-import { clearPhoneSecurePairing, warmPhoneSecurePairing, type PhonePairingSummary } from '../api/client';
+import { clearPhoneSecurePairing, isTauriRuntime, resolveBridgeBaseUrl, warmPhoneSecurePairing, type PhonePairingSummary } from '../api/client';
 import { displayPhoneBaseUrl, normalizeOrCleanPhoneBaseUrl, normalizePhoneBaseUrl } from '../lib/phoneUrl';
 import { usePreviewStore } from '../store/appStore';
 import QRCode from 'qrcode';
@@ -73,6 +72,22 @@ interface FleetRun {
   deviceName: string;
   status: 'queued' | 'running' | 'success' | 'error' | 'cancelled';
   detail?: string;
+}
+
+const MOCK_STATE_STORAGE_KEY = 'ui-redesign-preview.mock-state';
+
+// Read the locally-cached device inventory directly (no mock module import), so
+// the phone page can seed instantly without pulling the heavy mock bundle.
+function readCachedPhoneInventory(): { selectedDeviceId: string | null; devices: any[] } {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MOCK_STATE_STORAGE_KEY) || '{}');
+    return {
+      selectedDeviceId: parsed?.phone?.selectedDeviceId || null,
+      devices: Array.isArray(parsed?.phone?.devices) ? parsed.phone.devices : [],
+    };
+  } catch {
+    return { selectedDeviceId: null, devices: [] };
+  }
 }
 
 function createEmptySnapshot(): PhoneSnapshot {
@@ -215,7 +230,10 @@ export function PhonePage() {
   const selectedPhoneId = usePreviewStore((state) => state.selectedPhoneId);
   const setSelectedPhoneId = usePreviewStore((state) => state.setSelectedPhoneId);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const initialInventory = React.useMemo(() => getMockPhoneInventory(), []);
+  // Best-effort instant seed from the locally-cached inventory, read inline so
+  // the heavy mock module stays out of the production bundle. The config-load
+  // effect below is the source of truth and corrects this on mount.
+  const initialInventory = React.useMemo(() => readCachedPhoneInventory(), []);
   const [devices, setDevices] = React.useState<PhoneDevice[]>(() => initialInventory.devices.map((item: any, index: number) => normalizePhoneDevice(item, `mock-${index + 1}`)).filter(Boolean) as PhoneDevice[]);
   const [snapshot, setSnapshot] = React.useState<PhoneSnapshot>(() => createEmptySnapshot());
   const [selectedId, setSelectedId] = React.useState<string | null>(selectedPhoneId || initialInventory.selectedDeviceId || devices[0]?.id || null);
@@ -254,6 +272,27 @@ export function PhonePage() {
   const refreshRunRef = React.useRef(0);
   const refreshInFlightRef = React.useRef(false);
   const taskBusyRef = React.useRef(false);
+
+  // Mock mode is only ever entered explicitly or in non-Tauri web preview; the
+  // real desktop app stays 'live'. Keep the mock device-store sync gated to mock
+  // mode and lazy-loaded so the ~969-line mock module stays out of the live
+  // first-load bundle.
+  const mockMode =
+    settings.transportMode === 'mock' ||
+    (settings.transportMode === 'auto' && !isTauriRuntime() && !resolveBridgeBaseUrl(settings.bridgeBaseUrl));
+
+  const upsertMockPhoneDevice = React.useCallback((device: PhoneDevice | Record<string, any>) => {
+    if (!mockMode) return;
+    void import('../api/mock').then((mock) => mock.upsertMockPhoneDevice(device)).catch(() => undefined);
+  }, [mockMode]);
+  const setMockPhoneSelection = React.useCallback((deviceId: string | null) => {
+    if (!mockMode) return;
+    void import('../api/mock').then((mock) => mock.setMockPhoneSelection(deviceId)).catch(() => undefined);
+  }, [mockMode]);
+  const removeMockPhoneDevice = React.useCallback((deviceId: string) => {
+    if (!mockMode) return;
+    void import('../api/mock').then((mock) => mock.removeMockPhoneDevice(deviceId)).catch(() => undefined);
+  }, [mockMode]);
 
   const draftPersisted = Boolean(deviceDraft.id && devices.some((device) => device.id === deviceDraft.id));
   const selectedDevice = selectedId ? devices.find((device) => device.id === selectedId) || null : null;
