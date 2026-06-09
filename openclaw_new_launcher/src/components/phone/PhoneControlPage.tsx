@@ -443,6 +443,7 @@ export const PhoneControlPage: React.FC = () => {
   const [fleetCancelling, setFleetCancelling] = React.useState(false);
   const fleetCancelRef = React.useRef(false);
   const fleetInFlightRef = React.useRef<Map<number, PhoneConnectionConfig>>(new Map());
+  const agentCancelRef = React.useRef(false);
   const [dragPickMode, setDragPickMode] = React.useState(false);
   const [dragDraft, setDragDraft] = React.useState<{ x: number; y: number } | null>(null);
   const imageRef = React.useRef<HTMLImageElement | null>(null);
@@ -1058,6 +1059,7 @@ export const PhoneControlPage: React.FC = () => {
     }
 
     const saved = persistConfig();
+    agentCancelRef.current = false;
     setLoading('agent');
     const wakeResult = await phoneApi.wake(saved);
     if (!wakeResult.ok || !wakeResult.data) {
@@ -1194,12 +1196,16 @@ export const PhoneControlPage: React.FC = () => {
     showToast('已发送给 APKClaw Agent，正在执行', 'info');
 
     let finalTask = null;
+    let pollFailed = false;
     const maxWaitMs = APKCLAW_TASK_TIMEOUT_SEC * 1000 + 15000;
     const startedMs = Date.now();
     while (Date.now() - startedMs < maxWaitMs) {
       await new Promise((resolve) => window.setTimeout(resolve, 1800));
+      if (agentCancelRef.current) break;
       const task = await phoneApi.getTask(saved, taskId);
+      if (agentCancelRef.current) break;
       if (!task.ok || !task.data) {
+        pollFailed = true;
         const message = errorMessage(task.error);
         setAgentRuns((items) =>
           items.map((item) => item.id === runId ? { ...item, status: "error" as const, error: message } : item)
@@ -1251,6 +1257,13 @@ export const PhoneControlPage: React.FC = () => {
 
     const finishedAt = new Date().toISOString();
     if (!finalTask) {
+      // User cancelled, or a poll request failed — both already updated the run
+      // status/snapshot (in handleCancelAgentTask or the loop). Don't overwrite
+      // them with a misleading "timeout".
+      if (agentCancelRef.current || pollFailed) {
+        setLoading(null);
+        return;
+      }
       const message = '等待手机 Agent 结果超时';
       setAgentRuns((items) =>
         items.map((item) => item.id === runId ? { ...item, status: "error" as const, finishedAt, error: message } : item)
@@ -1317,6 +1330,9 @@ export const PhoneControlPage: React.FC = () => {
 
   const handleCancelAgentTask = async () => {
     const saved = persistConfig();
+    // Stop the run loop from polling to the 600s timeout; it will break and the
+    // post-loop cancel branch leaves the status set below intact.
+    agentCancelRef.current = true;
     setLoading('cancel');
     const result = await phoneApi.cancelTask(saved);
     setLoading(null);

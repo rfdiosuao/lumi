@@ -1343,10 +1343,27 @@ async function pairLumiSecureChannel(config: PhoneConnectionConfig): Promise<Pho
 }
 
 async function ensureLumiSecureConfig(config: PhoneConnectionConfig): Promise<PhoneApiResult<PhoneConnectionConfig>> {
-  if (config.launcherId && config.launcherSecret) {
-    return { ok: true, data: config };
+  let resolved = config;
+  // Callers often pass a stale config — a component state snapshot or a polling
+  // closure — that lacks credentials even though this device was already paired
+  // this session (pairing persists to the store, not back into those configs).
+  // Recover the stored credentials first so we don't re-pair (and churn a new
+  // launcherId) on every such call, e.g. the 1.5s screen-record status poll.
+  if ((!resolved.launcherId || !resolved.launcherSecret) && resolved.id) {
+    const stored = loadPhoneDeviceStore().devices.find((device) => device.id === resolved.id);
+    if (stored?.launcherId && stored?.launcherSecret) {
+      resolved = {
+        ...resolved,
+        launcherId: stored.launcherId,
+        launcherSecret: stored.launcherSecret,
+        secureChannelPairedAt: resolved.secureChannelPairedAt || stored.secureChannelPairedAt,
+      };
+    }
   }
-  return pairLumiSecureChannel(config);
+  if (resolved.launcherId && resolved.launcherSecret) {
+    return { ok: true, data: resolved };
+  }
+  return pairLumiSecureChannel(resolved);
 }
 
 async function secureRequest<T>(
