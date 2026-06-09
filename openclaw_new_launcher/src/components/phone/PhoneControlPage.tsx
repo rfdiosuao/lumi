@@ -492,8 +492,14 @@ export const PhoneControlPage: React.FC = () => {
   }, []);
 
   const syncRuntimePhoneFiles = React.useCallback(async (selected: PhoneConnectionConfig, store: PhoneDeviceStore) => {
-    await Promise.all([
-      configApi.write(PHONE_AGENT_CONFIG_PATH, {
+    const writes: Promise<unknown>[] = [];
+    // Only repoint the runtime's ACTIVE phone config at a device that is
+    // actually usable. Writing a blank baseUrl (e.g. right after "add device",
+    // or when selecting a not-yet-configured entry) would silently aim OpenClaw
+    // at an unconfigured phone and clobber the previously working config. The
+    // device list below is always synced so the new entry is still persisted.
+    if ((selected.baseUrl || '').trim()) {
+      writes.push(configApi.write(PHONE_AGENT_CONFIG_PATH, {
         id: selected.id,
         name: selected.name || 'Android Phone',
         baseUrl: selected.baseUrl,
@@ -505,7 +511,9 @@ export const PhoneControlPage: React.FC = () => {
         useDeviceProfileContext: selected.useDeviceProfileContext !== false,
         album: 'OpenClaw',
         updatedAt: new Date().toISOString(),
-      }),
+      }));
+    }
+    writes.push(
       configApi.write(PHONE_AGENT_STORE_PATH, {
         selectedDeviceId: store.selectedDeviceId,
         updatedAt: new Date().toISOString(),
@@ -527,8 +535,9 @@ export const PhoneControlPage: React.FC = () => {
           lastSeenAt: device.lastSeenAt,
           album: 'OpenClaw',
         })),
-      }),
-    ]);
+      })
+    );
+    await Promise.all(writes);
   }, []);
 
   const applyDeviceStore = React.useCallback((store: PhoneDeviceStore, preferredId?: string | null) => {
@@ -596,27 +605,43 @@ export const PhoneControlPage: React.FC = () => {
   );
 
   const handleAddDevice = React.useCallback(() => {
-    const nextIndex = devices.length + 1;
-    const draft = savePhoneConfig({
-      ...config,
+    // Pick a display name that does not collide with an existing device.
+    // `devices.length + 1` alone is not unique after a removal (e.g. add 1/2,
+    // remove 1, add -> "Android Phone 2" again), so scan and bump until free.
+    const existingNames = new Set(devices.map((device) => (device.name || '').trim()));
+    let index = devices.length + 1;
+    let name = `Android Phone ${index}`;
+    while (existingNames.has(name)) {
+      index += 1;
+      name = `Android Phone ${index}`;
+    }
+    // Build a clean draft with NO id and no inherited identity/tags, then let
+    // upsertPhoneDevice assign a deduped id and append it. Do NOT route through
+    // savePhoneConfig: its id-match-then-overwrite path silently clobbers an
+    // existing device whenever the generated id collides (add -> remove -> add),
+    // wiping its baseUrl/token and secure-channel pairing instead of adding one.
+    const draft: PhoneConnectionConfig = {
       id: undefined,
-      name: `Android Phone ${nextIndex}`,
+      name,
       baseUrl: '',
       token: '',
       relayBaseUrl: '',
       relayChannelId: '',
       relayToken: '',
-      launcherId: undefined,
-      launcherSecret: undefined,
-      secureChannelPairedAt: undefined,
-      lastSeenAt: undefined,
-    });
+      visualizeActions: true,
+      useDeviceProfileContext: true,
+      enabled: true,
+      tags: [],
+    };
     const store = upsertPhoneDevice(draft);
-    applyDeviceStore(store, draft.id);
-    void syncRuntimePhoneFiles(draft, store).catch(() => {
+    const created = applyDeviceStore(store, store.selectedDeviceId);
+    void syncRuntimePhoneFiles(created ?? draft, store).catch(() => {
       addLog('Add device failed', 'error');
     });
-  }, [addLog, applyDeviceStore, config, devices.length, syncRuntimePhoneFiles]);
+    const addedName = created?.name || name;
+    addLog(`已添加新设备：${addedName}`, 'success');
+    showToast(`已添加设备：${addedName}，请填写 APKClaw 地址和 Token`, 'success');
+  }, [addLog, applyDeviceStore, devices, syncRuntimePhoneFiles]);
 
   const handleRemoveDevice = React.useCallback(() => {
     if (!selectedDeviceId) return;
@@ -1876,11 +1901,11 @@ export const PhoneControlPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  {devices.map((device) => {
+                  {devices.map((device, index) => {
                     const active = device.id === selectedDeviceId;
                     return (
                       <button
-                        key={device.id || device.baseUrl || device.name}
+                        key={device.id || `phone-device-${index}`}
                         type="button"
                         onClick={() => device.id && handleSelectDevice(device.id)}
                         className={`w-full rounded-xl border px-3 py-2 text-left transition ${

@@ -726,8 +726,33 @@ export function setSelectedPhoneDeviceId(deviceId: string | null): PhoneDeviceSt
   });
 }
 
-export function upsertPhoneDevice(config: PhoneConnectionConfig): PhoneDeviceStore {
+// Secure-channel credentials are produced by pairing in the service layer and
+// persisted straight to the device store — they are NOT mirrored back into the
+// UI's in-memory config. A plain config-save (persistConfig runs on every phone
+// action) therefore carries no launcherId/secret and would otherwise blank the
+// stored pairing, forcing a fresh re-pair (new launcherId) on every action.
+// Backfill missing credentials from the existing stored device so a save that
+// simply does not carry them never clears them. Pairing/unpair set these fields
+// explicitly via persistPhoneDeviceUpdate, so they remain authoritative.
+function preserveSecureChannel(
+  config: PhoneConnectionConfig,
+  store: PhoneDeviceStore
+): PhoneConnectionConfig {
+  const id = typeof config.id === 'string' ? config.id.trim() : '';
+  if (!id) return config;
+  const existing = store.devices.find((device) => device.id === id);
+  if (!existing) return config;
+  return {
+    ...config,
+    launcherId: config.launcherId || existing.launcherId,
+    launcherSecret: config.launcherSecret || existing.launcherSecret,
+    secureChannelPairedAt: config.secureChannelPairedAt || existing.secureChannelPairedAt,
+  };
+}
+
+export function upsertPhoneDevice(input: PhoneConnectionConfig): PhoneDeviceStore {
   const store = loadPhoneDeviceStore();
+  const config = preserveSecureChannel(input, store);
   const devices = [...store.devices];
   const index = devices.findIndex((device) => device.id === config.id);
   const usedIds = new Set(devices.filter((_, currentIndex) => currentIndex !== index).map((device) => device.id || ''));
@@ -1307,7 +1332,7 @@ async function pairLumiSecureChannel(config: PhoneConnectionConfig): Promise<Pho
     };
   }
 
-  const pairedConfig = savePhoneConfig({
+  const pairedConfig = persistPhoneDeviceUpdate({
     ...config,
     baseUrl,
     launcherId: result.data.launcherId,
@@ -1652,10 +1677,19 @@ export function loadPhoneConfig(): PhoneConnectionConfig {
   }
 }
 
-export function savePhoneConfig(config: PhoneConnectionConfig): PhoneConnectionConfig {
-  const clean = normalizePhoneConfig(config);
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
+export function savePhoneConfig(input: PhoneConnectionConfig): PhoneConnectionConfig {
   const store = loadPhoneDeviceStore();
+  // Never let a credential-less save blank an existing device's pairing.
+  const config = preserveSecureChannel(input, store);
+  // Generate ids with awareness of the other devices so a brand-new (id-less)
+  // config can never collide with an existing device id. When the config
+  // already has an id (the common "save the selected device" path) keep it
+  // stable via preferredId so renames/edits update in place.
+  const requestedId = typeof config.id === 'string' && config.id.trim() ? config.id.trim() : undefined;
+  const existingIds = new Set(store.devices.map((device) => device.id || '').filter(Boolean));
+  if (requestedId) existingIds.delete(requestedId);
+  const clean = normalizePhoneConfig(config, existingIds, requestedId);
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
   const matchingDevice =
     (clean.id && store.devices.find((device) => device.id === clean.id)) ||
     store.devices.find(
@@ -1673,14 +1707,41 @@ export function savePhoneConfig(config: PhoneConnectionConfig): PhoneConnectionC
   return clean;
 }
 
+// Persist a device update WITHOUT touching the active selection or the legacy
+// single-config slot. savePhoneConfig/upsertPhoneDevice both force the selected
+// device to whatever they write, which is wrong for background updates like
+// secure-channel pairing: auto-pairing a non-selected fleet device must not
+// hijack which phone the user currently has active.
+export function persistPhoneDeviceUpdate(config: PhoneConnectionConfig): PhoneConnectionConfig {
+  const store = loadPhoneDeviceStore();
+  const requestedId = typeof config.id === 'string' && config.id.trim() ? config.id.trim() : undefined;
+  const existingIds = new Set(store.devices.map((device) => device.id || '').filter(Boolean));
+  if (requestedId) existingIds.delete(requestedId);
+  const clean = normalizePhoneConfig(config, existingIds, requestedId);
+  const index = store.devices.findIndex((device) => device.id === clean.id);
+  const devices = index >= 0
+    ? store.devices.map((device) => (device.id === clean.id ? clean : device))
+    : [...store.devices, clean];
+  savePhoneDeviceStore({
+    ...store,
+    selectedDeviceId: store.selectedDeviceId,
+    devices,
+  });
+  return clean;
+}
+
 export function loadPhoneDeviceProfile(config: PhoneConnectionConfig): PhoneDeviceProfileCache | null {
   try {
-    const baseUrl = normalizeBaseUrl(config.baseUrl);
-    if (!baseUrl) return null;
+    // The cache is keyed by device id (see profileStorageKey), so the health
+    // report follows the device entry even when its APKClaw URL changes. Do NOT
+    // gate on baseUrl equality — that silently orphaned the report after an
+    // address edit (the entry stays on disk but can never be read back).
+    const hasKeySource = Boolean((config.id || '').trim() || normalizeBaseUrl(config.baseUrl));
+    if (!hasKeySource) return null;
     const raw = window.localStorage.getItem(profileStorageKey(config));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PhoneDeviceProfileCache;
-    if (!parsed?.profile || parsed.baseUrl !== baseUrl) return null;
+    if (!parsed?.profile) return null;
     return parsed;
   } catch {
     return null;
