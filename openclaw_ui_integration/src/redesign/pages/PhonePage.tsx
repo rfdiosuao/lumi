@@ -65,6 +65,15 @@ const CORE_SNAPSHOT_TIMEOUT_MS = 7000;
 const EXTRA_SNAPSHOT_TIMEOUT_MS = 2200;
 const PHONE_AGENT_TASK_TIMEOUT_SEC = 600;
 const PHONE_AGENT_TASK_POLL_SECONDS = PHONE_AGENT_TASK_TIMEOUT_SEC + 20;
+const FLEET_CONCURRENCY = 2;
+
+interface FleetRun {
+  id: number;
+  deviceId: string;
+  deviceName: string;
+  status: 'queued' | 'running' | 'success' | 'error' | 'cancelled';
+  detail?: string;
+}
 
 function createEmptySnapshot(): PhoneSnapshot {
   return {
@@ -190,6 +199,16 @@ function authErrorHelp(message: string): string {
   return message;
 }
 
+function fleetStatusLabel(status: FleetRun['status']): string {
+  switch (status) {
+    case 'queued': return '排队中';
+    case 'running': return '执行中';
+    case 'success': return '成功';
+    case 'cancelled': return '已取消';
+    default: return '失败';
+  }
+}
+
 export function PhonePage() {
   const settings = usePreviewStore((state) => state.settings);
   const updateSettings = usePreviewStore((state) => state.updateSettings);
@@ -223,6 +242,13 @@ export function PhonePage() {
   const [sending, setSending] = React.useState(false);
   const [activeTaskId, setActiveTaskId] = React.useState('');
   const [taskLogs, setTaskLogs] = React.useState<TaskLogEntry[]>([]);
+  const [fleetTargetIds, setFleetTargetIds] = React.useState<string[]>([]);
+  const [fleetRuns, setFleetRuns] = React.useState<FleetRun[]>([]);
+  const [fleetRunning, setFleetRunning] = React.useState(false);
+  const [fleetCancelling, setFleetCancelling] = React.useState(false);
+  const fleetCancelRef = React.useRef(false);
+  const fleetRunSeqRef = React.useRef(0);
+  const fleetInFlightRef = React.useRef<Map<number, { device: PhoneDevice; taskId: string }>>(new Map());
   const taskRunRef = React.useRef(0);
   const selectedDeviceRef = React.useRef<PhoneDevice | null>(null);
   const refreshRunRef = React.useRef(0);
@@ -607,6 +633,153 @@ export function PhonePage() {
     }
   };
 
+  const toggleFleetTarget = React.useCallback((deviceId: string) => {
+    setFleetTargetIds((current) =>
+      current.includes(deviceId) ? current.filter((id) => id !== deviceId) : [...current, deviceId],
+    );
+  }, []);
+
+  const handleCancelFleet = React.useCallback(async () => {
+    if (!fleetCancelRef.current) {
+      fleetCancelRef.current = true;
+      setFleetCancelling(true);
+      addTaskLog('warn', '正在停止群控批次…');
+    }
+    // 还没开跑的立即标记取消；在飞的逐个向手机发取消请求，让其轮询循环尽快结束。
+    setFleetRuns((runs) => runs.map((run) => (run.status === 'queued' ? { ...run, status: 'cancelled', detail: '已取消' } : run)));
+    const inflight = Array.from(fleetInFlightRef.current.values());
+    await Promise.all(
+      inflight.map(({ device, taskId }) =>
+        requestPhoneData(
+          settings,
+          { baseUrl: device.baseUrl, token: device.token },
+          `/api/lumi/agent/tasks/${encodeURIComponent(taskId)}/cancel`,
+          'POST',
+          {},
+          { timeoutMs: 30_000 },
+        ).catch(() => undefined),
+      ),
+    );
+  }, [settings, addTaskLog]);
+
+  const handleRunFleet = async () => {
+    const prompt = actionPrompt.trim();
+    if (!prompt) {
+      pushToast({ tone: 'warn', title: '任务说明不能为空' });
+      return;
+    }
+    // 目标从当前设备列表取，并过滤掉没配置 baseUrl/token 的，避免提交必然失败的请求。
+    const selected = devices.filter((device) => fleetTargetIds.includes(device.id));
+    const targets = selected.filter((device) => normalizePhoneBaseUrl(device.baseUrl) && device.token.trim());
+    if (!targets.length) {
+      pushToast({ tone: 'warn', title: selected.length ? '所选设备还没配置地址/Token' : '请至少选择一台设备' });
+      return;
+    }
+    const skipped = selected.length - targets.length;
+    if (skipped > 0) addTaskLog('warn', `已跳过 ${skipped} 台未配置的设备`);
+
+    fleetCancelRef.current = false;
+    fleetInFlightRef.current = new Map();
+    setFleetCancelling(false);
+    setFleetRunning(true);
+    const batch: FleetRun[] = targets.map((device) => ({
+      id: (fleetRunSeqRef.current += 1),
+      deviceId: device.id,
+      deviceName: device.name || device.id,
+      status: 'queued',
+    }));
+    setFleetRuns(batch);
+    addTaskLog('info', `群控任务已启动：${targets.length} 台`, prompt);
+
+    let success = 0;
+    let failed = 0;
+    let cancelled = 0;
+
+    const runFleetDevice = async (device: PhoneDevice, runId: number): Promise<FleetRun['status']> => {
+      const update = (patch: Partial<FleetRun>) =>
+        setFleetRuns((runs) => runs.map((run) => (run.id === runId ? { ...run, ...patch } : run)));
+      update({ status: 'running' });
+      try {
+        const start = await requestPhoneData<any>(
+          settings,
+          { baseUrl: device.baseUrl, token: device.token },
+          '/api/lumi/agent/tasks',
+          'POST',
+          { prompt, use_template: true, force_agent: false, read_only: false, tool_policy: 'safe_action', timeout_sec: PHONE_AGENT_TASK_TIMEOUT_SEC },
+          { timeoutMs: 60_000 },
+        );
+        const taskId = extractTaskId(start.data);
+        if (!taskId) throw new Error('APKClaw did not return a task id.');
+        fleetInFlightRef.current.set(runId, { device, taskId });
+        for (let i = 0; i < PHONE_AGENT_TASK_POLL_SECONDS; i += 1) {
+          if (fleetCancelRef.current) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          if (fleetCancelRef.current) break;
+          const result = await requestPhoneData<any>(
+            settings,
+            { baseUrl: device.baseUrl, token: device.token },
+            `/api/lumi/agent/tasks/${encodeURIComponent(taskId)}`,
+            'GET',
+            undefined,
+            { timeoutMs: 15_000 },
+          );
+          const task = result.data;
+          if (terminalTaskStatus(task?.status)) {
+            const lower = String(task?.status || '').toLowerCase();
+            const outcome: FleetRun['status'] = lower === 'success' ? 'success' : lower.includes('cancel') ? 'cancelled' : 'error';
+            update({ status: outcome, detail: task?.result?.answer || task?.error || '' });
+            return outcome;
+          }
+        }
+        if (fleetCancelRef.current) {
+          update({ status: 'cancelled', detail: '已取消' });
+          return 'cancelled';
+        }
+        update({ status: 'error', detail: '任务轮询超时' });
+        return 'error';
+      } catch (err) {
+        const aborted = fleetCancelRef.current;
+        const message = aborted ? '已取消' : authErrorHelp(errorText(err));
+        update({ status: aborted ? 'cancelled' : 'error', detail: message });
+        return aborted ? 'cancelled' : 'error';
+      } finally {
+        fleetInFlightRef.current.delete(runId);
+      }
+    };
+
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < targets.length) {
+        if (fleetCancelRef.current) break;
+        const index = nextIndex;
+        nextIndex += 1;
+        const outcome = await runFleetDevice(targets[index], batch[index].id);
+        if (outcome === 'success') success += 1;
+        else if (outcome === 'cancelled') cancelled += 1;
+        else failed += 1;
+      }
+    };
+
+    try {
+      await Promise.all(Array.from({ length: Math.min(FLEET_CONCURRENCY, targets.length) }, worker));
+      // 补算「还没轮到就被取消」的目标。
+      cancelled += Math.max(0, targets.length - (success + failed + cancelled));
+      if (fleetCancelRef.current) {
+        pushToast({ tone: 'warn', title: '群控已停止', detail: `成功 ${success} · 失败 ${failed} · 取消 ${cancelled}` });
+      } else if (failed > 0) {
+        pushToast({ tone: failed === targets.length ? 'danger' : 'warn', title: '群控完成', detail: `成功 ${success}/${targets.length}（失败 ${failed}）` });
+      } else {
+        pushToast({ tone: 'ok', title: '群控完成', detail: `${success} 台全部成功` });
+      }
+      addTaskLog(failed || cancelled ? 'warn' : 'ok', '群控结束', `成功 ${success} · 失败 ${failed} · 取消 ${cancelled}`);
+    } finally {
+      fleetCancelRef.current = false;
+      fleetInFlightRef.current = new Map();
+      setFleetCancelling(false);
+      setFleetRunning(false);
+    }
+  };
+
   const handleToggleRecord = async () => {
     const active = Boolean(snapshot.recordStatus?.recording);
     const result = await runPhoneAction(active ? '录屏已停止' : '录屏已开始', active ? '/api/lumi/media/record/stop' : '/api/lumi/media/record/start');
@@ -843,6 +1016,80 @@ export function PhonePage() {
                 </div>
               </div>
             )}
+          </Panel>
+
+          <Panel className="surface-panel">
+            <SectionHeader
+              eyebrow="群控 Fleet"
+              title="多设备批量执行"
+              subtitle="对选中的设备并发下发同一个「任务说明」，可随时停止，结束后汇总成败。"
+              action={
+                <Button
+                  variant="quiet"
+                  onClick={() => setFleetTargetIds(devices.filter((device) => normalizePhoneBaseUrl(device.baseUrl) && device.token.trim()).map((device) => device.id))}
+                  disabled={fleetRunning || devices.length === 0}
+                >
+                  全选已配置
+                </Button>
+              }
+            />
+            {devices.length === 0 ? (
+              <EmptyState title="还没有设备" description="先在上方新增并验证至少一台 APKClaw 设备。" />
+            ) : (
+              <div className="detail-stack">
+                {devices.map((device) => {
+                  const configured = Boolean(normalizePhoneBaseUrl(device.baseUrl) && device.token.trim());
+                  return (
+                    <label
+                      key={device.id}
+                      className="detail-row"
+                      style={{ cursor: configured && !fleetRunning ? 'pointer' : 'not-allowed', opacity: configured ? 1 : 0.5 }}
+                    >
+                      <span className="detail-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={fleetTargetIds.includes(device.id)}
+                          disabled={fleetRunning || !configured}
+                          onChange={() => toggleFleetTarget(device.id)}
+                        />
+                        {device.name || device.id}
+                      </span>
+                      <span className="detail-value">{configured ? displayPhoneBaseUrl(device.baseUrl) : '未配置'}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <div className="button-row">
+              {fleetRunning ? (
+                <Button variant="danger" icon={StopCircle} onClick={() => void handleCancelFleet()} disabled={fleetCancelling}>
+                  {fleetCancelling ? '停止中...' : '停止群控'}
+                </Button>
+              ) : (
+                <Button variant="success" icon={PlayCircle} onClick={() => void handleRunFleet()} disabled={fleetTargetIds.length === 0}>
+                  运行选中设备（{fleetTargetIds.length}）
+                </Button>
+              )}
+            </div>
+            {fleetRuns.length > 0 ? (
+              <div className="detail-stack">
+                {fleetRuns.map((run) => (
+                  <div key={run.id} className="detail-row">
+                    <span className="detail-label">{run.deviceName}</span>
+                    <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <Chip tone={run.status === 'success' ? 'ok' : run.status === 'error' ? 'danger' : run.status === 'cancelled' ? 'warn' : 'neutral'}>
+                        {fleetStatusLabel(run.status)}
+                      </Chip>
+                      {run.detail ? (
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200, fontSize: 12, opacity: 0.75 }}>
+                          {run.detail}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </Panel>
 
           <Panel className="surface-panel">
