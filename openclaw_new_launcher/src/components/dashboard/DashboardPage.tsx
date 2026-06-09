@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
 import { useTheme } from '../../hooks/useTheme';
-import { configApi, licenseApi, processApi, skillsApi, systemApi, waitForProcessReady } from '../../services/api';
+import { configApi, processApi, skillsApi, systemApi, waitForProcessReady } from '../../services/api';
+import { detectApiConfigured } from '../../services/apiStatus';
 import { showToast } from '../common';
 import packageJson from '../../../package.json';
 
@@ -43,19 +44,8 @@ const STATUS_STYLES: Record<StatusCard['status'], { dot: string; rail: string; t
   },
 };
 
-const AUTH_PROFILES_PATH = 'data/.openclaw/agents/main/agent/auth-profiles.json';
 const LARK_PLUGIN_PATH = 'data/.openclaw/extensions/openclaw-lark';
 const WEIXIN_PLUGIN_PATH = 'data/.openclaw/extensions/openclaw-weixin';
-
-function hasConfiguredApiProfile(data: unknown): boolean {
-  const providers = (data as any)?.models?.providers;
-  if (!providers || typeof providers !== 'object') return false;
-  return Object.values(providers).some((provider: any) => {
-    const apiKey = String(provider?.apiKey || '').trim();
-    const baseUrl = String(provider?.baseUrl || provider?.url || '').trim();
-    return apiKey.length > 0 && baseUrl.length > 0;
-  });
-}
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -89,51 +79,22 @@ export const DashboardPage: React.FC = () => {
   const [greetingTime, setGreetingTime] = useState('');
 
   const refreshStatus = useCallback(async () => {
-    try {
-      const resp = await configApi.read(AUTH_PROFILES_PATH, { models: { providers: {} } });
-      if (hasConfiguredApiProfile(resp.data)) {
-        setApiConfigured(true);
-      } else {
-        const licenseResp = await licenseApi.current();
-        const license = ((licenseResp as any).gatewayProfile || licenseResp.license || (licenseResp as any).member) as any;
-        const gateway = license?.gateway || {};
-        setApiConfigured(Boolean(
-          String(license?.gatewayBaseUrl || license?.gatewayUrl || license?.baseUrl || gateway?.baseUrl || gateway?.url || '').trim()
-          && String(license?.gatewayAccessToken || license?.gatewayToken || license?.apiKey || license?.memberToken || gateway?.apiKey || gateway?.token || '').trim(),
-        ));
-      }
-    } catch {
-      setApiConfigured(false);
-    }
+    // These probes are independent — run them concurrently so the status cards
+    // settle in one bridge round-trip's time instead of the sum of six. Each
+    // result updates its own card as it lands.
+    const [apiRes, larkRes, weixinRes, skillsRes, systemRes] = await Promise.allSettled([
+      detectApiConfigured(),
+      configApi.read(LARK_PLUGIN_PATH, null),
+      configApi.read(WEIXIN_PLUGIN_PATH, null),
+      skillsApi.list(),
+      systemApi.info(),
+    ]);
 
-    try {
-      const larkResp = await configApi.read(LARK_PLUGIN_PATH, null);
-      setLarkInstalled(larkResp.data !== null && larkResp.data !== undefined);
-    } catch {
-      setLarkInstalled(false);
-    }
-
-    try {
-      const weixinResp = await configApi.read(WEIXIN_PLUGIN_PATH, null);
-      setWeixinInstalled(weixinResp.data !== null && weixinResp.data !== undefined);
-    } catch {
-      setWeixinInstalled(false);
-    }
-
-    try {
-      const skillsResp = await skillsApi.list();
-      const enabled = skillsResp.skills?.filter((s) => s.enabled).length ?? 0;
-      setSkillsCount(enabled);
-    } catch {
-      setSkillsCount(0);
-    }
-
-    try {
-      await systemApi.info();
-      setBridgeMode('FastAPI');
-    } catch {
-      setBridgeMode('Legacy');
-    }
+    setApiConfigured(apiRes.status === 'fulfilled' ? apiRes.value : false);
+    setLarkInstalled(larkRes.status === 'fulfilled' && larkRes.value.data !== null && larkRes.value.data !== undefined);
+    setWeixinInstalled(weixinRes.status === 'fulfilled' && weixinRes.value.data !== null && weixinRes.value.data !== undefined);
+    setSkillsCount(skillsRes.status === 'fulfilled' ? (skillsRes.value.skills?.filter((s) => s.enabled).length ?? 0) : 0);
+    setBridgeMode(systemRes.status === 'fulfilled' ? 'FastAPI' : 'Legacy');
   }, []);
 
   useEffect(() => {
