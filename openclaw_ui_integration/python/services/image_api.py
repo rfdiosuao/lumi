@@ -10,8 +10,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from PIL import Image
-
 from core.constants import IMAGE_MODEL
 
 
@@ -91,6 +89,10 @@ class ImageApiClient:
         with open(image_path, "rb") as file:
             file_data = file.read()
         try:
+            # Imported lazily so Pillow (a heavy C-extension) stays off the
+            # bridge cold-start path — it is only needed for image editing.
+            from PIL import Image
+
             source = Image.open(io.BytesIO(file_data))
             buffer = io.BytesIO()
             source.save(buffer, format="PNG")
