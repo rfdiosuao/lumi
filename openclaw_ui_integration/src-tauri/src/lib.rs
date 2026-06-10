@@ -12,6 +12,7 @@ use std::time::Duration;
 use tauri::path::BaseDirectory;
 use tauri::{Manager, WindowEvent};
 
+mod bootstrap;
 mod license;
 
 static BRIDGE_PORT: AtomicU16 = AtomicU16::new(0);
@@ -822,9 +823,20 @@ pub fn run() {
                 )?;
             }
             app.handle().plugin(tauri_plugin_shell::init())?;
-            // Start bridge on app launch
+            // Start bridge on app launch. First ensure required runtime layers
+            // are present (no-op unless OPENCLAW_DIST_MANIFEST_URL is set and a
+            // layer is missing — the full/offline package already has them).
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                match bootstrap::install_root() {
+                    Ok(root) => {
+                        if let Err(e) = bootstrap::ensure_layers(root).await {
+                            eprintln!("[Bootstrap error] {}", e);
+                            set_bridge_startup_error(format!("运行时组件下载失败：{}", e));
+                        }
+                    }
+                    Err(e) => eprintln!("[Bootstrap] install root unresolved: {}", e),
+                }
                 if let Err(e) = start_bridge(app_handle).await {
                     eprintln!("[Bridge startup error] {}", e);
                 }
