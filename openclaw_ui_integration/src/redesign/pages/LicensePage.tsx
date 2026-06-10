@@ -1,6 +1,6 @@
 import React from 'react';
 import { BadgeCheck, ExternalLink, RefreshCcw, ShieldCheck } from 'lucide-react';
-import { activateLicense, loadClientConfig, loadLicenseBundle, refreshMember } from '../api/adapters';
+import { activateLicense, loadClientConfig, loadLicenseBundle, refreshMember, startProcess } from '../api/adapters';
 import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
 import { useAsync } from '../lib/useAsync';
 import { usePreviewStore } from '../store/appStore';
@@ -30,6 +30,14 @@ export function LicensePage() {
       await activateLicense(settings, licenseCode.trim());
       pushToast({ tone: 'ok', title: '授权已激活', detail: licenseCode.trim() });
       refresh();
+      // 授权成功后自动拉起核心服务,免去用户再手动点一次「启动」。运行时层在
+      // 首启时已无条件下载,通常此刻已就绪;若仍在初始化则提示稍后手动启动。
+      try {
+        await startProcess(settings);
+        pushToast({ tone: 'ok', title: '核心服务启动中', detail: '授权已生效,正在拉起 OpenClaw 运行时。' });
+      } catch {
+        pushToast({ tone: 'warn', title: '已授权,服务待启动', detail: '运行时可能还在初始化,稍后可在「服务 / CLI」页手动启动。' });
+      }
     } catch (err) {
       pushToast({ tone: 'danger', title: '激活失败', detail: String(err) });
     } finally {
