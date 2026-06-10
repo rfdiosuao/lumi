@@ -8,7 +8,7 @@ import { usePreviewStore } from '../store/appStore';
 export function DesktopPage() {
   const settings = usePreviewStore((state) => state.settings);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const { data, loading, error, refresh } = useAsync(() => loadDesktopSnapshot(settings), [settings]);
+  const { data, loading, error, refresh } = useAsync(() => loadDesktopSnapshot(settings), [settings], { cacheKey: "desktop" });
   const [configDraft, setConfigDraft] = React.useState<Record<string, any>>({});
   const [screenshot, setScreenshot] = React.useState('');
   const [message, setMessage] = React.useState('你好，这是一条来自 OpenClaw 预览控制台的回复。');

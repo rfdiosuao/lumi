@@ -13,7 +13,7 @@ export function LicensePage() {
   const { data, loading, error, refresh } = useAsync(async () => {
     const [bundle, clientConfig] = await Promise.all([loadLicenseBundle(settings), loadClientConfig(settings)]);
     return { ...bundle, clientConfig: clientConfig.data };
-  }, [settings]);
+  }, [settings], { cacheKey: 'license' });
 
   const license = data?.license;
   const member = data?.member;

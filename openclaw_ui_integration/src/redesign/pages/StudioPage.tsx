@@ -40,7 +40,7 @@ export function StudioPage() {
   const settings = usePreviewStore((state) => state.settings);
   const navigate = usePreviewStore((state) => state.navigate);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const { data, loading, error, refresh } = useAsync(() => loadStudioSnapshot(settings), [settings]);
+  const { data, loading, error, refresh } = useAsync(() => loadStudioSnapshot(settings), [settings], { cacheKey: "studio" });
   const [tab, setTab] = React.useState<StudioTab>('image');
   const [imagePrompt, setImagePrompt] = React.useState('一个安静、克制、有玻璃质感的 OpenClaw 启动器界面，冷光、清晰排版、舒适的背景');
   const [imageSize, setImageSize] = React.useState('1024x1024');

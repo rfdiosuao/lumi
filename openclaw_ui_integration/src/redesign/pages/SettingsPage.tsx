@@ -113,7 +113,7 @@ export function SettingsPage() {
     () => buildOpenClawOnboardManualCommand(storeSettings.openaiProxy || ''),
     [storeSettings.openaiProxy],
   );
-  const { data, loading, error, refresh } = useAsync(() => loadSettingsSnapshot(storeSettings), [storeSettings]);
+  const { data, loading, error, refresh } = useAsync(() => loadSettingsSnapshot(storeSettings), [storeSettings], { cacheKey: "settings" });
   const [authProfiles, setAuthProfiles] = React.useState<any>({});
   const [imageConfig, setImageConfig] = React.useState<any>({});
   const [videoConfig, setVideoConfig] = React.useState<any>({});

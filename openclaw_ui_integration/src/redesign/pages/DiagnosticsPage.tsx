@@ -9,7 +9,7 @@ import { CodeBlock } from '../components/ui';
 export function DiagnosticsPage() {
   const settings = usePreviewStore((state) => state.settings);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const { data, loading, error, refresh } = useAsync(() => loadDiagnosticsSnapshot(settings), [settings]);
+  const { data, loading, error, refresh } = useAsync(() => loadDiagnosticsSnapshot(settings), [settings], { cacheKey: "diagnostics", ttlMs: 60000 });
   const [busy, setBusy] = React.useState(false);
 
   const handleRepair = async () => {

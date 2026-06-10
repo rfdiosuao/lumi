@@ -158,7 +158,7 @@ export function IntegrationsPage() {
       settingsSnapshot,
       config: normalizeConfig(rawConfig),
     };
-  }, [settings]);
+  }, [settings], { cacheKey: 'integrations' });
 
   const [draft, setDraft] = React.useState<IntegrationConfig>(() => createDefaultConfig());
   const [bindingTarget, setBindingTarget] = React.useState<ScanPlatformKey | null>(null);

@@ -17,7 +17,7 @@ function readAsDataUrl(file: File) {
 export function SkillsPage() {
   const settings = usePreviewStore((state) => state.settings);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const { data, loading, error, refresh } = useAsync(() => loadSkillsSnapshot(settings), [settings]);
+  const { data, loading, error, refresh } = useAsync(() => loadSkillsSnapshot(settings), [settings], { cacheKey: "skills" });
   const [query, setQuery] = React.useState('');
   const [readme, setReadme] = React.useState<{ title: string; path: string; content: string } | null>(null);
   const [busyId, setBusyId] = React.useState('');

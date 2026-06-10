@@ -8,7 +8,7 @@ import { usePreviewStore } from '../store/appStore';
 export function ServicePage() {
   const settings = usePreviewStore((state) => state.settings);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const { data, loading, error, refresh } = useAsync(() => loadServiceSnapshot(settings), [settings]);
+  const { data, loading, error, refresh } = useAsync(() => loadServiceSnapshot(settings), [settings], { cacheKey: "service" });
   const [updating, setUpdating] = React.useState(false);
 
   const handleStart = async () => {
