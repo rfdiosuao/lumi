@@ -55,14 +55,16 @@ try {
         if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
     }
 
-    # Refresh the bundled bridge with the live python source (the source portable
-    # may be an old snapshot). python-runtime is a sibling layer, not under here,
-    # so mirroring _up_\python is safe. Skip caches.
+    # Refresh the bundled bridge with the live python SOURCE only. CRITICAL: use
+    # /E (overlay), NOT /MIR — the bundled _up_\python also holds ~37MB of
+    # vendored deps (PIL/fastapi/uvicorn/cryptography/…) that are NOT in the repo
+    # python/ tree; /MIR would delete them and brick the bridge. /E updates the
+    # changed .py files and leaves the vendored packages intact.
     if ($PythonSource -ne "") {
         if (-not (Test-Path -LiteralPath $PythonSource)) { throw "PythonSource not found: $PythonSource" }
         $pyDest = Join-Path $stage "OpenClawFiles\_up_\python"
-        Write-Host "Syncing live bridge python -> $pyDest"
-        & robocopy $PythonSource $pyDest /MIR /XD __pycache__ .pytest_cache /XF *.pyc /NFL /NDL /NJH /NJS /NP | Out-Null
+        Write-Host "Overlaying live bridge python -> $pyDest"
+        & robocopy $PythonSource $pyDest /E /XD __pycache__ .pytest_cache /XF *.pyc /NFL /NDL /NJH /NJS /NP | Out-Null
         if ($LASTEXITCODE -ge 8) { throw "python sync robocopy failed with code $LASTEXITCODE" }
         $global:LASTEXITCODE = 0
     }
