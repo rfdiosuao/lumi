@@ -278,6 +278,25 @@ fn extract_targz(archive: &Path, dest_parent: &Path) -> Result<(), String> {
     ar.unpack(dest_parent).map_err(|e| format!("unpack {}: {e}", archive.display()))
 }
 
+/// Rename with backoff retry. A freshly-extracted layer (especially
+/// node_modules — tens of thousands of scripts/executables) is often briefly
+/// held by Windows Defender's real-time scan, so moving the directory fails with
+/// ACCESS_DENIED (os error 5) until the scan finishes. Retrying after a short
+/// wait clears it; the final attempt propagates the real error if it persists.
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut delay = std::time::Duration::from_millis(200);
+    for _ in 0..6 {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(_) => {
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_secs(2));
+            }
+        }
+    }
+    std::fs::rename(from, to)
+}
+
 async fn install_layer(
     app: &AppHandle,
     meta: &ProgressMeta,
@@ -324,9 +343,9 @@ async fn install_layer(
         }
         let backup = target.with_extension(format!("old-{}", std::process::id()));
         if target.exists() {
-            std::fs::rename(&target, &backup).map_err(|e| format!("backup {}: {e}", target.display()))?;
+            rename_with_retry(&target, &backup).map_err(|e| format!("backup {}: {e}", target.display()))?;
         }
-        std::fs::rename(&base, &target).map_err(|e| format!("swap into {}: {e}", target.display()))?;
+        rename_with_retry(&base, &target).map_err(|e| format!("swap into {}: {e}", target.display()))?;
         let marker = serde_json::json!({
             "id": layer.id, "version": layer.version, "sha256": layer.sha256,
             "installedAt": chrono::Utc::now().to_rfc3339(),
