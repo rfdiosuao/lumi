@@ -3,7 +3,31 @@ import { FolderOpen, RefreshCcw, Search, Upload, X } from 'lucide-react';
 import { Button, Chip, EmptyState, InlineState, Modal, Panel, SectionHeader } from '../components/ui';
 import { installSkillZip, loadSkillsSnapshot, readSkillReadme, toggleSkill, uninstallSkill } from '../api/adapters';
 import { useAsync } from '../lib/useAsync';
+import { shortenPaths } from '../lib/format';
 import { usePreviewStore } from '../store/appStore';
+
+// Known OpenClaw skills get a Chinese name + description so the card isn't a
+// raw English npm id. Unknown skills are cleaned up (drop @scope/ and the
+// openclaw- prefix) and fall back to their own description.
+const SKILL_ALIASES: Record<string, { name: string; desc: string }> = {
+  '@larksuite/openclaw-lark': { name: '飞书 / Lark 机器人', desc: '把自动化能力接入飞书消息通道：收发消息、推送任务结果。' },
+  '@tencent-weixin/openclaw-weixin': { name: '微信机器人', desc: '把自动化能力接入微信消息通道：收发消息、推送结果。' },
+};
+const RUNTIME_LABELS: Record<string, string> = { external: '外部插件', node: 'Node 插件', python: 'Python 插件', builtin: '内置' };
+
+function skillDisplay(skill: { id: string; name: string; description?: string }): { name: string; desc: string } {
+  const alias = SKILL_ALIASES[skill.id] || SKILL_ALIASES[skill.name];
+  if (alias) return alias;
+  const cleaned = String(skill.name || skill.id)
+    .replace(/^@[^/]+\//, '')
+    .replace(/openclaw[-_]?/i, '')
+    .replace(/[-_]/g, ' ')
+    .trim();
+  return { name: cleaned || skill.name || skill.id, desc: skill.description?.trim() || '暂无中文说明，可点「说明」查看。' };
+}
+function runtimeLabel(value: string): string {
+  return RUNTIME_LABELS[value] || value;
+}
 
 function readAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -108,7 +132,7 @@ export function SkillsPage() {
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Skill、运行时或分类" />
           </div>
           <div className="detail-stack">
-            <div className="detail-row"><span className="detail-label">状态文件</span><span className="detail-value">{data?.statePath || '暂无'}</span></div>
+            <div className="detail-row"><span className="detail-label">状态文件</span><span className="detail-value" title={data?.statePath}>{shortenPaths(data?.statePath) || '暂无'}</span></div>
             <div className="detail-row"><span className="detail-label">目录</span><span className="detail-value">{data?.directories.length || 0}</span></div>
             <div className="detail-row"><span className="detail-label">站点</span><span className="detail-value">{data?.sites.length || 0}</span></div>
           </div>
@@ -116,7 +140,7 @@ export function SkillsPage() {
             {data?.directories.map((dir) => (
               <div key={dir.key} className="path-card">
                 <strong>{dir.label}</strong>
-                <span>{dir.path}</span>
+                <span title={dir.path}>{shortenPaths(dir.path)}</span>
                 <Chip tone={dir.writable ? 'ok' : 'warn'}>{dir.writable ? '可写' : '只读'}</Chip>
               </div>
             ))}
@@ -136,12 +160,12 @@ export function SkillsPage() {
                   <div className="skill-badge">{skill.icon}</div>
                   <div className="skill-copy">
                     <div className="skill-head">
-                      <strong>{skill.name}</strong>
+                      <strong>{skillDisplay(skill).name}</strong>
                       <Chip tone={skill.enabled ? 'ok' : 'warn'}>{skill.enabled ? '已启用' : '已停用'}</Chip>
                     </div>
-                    <div className="skill-meta">{skill.description}</div>
-                    <div className="skill-meta">{skill.category} · {skill.runtime} · {skill.version}</div>
-                    <div className="skill-meta">{skill.path}</div>
+                    <div className="skill-meta">{skillDisplay(skill).desc}</div>
+                    <div className="skill-meta">{skill.category} · {runtimeLabel(skill.runtime)} · v{skill.version}</div>
+                    <div className="skill-meta" style={{ opacity: 0.55 }} title={`${skill.name}\n${skill.path}`}>{skill.name} · {shortenPaths(skill.path)}</div>
                   </div>
                   <div className="skill-actions">
                     <Button variant={skill.enabled ? 'danger' : 'success'} onClick={() => handleToggle(skill.id, !skill.enabled)} disabled={busyId === skill.id}>

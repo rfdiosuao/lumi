@@ -85,3 +85,14 @@ export function toText(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value.trim() || fallback : fallback;
 }
 
+// Collapse the long machine-specific install-root prefix
+// (e.g. "D:\OpenClaw-Online-v2.0.6 (4)\OpenClawFiles\...") down to
+// "…\OpenClawFiles\..." so paths in the UI stay readable. Works on a bare path
+// or on a sentence with paths embedded (e.g. diagnostics detail strings), and
+// leaves genuine system paths (Program Files, registry) untouched.
+export function shortenPaths(value?: string | null): string {
+  return String(value || '')
+    .replace(/[A-Za-z]:\\[^\\\n;]+\\OpenClawFiles/g, '…\\OpenClawFiles')
+    .replace(/[A-Za-z]:\/[^/\n;]+\/OpenClawFiles/g, '…/OpenClawFiles');
+}
+
