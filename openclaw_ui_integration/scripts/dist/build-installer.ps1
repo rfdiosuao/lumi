@@ -14,6 +14,10 @@ param(
     [Parameter(Mandatory = $true)][string]$ThinZip,
     [string]$Out = "",
     [string]$Version = "2.0.6",
+    # Display brand: installer name, shortcuts, install dir, wizard text. The
+    # payload executable stays OpenClaw.exe (the engine), so the .nsi keeps its
+    # OpenClaw.exe references; only ${APP} (display) follows -AppName.
+    [string]$AppName = "OpenClaw",
     [string]$Makensis = "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe"
 )
 
@@ -47,7 +51,7 @@ try {
     $nsiBom = Join-Path $stage "installer.bom.nsi"
     $nsiText = [System.IO.File]::ReadAllText($nsi, [System.Text.Encoding]::UTF8)
     [System.IO.File]::WriteAllText($nsiBom, $nsiText, (New-Object System.Text.UTF8Encoding $true))
-    $nsisArgs = @("/DAPPVERSION=$Version", "/DPAYLOAD_DIR=$payload", "/DOUTFILE=$outAbs", "/DART_DIR=$artDir")
+    $nsisArgs = @("/DAPP=$AppName", "/DAPPVERSION=$Version", "/DPAYLOAD_DIR=$payload", "/DOUTFILE=$outAbs", "/DART_DIR=$artDir")
     if (Test-Path -LiteralPath $icon) { $nsisArgs += "/DICON=$icon" }
     $nsisArgs += $nsiBom
 

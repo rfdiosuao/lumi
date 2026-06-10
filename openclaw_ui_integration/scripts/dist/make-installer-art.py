@@ -56,7 +56,7 @@ def make_welcome():
         s = 96
         logo = logo.resize((s, s), Image.LANCZOS)
         img.paste(logo, ((w - s) // 2, 46), logo)
-    centered(d, "OpenClaw", font(26), w / 2, 156, (230, 237, 243))
+    centered(d, "LumiClaw", font(26), w / 2, 156, (230, 237, 243))
     centered(d, "满舱清梦压星河", font(13), w / 2, 192, (139, 148, 158))
     centered(d, "AI 自动化启动器", font(12), w / 2, 270, (110, 118, 129))
     img.save(os.path.join(ASSETS, "welcome.bmp"))
@@ -74,7 +74,7 @@ def make_header():
         logo = logo.resize((s, s), Image.LANCZOS)
         img.paste(logo, (x, (h - s) // 2), logo)
         x += s + 8
-    d.text((x, h / 2 - 11), "OpenClaw", font=font(16), fill=(230, 237, 243))
+    d.text((x, h / 2 - 11), "LumiClaw", font=font(16), fill=(230, 237, 243))
     img.save(os.path.join(ASSETS, "header.bmp"))
     print("header.bmp written")
 
