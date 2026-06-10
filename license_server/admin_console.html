@@ -1437,6 +1437,24 @@
             </div>
           </div>
         </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>内测码发放</h2>
+              <p>官网「领取内测码」按钮的每日名额与有效期。每个 IP 每天限领 1 个，领完当日截止，次日 0 点(UTC)重置。</p>
+            </div>
+            <button class="btn" id="saveBetaConfig">保存配置</button>
+          </div>
+          <div class="panel-body">
+            <div class="row2">
+              <div class="field"><label for="betaQuota">每日名额</label><input id="betaQuota" type="number" min="0" placeholder="10" /><div class="hint">每天可被领取的内测码数量。</div></div>
+              <div class="field"><label for="betaValidDays">有效期(天)</label><input id="betaValidDays" type="number" min="1" placeholder="7" /><div class="hint">内测码激活后的有效天数。</div></div>
+            </div>
+            <div class="field"><label for="betaEnabled">开关</label><select id="betaEnabled"><option value="true">开放领取</option><option value="false">暂停发放</option></select></div>
+            <div class="empty" id="betaStatusHint">切到本页自动加载当前配置…</div>
+          </div>
+        </section>
       </section>
 
       <section class="page" id="page-audit">
@@ -3074,6 +3092,51 @@
     clearInviteForm();
     renderStats();
     initializeAuth();
+  </script>
+  <script>
+    // 内测码发放配置(自包含:复用 localStorage 的管理员会话令牌,不依赖主脚本作用域)
+    (function () {
+      var q = function (id) { return document.getElementById(id); };
+      var tok = function () { return (localStorage.getItem("openclawAdminSession") || "").trim(); };
+      async function betaApi(path, opts) {
+        var res = await fetch(location.origin + "/admin/" + path, Object.assign({
+          headers: { "Authorization": "Bearer " + tok(), "Content-Type": "application/json" }
+        }, opts || {}));
+        var j = await res.json().catch(function () { return {}; });
+        if (!res.ok || j.ok === false) throw new Error((j && j.error) || ("HTTP " + res.status));
+        return j;
+      }
+      async function loadBeta() {
+        if (!q("betaQuota")) return;
+        try {
+          var cfg = (await betaApi("api/beta/config")).data || {};
+          q("betaEnabled").value = cfg.enabled ? "true" : "false";
+          q("betaQuota").value = cfg.dailyQuota != null ? cfg.dailyQuota : 10;
+          q("betaValidDays").value = cfg.validDays != null ? cfg.validDays : 7;
+          var st = await fetch(location.origin + "/api/beta/status", { cache: "no-store" }).then(function (r) { return r.json(); });
+          var d = (st && st.data) || {};
+          q("betaStatusHint").textContent = "今日剩余 " + (d.remaining != null ? d.remaining : "?") + "/" + (d.quota != null ? d.quota : "?");
+        } catch (e) { if (q("betaStatusHint")) q("betaStatusHint").textContent = "加载失败：" + e.message; }
+      }
+      async function saveBeta() {
+        var btn = q("saveBetaConfig"); if (!btn) return;
+        var prev = btn.textContent; btn.disabled = true; btn.textContent = "保存中…";
+        try {
+          await betaApi("api/beta/config", { method: "POST", body: JSON.stringify({
+            enabled: q("betaEnabled").value === "true",
+            dailyQuota: parseInt(q("betaQuota").value || "0", 10),
+            validDays: parseInt(q("betaValidDays").value || "7", 10)
+          }) });
+          btn.textContent = "已保存"; await loadBeta(); setTimeout(function () { btn.textContent = prev; }, 1500);
+        } catch (e) { alert("保存失败：" + e.message); btn.textContent = prev; }
+        finally { btn.disabled = false; }
+      }
+      document.addEventListener("click", function (e) {
+        var t = e.target; if (!t) return;
+        if (t.id === "saveBetaConfig") saveBeta();
+        else if (t.dataset && t.dataset.page === "sales") setTimeout(loadBeta, 120);
+      });
+    })();
   </script>
 </body>
 </html>

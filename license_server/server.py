@@ -1140,6 +1140,19 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        create table if not exists beta_claims (
+            id integer primary key autoincrement,
+            day text not null,
+            ip text not null,
+            full_code text not null,
+            expires text not null,
+            created_at text not null,
+            unique(day, ip)
+        )
+        """
+    )
+    conn.execute(
+        """
         create table if not exists account_gateway_settings (
             account_id integer primary key,
             gateway_base_url text not null default '',
@@ -1683,6 +1696,139 @@ def create_code_records(
             codes.append(code)
         conn.commit()
     return codes
+
+
+# --- Daily beta-code claim (public, IP-limited, admin-configurable) ----------
+BETA_CONFIG_KEY = "beta_claim"
+BETA_DEFAULTS = {"enabled": True, "dailyQuota": 10, "validDays": 7, "edition": "trial", "licensee": "内测用户"}
+
+
+def beta_today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def get_beta_config() -> dict[str, Any]:
+    cfg = dict(BETA_DEFAULTS)
+    with connect() as conn:
+        row = conn.execute("select value_json from settings where key = ?", (BETA_CONFIG_KEY,)).fetchone()
+    if row:
+        try:
+            cfg.update(json.loads(row["value_json"]) or {})
+        except Exception:
+            pass
+    cfg["enabled"] = bool(cfg.get("enabled", True))
+    cfg["dailyQuota"] = max(0, int(cfg.get("dailyQuota", 10)))
+    cfg["validDays"] = max(1, int(cfg.get("validDays", 7)))
+    return cfg
+
+
+def set_beta_config(patch: dict[str, Any]) -> dict[str, Any]:
+    cfg = get_beta_config()
+    if "enabled" in patch:
+        cfg["enabled"] = bool(patch["enabled"])
+    if "dailyQuota" in patch:
+        cfg["dailyQuota"] = max(0, min(int(patch["dailyQuota"]), 100000))
+    if "validDays" in patch:
+        cfg["validDays"] = max(1, min(int(patch["validDays"]), 3650))
+    with connect() as conn:
+        conn.execute(
+            "insert into settings (key, value_json, updated_at) values (?, ?, ?) "
+            "on conflict(key) do update set value_json = excluded.value_json, updated_at = excluded.updated_at",
+            (BETA_CONFIG_KEY, json.dumps(cfg, ensure_ascii=False), utc_now()),
+        )
+        conn.commit()
+    return cfg
+
+
+def beta_owner_account_id() -> int:
+    with connect() as conn:
+        row = conn.execute(
+            "select id from accounts where role = ? and status = ? order by id asc limit 1",
+            (ACCOUNT_ROLE_SUPER_ADMIN, ACCOUNT_STATUS_ACTIVE),
+        ).fetchone()
+    return int(row["id"]) if row else 0
+
+
+def beta_claims_count_today() -> int:
+    with connect() as conn:
+        row = conn.execute("select count(*) as c from beta_claims where day = ?", (beta_today(),)).fetchone()
+    return int(row["c"]) if row else 0
+
+
+def beta_status_snapshot() -> dict[str, Any]:
+    cfg = get_beta_config()
+    used = beta_claims_count_today()
+    return {
+        "enabled": cfg["enabled"],
+        "quota": cfg["dailyQuota"],
+        "remaining": max(0, cfg["dailyQuota"] - used),
+        "validDays": cfg["validDays"],
+    }
+
+
+def beta_claim_code(ip: str) -> dict[str, Any]:
+    cfg = get_beta_config()
+    if not cfg["enabled"]:
+        raise ActivationError("内测码发放暂时关闭，稍后再来", status=403)
+
+    def _existing() -> sqlite3.Row | None:
+        with connect() as conn:
+            return conn.execute(
+                "select full_code, expires from beta_claims where day = ? and ip = ?",
+                (beta_today(), ip),
+            ).fetchone()
+
+    def _result(code: str, expires: str, repeat: bool) -> dict[str, Any]:
+        return {
+            "code": code,
+            "expires": expires,
+            "repeat": repeat,
+            "remaining": max(0, cfg["dailyQuota"] - beta_claims_count_today()),
+            "validDays": cfg["validDays"],
+        }
+
+    row = _existing()
+    if row:
+        return _result(row["full_code"], row["expires"], True)
+    if beta_claims_count_today() >= cfg["dailyQuota"]:
+        raise ActivationError("今日内测码已领完，明天再来", status=429)
+
+    owner_id = beta_owner_account_id()
+    gw = apply_account_gateway_defaults({}, owner_id, explicit_body={})
+    expires = add_days_iso(cfg["validDays"])
+    codes = create_code_records(
+        count=1,
+        licensee=str(cfg.get("licensee") or "内测用户"),
+        edition=str(cfg.get("edition") or "trial"),
+        features=list(DEFAULT_FEATURES),
+        expires=expires,
+        max_activations=1,
+        gateway_base_url=str(gw.get("gatewayBaseUrl") or ""),
+        gateway_image_base_url=str(gw.get("gatewayImageBaseUrl") or gw.get("gateway_image_base_url") or ""),
+        gateway_video_base_url=str(gw.get("gatewayVideoBaseUrl") or gw.get("gateway_video_base_url") or ""),
+        gateway_token=str(gw.get("gatewayToken") or ""),
+        gateway_image_token=str(gw.get("gatewayImageToken") or gw.get("gateway_image_token") or ""),
+        gateway_video_token=str(gw.get("gatewayVideoToken") or gw.get("gateway_video_token") or ""),
+        gateway_default_model=str(gw.get("gatewayDefaultModel") or ""),
+        gateway_image_model=str(gw.get("gatewayImageModel") or gw.get("gateway_image_model") or ""),
+        gateway_video_model=str(gw.get("gatewayVideoModel") or gw.get("gateway_video_model") or ""),
+        owner_account_id=owner_id,
+    )
+    code = codes[0]
+    try:
+        with connect() as conn:
+            conn.execute(
+                "insert into beta_claims (day, ip, full_code, expires, created_at) values (?, ?, ?, ?, ?)",
+                (beta_today(), ip, code, expires, utc_now()),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
+        # Concurrent claim from the same IP — return whatever landed.
+        row = _existing()
+        if row:
+            return _result(row["full_code"], row["expires"], True)
+        raise
+    return _result(code, expires, False)
 
 
 def update_code_record(body: dict[str, Any], current_account: dict[str, Any] | None = None) -> None:
@@ -3003,6 +3149,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             self.send_json(200, {"ok": True, "time": utc_now()})
             return
+        if path == "/api/beta/status":
+            self.send_json(200, {"ok": True, "data": beta_status_snapshot()})
+            return
+        if path == "/admin/api/beta/config":
+            if not self.require_admin():
+                return
+            self.send_json(200, {"ok": True, "data": get_beta_config()})
+            return
         if path in {"/api/lumi/relay/health", "/api/lumi/publish/health"}:
             authorized = publish_relay_token_valid(self.headers)
             self.send_json(
@@ -3161,6 +3315,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/beta/claim":
+            try:
+                ip = self.request_ip()
+                rate_limit_consume("beta-claim", ip, limit=20, window_seconds=3600, lockout_seconds=600)
+                self.send_json(200, {"ok": True, "data": beta_claim_code(ip)})
+            except ActivationError as error:
+                self.send_json(error.status, {"ok": False, "error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"ok": False, "error": f"server error: {error}"})
+            return
+        if path == "/admin/api/beta/config":
+            if not self.require_admin():
+                return
+            try:
+                cfg = set_beta_config(self.read_json())
+                self.send_json(200, {"ok": True, "data": cfg})
+            except Exception as error:
+                self.send_json(400, {"ok": False, "error": str(error)})
+            return
         if path == "/admin/api/auth/status":
             self.send_json(405, {"error": "method not allowed"})
             return
