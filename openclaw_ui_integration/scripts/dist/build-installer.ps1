@@ -40,8 +40,19 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path $outAbs -Parent) | Out-Null
     if (Test-Path -LiteralPath $outAbs) { Remove-Item -LiteralPath $outAbs -Force }
 
+    $artDir = Join-Path $here "assets"
+    $icon = [System.IO.Path]::GetFullPath((Join-Path $here "..\..\src-tauri\icons\icon.ico"))
+    # makensis with `Unicode true` needs a UTF-8 BOM to read the Chinese strings;
+    # editors save the .nsi without one, so emit a BOM'd copy just for the build.
+    $nsiBom = Join-Path $stage "installer.bom.nsi"
+    $nsiText = [System.IO.File]::ReadAllText($nsi, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($nsiBom, $nsiText, (New-Object System.Text.UTF8Encoding $true))
+    $nsisArgs = @("/DAPPVERSION=$Version", "/DPAYLOAD_DIR=$payload", "/DOUTFILE=$outAbs", "/DART_DIR=$artDir")
+    if (Test-Path -LiteralPath $icon) { $nsisArgs += "/DICON=$icon" }
+    $nsisArgs += $nsiBom
+
     Write-Host "Compiling installer -> $outAbs"
-    & $Makensis "/DAPPVERSION=$Version" "/DPAYLOAD_DIR=$payload" "/DOUTFILE=$outAbs" $nsi
+    & $Makensis @nsisArgs
     if ($LASTEXITCODE -ne 0) { throw "makensis failed with code $LASTEXITCODE" }
 
     $sizeMB = [math]::Round((Get-Item -LiteralPath $outAbs).Length / 1MB, 1)

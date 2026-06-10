@@ -1,14 +1,15 @@
-; Per-user desktop installer for OpenClaw. Lays the thin-portable payload
-; (OpenClaw.exe + OpenClawFiles skeleton) into %LOCALAPPDATA%\OpenClaw, a
-; writable no-admin location, so the first-run bootstrap can download the
-; runtime layers next to it (the proven portable layout). Re-running the setup
-; overwrites the launcher but leaves the downloaded layers in place, which is
-; also how a launcher self-update applies.
+; Per-user desktop installer for OpenClaw, Modern UI 2 + Simplified Chinese.
+; Lays the thin-portable payload (OpenClaw.exe + OpenClawFiles skeleton) into
+; %LOCALAPPDATA%\OpenClaw (writable, no admin), makes shortcuts, and registers
+; an uninstaller. First run downloads the runtime layers next to it; re-running
+; the setup overwrites the launcher but keeps the layers (the self-update path).
 ;
-; Defines come from build-installer.ps1 via makensis /D flags:
-;   PAYLOAD_DIR, OUTFILE, APPVERSION
+; Defines from build-installer.ps1 via makensis /D:
+;   PAYLOAD_DIR, OUTFILE, APPVERSION, ART_DIR, ICON
 
 Unicode true
+!include "MUI2.nsh"
+
 !ifndef APP
   !define APP "OpenClaw"
 !endif
@@ -21,6 +22,9 @@ Unicode true
 !ifndef APPVERSION
   !define APPVERSION "2.0.6"
 !endif
+!ifndef ART_DIR
+  !define ART_DIR "assets"
+!endif
 
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP}"
 
@@ -30,13 +34,36 @@ RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\${APP}"
 InstallDirRegKey HKCU "Software\${APP}" "InstallDir"
 SetCompressor /SOLID lzma
-ShowInstDetails show
 BrandingText "${APP} ${APPVERSION}"
 
-Page directory
-Page instfiles
-UninstPage uninstConfirm
-UninstPage instfiles
+; --- Modern UI theming ---
+!ifdef ICON
+  !define MUI_ICON "${ICON}"
+  !define MUI_UNICON "${ICON}"
+!endif
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${ART_DIR}\welcome.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "${ART_DIR}\welcome.bmp"
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "${ART_DIR}\header.bmp"
+!define MUI_HEADERIMAGE_RIGHT
+!define MUI_ABORTWARNING
+
+!define MUI_WELCOMEPAGE_TITLE "欢迎安装 ${APP}"
+!define MUI_WELCOMEPAGE_TEXT "即将把 ${APP} ${APPVERSION} 安装到你的电脑（无需管理员权限）。$\r$\n$\r$\n首次启动会自动下载运行组件，请保持联网。$\r$\n$\r$\n点击「下一步」继续。"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "选择安装位置（默认安装到当前用户目录，免管理员）。"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\OpenClaw.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "立即启动 ${APP}"
+!define MUI_FINISHPAGE_TEXT "${APP} 已安装完成。首次启动会下载运行组件，请保持联网。"
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+!insertmacro MUI_LANGUAGE "SimpChinese"
 
 Section "Install"
   ; Stop a running instance so files can be overwritten (self-update case).
