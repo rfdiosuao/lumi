@@ -103,6 +103,14 @@ function createEmptySnapshot(): PhoneSnapshot {
   };
 }
 
+// Module-level snapshot cache so revisiting the phone page (it unmounts on
+// navigation) shows the last device snapshot instantly instead of re-running
+// the heavy probe+snapshot sequence and blocking with a spinner. Within the TTL
+// the network is skipped entirely; past it we show the cached snapshot and
+// refresh in the background.
+const PHONE_SNAPSHOT_TTL_MS = 15000;
+const phoneSnapshotCache = new Map<string, { snapshot: PhoneSnapshot; at: number }>();
+
 function defaultDevice(baseUrl = '', token = ''): PhoneDevice {
   return {
     id: 'primary-phone',
@@ -441,7 +449,9 @@ export function PhonePage() {
     const runId = refreshRunRef.current + 1;
     refreshRunRef.current = runId;
     refreshInFlightRef.current = true;
-    setLoading(true);
+    // Only block with a spinner on the very first load of a device; a revisit
+    // already shows the cached snapshot and refreshes quietly in the background.
+    if (!phoneSnapshotCache.has(device.id)) setLoading(true);
     setError(null);
     try {
       const context = { baseUrl: device.baseUrl, token: device.token };
@@ -483,16 +493,20 @@ export function PhonePage() {
         .filter(Boolean);
       const coreReady = Boolean(status || screenshot || profile || vision);
 
-      setSnapshot((state) => ({
-        ...state,
-        status: status || state.status,
-        screenshotUrl: extractScreenshotUrl(screenshot) || extractScreenshotUrl(vision?.image) || state.screenshotUrl,
-        profile: profile || state.profile,
-        vision: vision || state.vision,
-        tree: tree || state.tree,
-        recordings: recordings?.recordings || state.recordings,
-        recordStatus: recordStatus || state.recordStatus,
-      }));
+      setSnapshot((state) => {
+        const next = {
+          ...state,
+          status: status || state.status,
+          screenshotUrl: extractScreenshotUrl(screenshot) || extractScreenshotUrl(vision?.image) || state.screenshotUrl,
+          profile: profile || state.profile,
+          vision: vision || state.vision,
+          tree: tree || state.tree,
+          recordings: recordings?.recordings || state.recordings,
+          recordStatus: recordStatus || state.recordStatus,
+        };
+        phoneSnapshotCache.set(device.id, { snapshot: next, at: Date.now() });
+        return next;
+      });
 
       if (status || profile || vision) {
         const now = nowIso();
@@ -520,7 +534,19 @@ export function PhonePage() {
   }, [addTaskLog, settings, updateDeviceRuntime]);
 
   React.useEffect(() => {
+    const dev = selectedDevice;
+    if (!dev) return;
+    const cached = phoneSnapshotCache.get(dev.id);
+    if (cached) {
+      // Show the last snapshot immediately so a revisit isn't blank/blocking.
+      setSnapshot(cached.snapshot);
+      setLoading(false);
+      // Within the TTL, skip the network entirely — instant, no probe storm.
+      if (Date.now() - cached.at < PHONE_SNAPSHOT_TTL_MS) return;
+    }
+    // Stale or first time: refresh (background if we already showed a cache).
     refresh('auto');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refresh, selectedDevice?.id, selectedDevice?.baseUrl, selectedDevice?.token]);
 
   const runPhoneAction = async (label: string, path: string, body: Record<string, unknown> = {}) => {
