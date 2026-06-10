@@ -3,6 +3,7 @@ import { Command } from '@tauri-apps/plugin-shell';
 import { Copy, ExternalLink, RefreshCcw, Save, Terminal } from 'lucide-react';
 import { Button, Chip, Field, Input, Panel, SectionHeader, Select, TextArea } from '../components/ui';
 import { loadSettingsSnapshot, readConfigValue, saveAuthProfiles, writeConfigValue } from '../api/adapters';
+import { applyLauncherUpdate, checkLauncherUpdate, type LauncherUpdateInfo } from '../api/client';
 import { makeCommandOptions, resolvePortableBasePath } from '../api/runtimeCommand';
 import { maskSecret } from '../lib/format';
 import { displayPhoneBaseUrl, normalizeOrCleanPhoneBaseUrl } from '../lib/phoneUrl';
@@ -114,6 +115,33 @@ export function SettingsPage() {
     [storeSettings.openaiProxy],
   );
   const { data, loading, error, refresh } = useAsync(() => loadSettingsSnapshot(storeSettings), [storeSettings], { cacheKey: "settings" });
+  const [launcherUpdate, setLauncherUpdate] = React.useState<LauncherUpdateInfo | null>(null);
+  const [launcherUpdateBusy, setLauncherUpdateBusy] = React.useState(false);
+  const handleCheckLauncherUpdate = async () => {
+    setLauncherUpdateBusy(true);
+    try {
+      const info = await checkLauncherUpdate();
+      setLauncherUpdate(info);
+      if (!info.configured) pushToast({ tone: 'warn', title: '未配置更新源', detail: '当前构建未内置启动器更新地址。' });
+      else if (info.available) pushToast({ tone: 'ok', title: '发现新版本', detail: `${info.current} → ${info.latest}` });
+      else pushToast({ tone: 'ok', title: '已是最新', detail: `当前 ${info.current}` });
+    } catch (err) {
+      pushToast({ tone: 'danger', title: '检查更新失败', detail: String(err) });
+    } finally {
+      setLauncherUpdateBusy(false);
+    }
+  };
+  const handleApplyLauncherUpdate = async () => {
+    if (!launcherUpdate?.url) return;
+    setLauncherUpdateBusy(true);
+    try {
+      pushToast({ tone: 'ok', title: '正在下载更新', detail: '下载完成后将启动安装包并退出。' });
+      await applyLauncherUpdate(launcherUpdate.url, launcherUpdate.sha256);
+    } catch (err) {
+      pushToast({ tone: 'danger', title: '更新失败', detail: String(err) });
+      setLauncherUpdateBusy(false);
+    }
+  };
   const [authProfiles, setAuthProfiles] = React.useState<any>({});
   const [imageConfig, setImageConfig] = React.useState<any>({});
   const [videoConfig, setVideoConfig] = React.useState<any>({});
@@ -490,6 +518,29 @@ export function SettingsPage() {
               </Field>
             </section>
           </div>
+        </Panel>
+
+        <Panel className="surface-panel">
+          <SectionHeader
+            eyebrow="启动器更新"
+            title="启动器自更新"
+            subtitle="检查并安装新版启动器；更新只替换启动器本体，已下载的运行时层保留。"
+            action={<Button variant="secondary" icon={RefreshCcw} onClick={handleCheckLauncherUpdate} disabled={launcherUpdateBusy}>检查更新</Button>}
+          />
+          {launcherUpdate ? (
+            <div className="detail-stack">
+              <div className="detail-row"><span className="detail-label">当前版本</span><span className="detail-value">{launcherUpdate.current || '未知'}</span></div>
+              <div className="detail-row"><span className="detail-label">最新版本</span><span className="detail-value">{launcherUpdate.configured ? launcherUpdate.latest : '未配置更新源'}</span></div>
+              {launcherUpdate.notes ? (
+                <div className="detail-row"><span className="detail-label">说明</span><span className="detail-value">{launcherUpdate.notes}</span></div>
+              ) : null}
+              {launcherUpdate.available ? (
+                <Button variant="success" onClick={handleApplyLauncherUpdate} disabled={launcherUpdateBusy}>下载并安装 {launcherUpdate.latest}</Button>
+              ) : null}
+            </div>
+          ) : (
+            <p className="settings-hint">点击右上角「检查更新」获取最新启动器版本（仅桌面安装版支持）。</p>
+          )}
         </Panel>
 
         <Panel className="surface-panel">

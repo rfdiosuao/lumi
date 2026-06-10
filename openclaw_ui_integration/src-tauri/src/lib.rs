@@ -13,6 +13,7 @@ use tauri::path::BaseDirectory;
 use tauri::{Manager, WindowEvent};
 
 mod bootstrap;
+mod launcher_update;
 mod license;
 
 static BRIDGE_PORT: AtomicU16 = AtomicU16::new(0);
@@ -867,6 +868,8 @@ pub fn run() {
             phone_proxy_request,
             export_log,
             open_path,
+            launcher_update::check_launcher_update,
+            launcher_update::apply_launcher_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri");

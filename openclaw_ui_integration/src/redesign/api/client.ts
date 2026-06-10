@@ -31,6 +31,31 @@ export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 }
 
+// --- Launcher self-update (desktop only) ---------------------------------
+export interface LauncherUpdateInfo {
+  available: boolean;
+  current: string;
+  latest: string;
+  url: string;
+  sha256: string;
+  notes: string;
+  configured: boolean;
+}
+
+export async function checkLauncherUpdate(): Promise<LauncherUpdateInfo> {
+  if (!isTauriRuntime()) {
+    return { available: false, current: '', latest: '', url: '', sha256: '', notes: '仅桌面版支持启动器自更新', configured: false };
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('check_launcher_update') as Promise<LauncherUpdateInfo>;
+}
+
+export async function applyLauncherUpdate(url: string, sha256: string): Promise<void> {
+  if (!isTauriRuntime()) throw new Error('仅桌面版支持启动器自更新');
+  const invoke = await getTauriInvoke();
+  await invoke('apply_launcher_update', { url, sha256 });
+}
+
 const LUMI_PAIRING_STORE_KEY = 'openclaw-lumi-secure-pairings-v1';
 const LUMI_LAUNCHER_ID_STORE_KEY = 'openclaw-lumi-launcher-ids-v1';
 const LUMI_LAUNCHER_ID_HEADER = 'X-LUMI-LAUNCHER-ID';
