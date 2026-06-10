@@ -1,6 +1,9 @@
 # Build artifacts
 build/
 dist/
+# ...but the distribution toolkit lives in scripts/dist (source, not build output)
+!openclaw_ui_integration/scripts/dist/
+!openclaw_ui_integration/scripts/dist/**
 __pycache__/
 *.spec
 
