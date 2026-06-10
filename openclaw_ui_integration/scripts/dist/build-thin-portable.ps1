@@ -19,6 +19,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Source,
     [string]$Exe = "",
     [string]$Out = "",
+    # Live python bridge source to sync into the package, so the bundled bridge
+    # isn't frozen at whatever snapshot the source portable was built from.
+    [string]$PythonSource = "",
     [string[]]$RemoveLayers = @(
         "OpenClawFiles\node",
         "OpenClawFiles\node_modules",
@@ -50,6 +53,18 @@ try {
     foreach ($rel in $RemoveLayers) {
         $p = Join-Path $stage $rel
         if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
+    }
+
+    # Refresh the bundled bridge with the live python source (the source portable
+    # may be an old snapshot). python-runtime is a sibling layer, not under here,
+    # so mirroring _up_\python is safe. Skip caches.
+    if ($PythonSource -ne "") {
+        if (-not (Test-Path -LiteralPath $PythonSource)) { throw "PythonSource not found: $PythonSource" }
+        $pyDest = Join-Path $stage "OpenClawFiles\_up_\python"
+        Write-Host "Syncing live bridge python -> $pyDest"
+        & robocopy $PythonSource $pyDest /MIR /XD __pycache__ .pytest_cache /XF *.pyc /NFL /NDL /NJH /NJS /NP | Out-Null
+        if ($LASTEXITCODE -ge 8) { throw "python sync robocopy failed with code $LASTEXITCODE" }
+        $global:LASTEXITCODE = 0
     }
 
     if ($Exe -ne "") {

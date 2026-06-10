@@ -469,7 +469,9 @@ class OpenClawProcessService:
             }
 
     def _read_openclaw_config(self) -> dict:
-        with open(self.paths.openclaw_config, "r", encoding="utf-8") as handle:
+        # utf-8-sig tolerates a leading BOM (some editors/tools add one), which
+        # plain utf-8 + json.load rejects with "Unexpected UTF-8 BOM".
+        with open(self.paths.openclaw_config, "r", encoding="utf-8-sig") as handle:
             config = json.load(handle)
         if not isinstance(config, dict):
             raise ValueError("root value is not an object")
@@ -875,7 +877,7 @@ class OpenClawProcessService:
         if not os.path.exists(file_path):
             return {}
         try:
-            with open(file_path, "r", encoding="utf-8") as handle:
+            with open(file_path, "r", encoding="utf-8-sig") as handle:
                 data = json.load(handle)
             return data if isinstance(data, dict) else {}
         except Exception:
@@ -1387,32 +1389,45 @@ class OpenClawProcessService:
             phone_agent = capabilities.get("phoneAgent") if isinstance(capabilities.get("phoneAgent"), dict) else {}
             version = str(phone_agent.get("verifiedVersion") or "")
             version_code = phone_agent.get("verifiedVersionCode")
-            problems: list[str] = []
-            if schema != "openclaw.launcher.runtime-context.v1":
-                problems.append("schema 不匹配")
-            if not version or version == "unknown":
-                problems.append("phoneAgent.verifiedVersion 为空")
+            phone_verified = bool(version and version != "unknown")
             try:
-                if int(version_code or 0) <= 0:
-                    problems.append("phoneAgent.verifiedVersionCode 无效")
+                phone_verified = phone_verified and int(version_code or 0) > 0
             except Exception:
-                problems.append("phoneAgent.verifiedVersionCode 无效")
+                phone_verified = False
+            schema_ok = schema == "openclaw.launcher.runtime-context.v1"
 
+            # This file is informational and self-healing: the core service
+            # rewrites it on start, and phoneAgent.verifiedVersion only fills in
+            # after the phone agent is verified. So an empty/older value is a
+            # normal "not set up yet" state, not a red failure that alarms users.
+            if schema_ok and phone_verified:
+                return {
+                    "id": "runtime_context",
+                    "label": "Runtime Context",
+                    "status": "ok",
+                    "message": f"运行时上下文正常，Phone Agent {version}/{version_code}",
+                    "detail": path,
+                    "repairable": False,
+                }
+            if not phone_verified:
+                message = "Phone Agent 尚未验证（首次连接手机或启动核心服务后自动写入）"
+            else:
+                message = "运行时上下文为旧版本，启动核心服务时会自动升级"
             return {
                 "id": "runtime_context",
                 "label": "Runtime Context",
-                "status": "fail" if problems else "ok",
-                "message": "；".join(problems) if problems else f"runtime context 正常，Phone Agent {version}/{version_code}",
+                "status": "warn",
+                "message": message,
                 "detail": path,
                 "repairable": False,
             }
-        except Exception as error:
+        except Exception:
             return {
                 "id": "runtime_context",
                 "label": "Runtime Context",
-                "status": "fail",
-                "message": "runtime-context.json 无法解析",
-                "detail": f"{path}；{error}",
+                "status": "warn",
+                "message": "runtime-context.json 暂时无法解析，启动核心服务时会自动重写",
+                "detail": path,
                 "repairable": False,
             }
 
@@ -1441,17 +1456,15 @@ class OpenClawProcessService:
             candidate = os.path.join(os.path.dirname(apk_path), name)
             if self._file_sha256(candidate) == latest_hash:
                 matched_versions.append(name)
-        status = "ok" if matched_versions or "releases" not in apk_path.replace("\\", "/") else "warn"
-        message = (
-            f"已找到 APK，匹配版本文件：{', '.join(matched_versions)}"
-            if matched_versions else
-            "已找到 AgentPhone_latest.apk，但没有匹配到同目录版本化 APK，发布追踪性不足"
-        )
+        # For the end user the only thing that matters is that the APK ships; the
+        # "matching versioned filename" bit is release-hygiene noise, so keep it
+        # in detail rather than raising a scary warning.
+        version_note = f"，匹配版本文件 {', '.join(matched_versions)}" if matched_versions else ""
         return {
             "id": "phone_agent_apk",
             "label": "AgentPhone APK 附件",
-            "status": status,
-            "message": message,
+            "status": "ok",
+            "message": f"已找到 AgentPhone APK（{size_mb:.1f} MB）{version_note}",
             "detail": f"{apk_path}；{size_mb:.1f} MB；SHA256={sha256}",
             "repairable": False,
         }
