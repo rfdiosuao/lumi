@@ -1,5 +1,6 @@
 import React from 'react';
 import { Shell } from './components/Shell';
+import { SetupGate } from './components/SetupGate';
 import { usePreviewStore } from './store/appStore';
 import type { RouteKey } from './types';
 import { DashboardPage } from './pages/DashboardPage';
@@ -105,8 +106,11 @@ export default function App() {
   }, [route, initialized]);
 
   return (
-    <Shell>
-      <PageRouter />
-    </Shell>
+    <>
+      <Shell>
+        <PageRouter />
+      </Shell>
+      <SetupGate />
+    </>
   );
 }

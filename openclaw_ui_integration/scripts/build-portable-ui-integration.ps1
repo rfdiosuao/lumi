@@ -1,7 +1,7 @@
 param(
     [string]$Version = "",
     [string]$PackageName = "",
-    [string]$OpenClawRuntimeVersion = "2026.6.1",
+    [string]$OpenClawRuntimeVersion = "2026.6.5",
     [string]$SeedPortableDir = "",
     [string]$BrandProfile = "openclaw",
     [string]$DesktopAgentSourceRoot = "",

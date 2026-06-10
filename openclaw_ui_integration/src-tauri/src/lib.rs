@@ -830,7 +830,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 match bootstrap::install_root() {
                     Ok(root) => {
-                        if let Err(e) = bootstrap::ensure_layers(root).await {
+                        if let Err(e) = bootstrap::ensure_layers(app_handle.clone(), root).await {
                             eprintln!("[Bootstrap error] {}", e);
                             set_bridge_startup_error(format!("运行时组件下载失败：{}", e));
                         }
