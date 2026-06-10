@@ -177,9 +177,16 @@ async fn install_layer(install_root: &Path, mirrors: &[String], layer: &Layer, c
 /// Ensure all required layers are present. No-op unless a manifest URL is
 /// configured and something is actually missing.
 pub async fn ensure_layers(install_root: PathBuf) -> Result<(), String> {
-    let url = match std::env::var("OPENCLAW_DIST_MANIFEST_URL") {
-        Ok(u) if !u.trim().is_empty() => u,
-        _ => return Ok(()),
+    // Resolution order: runtime env (override/testing) -> compile-time baked
+    // value (set by the slim-installer build) -> inert (portable build).
+    let url = std::env::var("OPENCLAW_DIST_MANIFEST_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .or_else(|| option_env!("OPENCLAW_DIST_MANIFEST_URL").map(str::to_string))
+        .filter(|u| !u.trim().is_empty());
+    let url = match url {
+        Some(u) => u,
+        None => return Ok(()),
     };
     // If everything is already present we don't even need the manifest, but we
     // can't know the layer set without it; fetching is cheap.
