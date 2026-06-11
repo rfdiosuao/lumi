@@ -19,7 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Button, Chip, cx } from './ui';
+import { Button, cx } from './ui';
 import { usePreviewStore, type PreviewSettings } from '../store/appStore';
 import type { RouteKey } from '../types';
 import { isTauriRuntime, resolveBridgeBaseUrl } from '../api/client';
@@ -97,9 +97,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="sidebar-toolbar">
-          <Chip tone={settings.transportMode === 'live' ? 'ok' : settings.transportMode === 'mock' ? 'warn' : 'neutral'}>
-            {settings.transportMode === 'live' ? '真实接口' : settings.transportMode === 'mock' ? '预览模式' : '自动模式'}
-          </Chip>
           <Button
             variant="quiet"
             icon={sidebarCollapsed ? ChevronRight : ChevronLeft}
@@ -150,9 +147,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <div className="topbar-title" data-tauri-drag-region>{ROUTE_COPY[route]?.title || 'OpenClaw preview'}</div>
           </div>
           <div className="topbar-right">
-            <Chip tone={settings.transportMode === 'live' ? 'ok' : settings.transportMode === 'mock' ? 'warn' : 'neutral'}>
-              {settings.transportMode === 'live' ? '真实桥接' : settings.transportMode === 'mock' ? '预览模式' : '自动选择'}
-            </Chip>
             <Button type="button" variant="quiet" icon={BellOff} onClick={clearToasts}>
               清除提示
             </Button>

@@ -5,12 +5,28 @@ from __future__ import annotations
 import base64
 import asyncio
 import datetime
+import json
 import os
+import urllib.request
 
 from fastapi import Request
 
+from core.constants import LICENSE_SERVER_URL
 from services.image_api import ImageApiError
 from services.video_api import VideoApiError
+
+
+def _fetch_templates(kind: str) -> list:
+    """Pull the prompt-template library from the license server. Kept server-side
+    so the URL lives in one place and the webview avoids a cross-origin call."""
+    url = LICENSE_SERVER_URL.rstrip("/") + "/api/templates"
+    if kind in ("image", "video"):
+        url += "?kind=" + kind
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=8) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    items = data.get("data") if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
 
 
 def _generate_image_payload(ctx, body: dict) -> dict:
@@ -160,6 +176,17 @@ def _job_response(ctx, kind: str, label: str, body: dict, target) -> object:
 
 
 def register_media_routes(app, ctx) -> None:
+    @app.get("/api/templates")
+    async def list_prompt_templates(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        kind = str(request.query_params.get("kind", "") or "").strip().lower()
+        try:
+            templates = await asyncio.to_thread(_fetch_templates, kind)
+            return ctx.fastapi_json({"templates": templates})
+        except Exception as exc:  # network/license offline — return empty, client falls back
+            return ctx.fastapi_json({"templates": [], "error": str(exc)})
+
     @app.post("/api/image/generate")
     async def image_generate(request: Request):
         if error := ctx.auth_error(request):

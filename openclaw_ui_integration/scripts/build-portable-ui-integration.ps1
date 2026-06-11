@@ -1,7 +1,7 @@
 param(
     [string]$Version = "",
     [string]$PackageName = "",
-    [string]$OpenClawRuntimeVersion = "2026.6.1",
+    [string]$OpenClawRuntimeVersion = "2026.6.5",
     [string]$SeedPortableDir = "",
     [string]$BrandProfile = "openclaw",
     [string]$DesktopAgentSourceRoot = "",
@@ -1115,17 +1115,27 @@ function Patch-OpenClawPortableRuntime {
     }
     foreach ($file in $runtimeFiles) {
         $content = Get-Content -LiteralPath $file.FullName -Raw
-        $patched = $content.Replace(
-            "const localManualFallbackDelayMs = 15e3;",
-            "const localManualFallbackDelayMs = Number(process.env.OPENCLAW_OAUTH_MANUAL_FALLBACK_MS || 120000);"
-        ).Replace(
-            "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry ``openclaw models auth login --provider openai``.",
-            "If you normally use a proxy, set the OpenAI OAuth proxy in OpenClaw Settings or verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process, then retry ``openclaw models auth login --provider openai``."
-        )
-        if ($patched -eq $content) {
-            throw "OpenAI Codex OAuth runtime patch did not match expected content: $($file.FullName)"
+        $delaySource = "const localManualFallbackDelayMs = 15e3;"
+        $delayTarget = "const localManualFallbackDelayMs = Number(process.env.OPENCLAW_OAUTH_MANUAL_FALLBACK_MS || 120000);"
+        $proxySource = "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry ``openclaw models auth login --provider openai``."
+        $proxyTarget = "If you normally use a proxy, set the OpenAI OAuth proxy in OpenClaw Settings or verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process, then retry ``openclaw models auth login --provider openai``."
+        $patched = $content
+
+        if ($patched.Contains($delaySource)) {
+            $patched = $patched.Replace($delaySource, $delayTarget)
+        } elseif (-not $patched.Contains($delayTarget)) {
+            throw "OpenAI Codex OAuth runtime delay patch did not match expected content: $($file.FullName)"
         }
-        Set-Content -LiteralPath $file.FullName -Value $patched -Encoding UTF8
+
+        if ($patched.Contains($proxySource)) {
+            $patched = $patched.Replace($proxySource, $proxyTarget)
+        } elseif (-not $patched.Contains($proxyTarget)) {
+            throw "OpenAI Codex OAuth runtime proxy hint patch did not match expected content: $($file.FullName)"
+        }
+
+        if ($patched -ne $content) {
+            Set-Content -LiteralPath $file.FullName -Value $patched -Encoding UTF8
+        }
     }
 
     $flowFiles = @(Get-ChildItem -LiteralPath $distDir -File -Filter "openai-chatgpt-oauth-flow.runtime-*.js")
@@ -1134,14 +1144,19 @@ function Patch-OpenClawPortableRuntime {
     }
     foreach ($file in $flowFiles) {
         $content = Get-Content -LiteralPath $file.FullName -Raw
-        $patched = $content.Replace(
-            "const MANUAL_PROMPT_FALLBACK_MS = 15e3;",
-            "const MANUAL_PROMPT_FALLBACK_MS = Number(process.env.OPENCLAW_OAUTH_MANUAL_FALLBACK_MS || 120000);"
-        )
-        if ($patched -eq $content) {
+        $delaySource = "const MANUAL_PROMPT_FALLBACK_MS = 15e3;"
+        $delayTarget = "const MANUAL_PROMPT_FALLBACK_MS = Number(process.env.OPENCLAW_OAUTH_MANUAL_FALLBACK_MS || 120000);"
+        $patched = $content
+
+        if ($patched.Contains($delaySource)) {
+            $patched = $patched.Replace($delaySource, $delayTarget)
+        } elseif (-not $patched.Contains($delayTarget)) {
             throw "OpenAI Codex OAuth flow patch did not match expected content: $($file.FullName)"
         }
-        Set-Content -LiteralPath $file.FullName -Value $patched -Encoding UTF8
+
+        if ($patched -ne $content) {
+            Set-Content -LiteralPath $file.FullName -Value $patched -Encoding UTF8
+        }
     }
 
     Ensure-OpenClawWorkspaceTemplates -OpenClawRoot $openclawRoot

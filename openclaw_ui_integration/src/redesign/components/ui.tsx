@@ -41,6 +41,7 @@ export function Button({
   icon: Icon,
   children,
   className,
+  type = 'button',
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
@@ -49,6 +50,7 @@ export function Button({
   return (
     <button
       {...props}
+      type={type}
       className={cx('button', `button-${variant}`, className)}
     >
       {Icon ? <Icon size={16} /> : null}

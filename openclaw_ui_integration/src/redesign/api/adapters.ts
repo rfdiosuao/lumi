@@ -5,6 +5,7 @@ import type {
   ImageResult,
   LicenseSnapshot,
   MemberSnapshot,
+  PromptTemplate,
   ServiceSnapshot,
   SkillSnapshot,
   StudioSnapshot,
@@ -13,8 +14,7 @@ import type {
   TransportMode,
   VideoResult,
 } from '../types';
-import { bridgeRequest, isTauriRuntime, phoneRequest, resolveBridgeBaseUrl, type PhoneRequestOptions } from './client';
-import { mockBridgeRequest, mockPhoneRequest } from './mock';
+import { bridgeRequest, installDistributionLayer, isTauriRuntime, phoneRequest, resolveBridgeBaseUrl, type PhoneRequestOptions } from './client';
 import { cleanArray, maskSecret, pickText, toBool, toNumber, toText } from '../lib/format';
 import type { PreviewSettings } from '../store/appStore';
 
@@ -146,6 +146,7 @@ export async function requestBridgeData<T = any>(
 ): Promise<RequestResult<T>> {
   const mode = effectiveMode(settings);
   if (mode === 'mock') {
+    const { mockBridgeRequest } = await import('./mock');
     return { data: await mockBridgeRequest(path, method, body) as T, source: 'mock' };
   }
 
@@ -173,6 +174,7 @@ export async function requestPhoneData<T = any>(
 ): Promise<RequestResult<T>> {
   const mode = effectiveMode(settings);
   if (mode === 'mock') {
+    const { mockPhoneRequest } = await import('./mock');
     return { data: await mockPhoneRequest(phone.baseUrl, phone.token, path, method, body) as T, source: 'mock' };
   }
 
@@ -546,7 +548,9 @@ export async function loadStudioSnapshot(settings: PreviewSettings): Promise<Stu
         gatewaySource.apiKey,
         gatewaySource.token,
       )),
-      model: pickText(imageConfig.model, licenseSource.gatewayImageModel, licenseSource.gatewayDefaultModel, gatewaySource.imageModel, gateway.imageModel, gateway.defaultModel, 'gpt-image-2'),
+      // 'gpt-image-2' is the placeholder default, not a real Agnes model — treat it
+      // as unset so the server (license) image model takes effect, like video does.
+      model: pickText(imageConfig.model && imageConfig.model !== 'gpt-image-2' ? imageConfig.model : '', licenseSource.gatewayImageModel, licenseSource.gatewayDefaultModel, gatewaySource.imageModel, gateway.imageModel, gateway.defaultModel, 'gpt-image-2'),
     },
     videoDefaults: {
       apiBase: pickText(
@@ -593,6 +597,47 @@ export async function loadStudioSnapshot(settings: PreviewSettings): Promise<Stu
     imageHistory: [],
     videoHistory: [],
   };
+}
+
+const BUILTIN_TEMPLATES: PromptTemplate[] = [
+  { id: -1, kind: 'image', title: '产品白底图', prompt: '一张高清产品摄影，纯白背景，柔和棚拍光，居中构图，电商主图风格，细节锐利', params: { size: '1024x1024' }, coverUrl: '', tags: ['电商', '产品'], sort: 10 },
+  { id: -2, kind: 'image', title: '国风插画', prompt: '中国风工笔插画，青绿山水，留白，细腻线条，雅致配色，高分辨率', params: { size: '1024x1536' }, coverUrl: '', tags: ['插画', '国风'], sort: 20 },
+  { id: -3, kind: 'video', title: '城市夜景延时', prompt: '繁华都市夜景，车流光轨，霓虹灯，延时摄影质感，电影级色调，运镜平稳', params: { mode: 't2v', resolution: '720P', ratio: '16:9', duration: 5 }, coverUrl: '', tags: ['城市', '延时'], sort: 10 },
+];
+
+// Read the desktop's primary LLM gateway (auth-profiles.json) as {baseUrl, apiKey, model}
+// so it can be pushed to a paired phone. Mirrors SettingsPage.formFromAuthProfiles.
+export async function loadDesktopModelConfig(
+  settings: PreviewSettings,
+): Promise<{ baseUrl: string; apiKey: string; model: string } | null> {
+  // auth-profiles lives under the state dir; the 授权码 sync writes the member
+  // gateway here as the primary provider (same source SettingsPage reads).
+  const src = (await readConfigValue(settings, 'data/.openclaw/agents/main/agent/auth-profiles.json', { models: { providers: {} } })) || {};
+  const providers = (src.models?.providers && typeof src.models.providers === 'object') ? src.models.providers : {};
+  const primaryKey = (src.models?.primary && providers[src.models.primary]) ? src.models.primary : Object.keys(providers)[0];
+  const provider = primaryKey ? (providers[primaryKey] || {}) : {};
+  const models = Array.isArray(provider.models) ? provider.models : [];
+  const firstModel = models.map((m: any) => (typeof m === 'string' ? m : m?.id)).find(Boolean);
+  const baseUrl = String(provider.baseUrl || provider.url || '').trim();
+  const apiKey = String(provider.apiKey || '').trim();
+  const model = String(firstModel || provider.model || '').trim();
+  if (!baseUrl || !apiKey) return null;
+  return { baseUrl, apiKey, model };
+}
+
+export async function loadPromptTemplates(settings: PreviewSettings, kind: 'image' | 'video'): Promise<PromptTemplate[]> {
+  const result = await requestBridgeDataSoft<{ templates?: PromptTemplate[] }>(
+    settings,
+    '/api/templates?kind=' + kind,
+    { templates: [] },
+    4000,
+  );
+  const list = result?.data?.templates;
+  if (Array.isArray(list) && list.length) {
+    return list.filter((item) => item && item.kind === kind);
+  }
+  // License/bridge offline — fall back to the built-in starters so the library is never blank.
+  return BUILTIN_TEMPLATES.filter((item) => item.kind === kind);
 }
 
 function inferVideoProviderId(providerId: unknown, apiBase: unknown, model: unknown): string {
@@ -774,6 +819,14 @@ export async function stopDesktopAgent(settings: PreviewSettings) {
 
 export async function saveDesktopAgentConfig(settings: PreviewSettings, config: Record<string, unknown>) {
   return requestBridgeData(settings, '/api/desktop-agent/config', 'POST', config);
+}
+
+export async function installDesktopAgentLayer(settings: PreviewSettings) {
+  if (effectiveMode(settings) === 'mock') {
+    return { data: { installed: true, layerId: 'luminode-desktop' }, source: 'mock' as DataSource };
+  }
+  await installDistributionLayer('luminode-desktop');
+  return { data: { installed: true, layerId: 'luminode-desktop' }, source: 'live' as DataSource };
 }
 
 export async function loadSettingsSnapshot(settings: PreviewSettings): Promise<SettingsSnapshot> {

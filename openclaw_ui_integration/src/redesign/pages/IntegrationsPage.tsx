@@ -158,7 +158,7 @@ export function IntegrationsPage() {
       settingsSnapshot,
       config: normalizeConfig(rawConfig),
     };
-  }, [settings]);
+  }, [settings], { cacheKey: 'integrations' });
 
   const [draft, setDraft] = React.useState<IntegrationConfig>(() => createDefaultConfig());
   const [bindingTarget, setBindingTarget] = React.useState<ScanPlatformKey | null>(null);
@@ -472,7 +472,6 @@ export function IntegrationsPage() {
               eyebrow="平台"
               title="接入列表"
               subtitle="选择平台后只编辑它自己的字段，避免把所有配置堆到一个表单里。"
-              action={<Chip tone={data.settingsSnapshot.source === 'live' ? 'ok' : 'warn'}>{sourceLabel(data.settingsSnapshot.source)}</Chip>}
             />
             <div className="integration-list">
               {PLATFORM_ORDER.map((id) => {

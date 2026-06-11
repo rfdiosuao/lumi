@@ -12,6 +12,8 @@ use std::time::Duration;
 use tauri::path::BaseDirectory;
 use tauri::{Manager, WindowEvent};
 
+mod bootstrap;
+mod launcher_update;
 mod license;
 
 static BRIDGE_PORT: AtomicU16 = AtomicU16::new(0);
@@ -609,6 +611,16 @@ async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn install_distribution_layer(app: tauri::AppHandle, layer_id: String) -> Result<(), String> {
+    let layer_id = layer_id.trim().to_string();
+    if layer_id.is_empty() {
+        return Err("distribution layer id is empty".to_string());
+    }
+    let root = bootstrap::install_root()?;
+    bootstrap::install_layer_by_id(app, root, layer_id).await
+}
+
+#[tauri::command]
 async fn proxy_request(
     app: tauri::AppHandle,
     path: String,
@@ -822,9 +834,20 @@ pub fn run() {
                 )?;
             }
             app.handle().plugin(tauri_plugin_shell::init())?;
-            // Start bridge on app launch
+            // Start bridge on app launch. First ensure required runtime layers
+            // are present (no-op unless OPENCLAW_DIST_MANIFEST_URL is set and a
+            // layer is missing — the full/offline package already has them).
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                match bootstrap::install_root() {
+                    Ok(root) => {
+                        if let Err(e) = bootstrap::ensure_layers(app_handle.clone(), root).await {
+                            eprintln!("[Bootstrap error] {}", e);
+                            set_bridge_startup_error(format!("运行时组件下载失败：{}", e));
+                        }
+                    }
+                    Err(e) => eprintln!("[Bootstrap] install root unresolved: {}", e),
+                }
                 if let Err(e) = start_bridge(app_handle).await {
                     eprintln!("[Bridge startup error] {}", e);
                 }
@@ -851,10 +874,13 @@ pub fn run() {
             bridge_startup_report,
             verify_license,
             start_bridge,
+            install_distribution_layer,
             proxy_request,
             phone_proxy_request,
             export_log,
             open_path,
+            launcher_update::check_launcher_update,
+            launcher_update::apply_launcher_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri");

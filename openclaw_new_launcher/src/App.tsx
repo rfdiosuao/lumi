@@ -6,7 +6,8 @@ import { WindowTitlebar } from './components/window/WindowTitlebar';
 import { ToastContainer, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
-import { processApi, logApi, updateApi, configApi, licenseApi, waitForProcessReady } from './services/api';
+import { processApi, logApi, updateApi, waitForProcessReady } from './services/api';
+import { detectApiConfigured } from './services/apiStatus';
 import { ThemeProvider } from './providers/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 import { getFeatureDefinition } from './features/registry';
@@ -48,20 +49,6 @@ function DynamicTitle() {
   return null;
 }
 
-const AUTH_PROFILES_PATH = 'data/.openclaw/agents/main/agent/auth-profiles.json';
-
-function hasConfiguredApiProfile(data: unknown): boolean {
-  const models = (data as any)?.models;
-  const providers = models?.providers;
-  if (!providers || typeof providers !== 'object') return false;
-
-  return Object.values(providers).some((provider: any) => {
-    const apiKey = String(provider?.apiKey || '').trim();
-    const baseUrl = String(provider?.baseUrl || provider?.url || '').trim();
-    return apiKey.length > 0 && baseUrl.length > 0;
-  });
-}
-
 export default function App() {
   const {
     currentPage,
@@ -82,22 +69,7 @@ export default function App() {
   const logOffset = useRef(0);
 
   const refreshApiConfigured = React.useCallback(async () => {
-    try {
-      const resp = await configApi.read(AUTH_PROFILES_PATH, { models: { providers: {} } });
-      if (hasConfiguredApiProfile(resp.data)) {
-        setApiConfigured(true);
-        return;
-      }
-      const licenseResp = await licenseApi.current();
-      const license = ((licenseResp as any).gatewayProfile || licenseResp.license || (licenseResp as any).member) as any;
-      const gateway = license?.gateway || {};
-      setApiConfigured(Boolean(
-        String(license?.gatewayBaseUrl || license?.gatewayUrl || license?.baseUrl || gateway?.baseUrl || gateway?.url || '').trim()
-        && String(license?.gatewayAccessToken || license?.gatewayToken || license?.apiKey || license?.memberToken || gateway?.apiKey || gateway?.token || '').trim(),
-      ));
-    } catch {
-      setApiConfigured(false);
-    }
+    setApiConfigured(await detectApiConfigured());
   }, []);
 
   const startLogPolling = () => {
@@ -128,6 +100,31 @@ export default function App() {
     checkLicense();
     refreshApiConfigured();
   }, [checkLicense, refreshApiConfigured]);
+
+  // Reflect an already-running core service when the launcher is reopened, so
+  // status and log polling don't require the user to hit "start" again.
+  useEffect(() => {
+    let cancelled = false;
+    processApi.status().then((status) => {
+      if (!cancelled && status.running) {
+        setServiceRunning(true);
+        setServiceStatus('running');
+      }
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [setServiceRunning, setServiceStatus]);
+
+  // Keep log polling in sync with service state (covers the service already
+  // running on launch, not just the in-session start button).
+  useEffect(() => {
+    if (serviceRunning) startLogPolling();
+    else stopLogPolling();
+    return () => stopLogPolling();
+    // startLogPolling/stopLogPolling are stable closures over refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serviceRunning]);
 
   useEffect(() => {
     const resetOffset = () => {

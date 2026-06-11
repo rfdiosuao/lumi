@@ -12,7 +12,14 @@ export const TerminalPage: React.FC = () => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = React.useState(false);
   const [lastExportPath, setLastExportPath] = React.useState('');
-  const logLines = lines.split('\n').filter(Boolean);
+  // Only render the tail. The live log re-renders on every poll tick (~1s while
+  // the service runs); rendering the full ~1.5k-line buffer as DOM nodes each
+  // time is needless work. The complete log is still kept in the store and
+  // available via "导出日志".
+  const MAX_RENDER_LINES = 800;
+  const allLines = React.useMemo(() => lines.split('\n').filter(Boolean), [lines]);
+  const truncated = allLines.length > MAX_RENDER_LINES;
+  const logLines = truncated ? allLines.slice(-MAX_RENDER_LINES) : allLines;
 
   const scrollToBottom = React.useCallback(() => {
     const el = containerRef.current;
@@ -111,7 +118,9 @@ export const TerminalPage: React.FC = () => {
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-terminal-bg shadow-[0_24px_70px_rgba(0,0,0,0.32)]">
           <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-terminal-header px-4">
             <span className="text-xs font-black uppercase tracking-[0.22em] text-accent">Live Output</span>
-            <span className="text-xs text-text-muted">{logLines.length} lines</span>
+            <span className="text-xs text-text-muted">
+              {truncated ? `显示最近 ${MAX_RENDER_LINES} / ${allLines.length} 行` : `${allLines.length} lines`}
+            </span>
           </div>
           <div
             ref={containerRef}

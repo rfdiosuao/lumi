@@ -1,6 +1,6 @@
 import React from 'react';
 import { Download, RefreshCcw, Server, StopCircle, Trash2 } from 'lucide-react';
-import { Button, Chip, CodeBlock, EmptyState, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
+import { Button, CodeBlock, EmptyState, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
 import { useAsync } from '../lib/useAsync';
 import { loadServiceSnapshot, clearLogs, loadUpdateSnapshot, runUpdate, startProcess, stopProcess } from '../api/adapters';
 import { usePreviewStore } from '../store/appStore';
@@ -8,7 +8,7 @@ import { usePreviewStore } from '../store/appStore';
 export function ServicePage() {
   const settings = usePreviewStore((state) => state.settings);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const { data, loading, error, refresh } = useAsync(() => loadServiceSnapshot(settings), [settings]);
+  const { data, loading, error, refresh } = useAsync(() => loadServiceSnapshot(settings), [settings], { cacheKey: "service" });
   const [updating, setUpdating] = React.useState(false);
 
   const handleStart = async () => {
@@ -102,7 +102,7 @@ export function ServicePage() {
       ) : data ? (
         <section className="content-grid content-grid-service">
           <Panel className="surface-panel">
-            <SectionHeader eyebrow="进程" title="核心服务状态" subtitle="对齐原启动器的 /api/process/* 接口契约。" action={<Chip tone={data.source === 'live' ? 'ok' : 'warn'}>{toCnState(data.source)}</Chip>} />
+            <SectionHeader eyebrow="进程" title="核心服务状态" subtitle="对齐原启动器的 /api/process/* 接口契约。" />
             <div className="detail-stack">
               <div className="detail-row"><span className="detail-label">状态</span><span className="detail-value">{toCnState(data.statusLabel)}</span></div>
               <div className="detail-row"><span className="detail-label">PID</span><span className="detail-value">{data.pid ?? '未知'}</span></div>

@@ -31,6 +31,37 @@ export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 }
 
+// --- Launcher self-update (desktop only) ---------------------------------
+export interface LauncherUpdateInfo {
+  available: boolean;
+  current: string;
+  latest: string;
+  url: string;
+  sha256: string;
+  notes: string;
+  configured: boolean;
+}
+
+export async function checkLauncherUpdate(): Promise<LauncherUpdateInfo> {
+  if (!isTauriRuntime()) {
+    return { available: false, current: '', latest: '', url: '', sha256: '', notes: '仅桌面版支持启动器自更新', configured: false };
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('check_launcher_update') as Promise<LauncherUpdateInfo>;
+}
+
+export async function applyLauncherUpdate(url: string, sha256: string): Promise<void> {
+  if (!isTauriRuntime()) throw new Error('仅桌面版支持启动器自更新');
+  const invoke = await getTauriInvoke();
+  await invoke('apply_launcher_update', { url, sha256 });
+}
+
+export async function installDistributionLayer(layerId: string): Promise<void> {
+  if (!isTauriRuntime()) throw new Error('仅桌面版支持组件安装');
+  const invoke = await getTauriInvoke();
+  await invoke('install_distribution_layer', { layerId });
+}
+
 const LUMI_PAIRING_STORE_KEY = 'openclaw-lumi-secure-pairings-v1';
 const LUMI_LAUNCHER_ID_STORE_KEY = 'openclaw-lumi-launcher-ids-v1';
 const LUMI_LAUNCHER_ID_HEADER = 'X-LUMI-LAUNCHER-ID';
@@ -155,8 +186,8 @@ export async function phoneRequest<T = unknown>(
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
 
   if (isLumiSecurePath(path)) {
-    const requestSigned = async (forcePair = false) => {
-      const pairing = await getOrCreateLumiPairing(normalizedBase, normalizedToken, forcePair);
+    const requestSigned = async (forcePair = false, rotateLauncherId = false) => {
+      const pairing = await getOrCreateLumiPairing(normalizedBase, normalizedToken, forcePair, rotateLauncherId);
       const extraHeaders = await buildLumiHeaders(pairing, normalizedMethod, path, bodyText);
       return rawPhoneRequest<T>(normalizedBase, normalizedToken, path, normalizedMethod, bodyText, extraHeaders, timeoutMs);
     };
@@ -165,7 +196,7 @@ export async function phoneRequest<T = unknown>(
       let lastPairingError: unknown = null;
       for (let attempt = 0; attempt <= LUMI_SIGNATURE_REPAIR_ATTEMPTS; attempt += 1) {
         try {
-          return await requestSigned(attempt > 0);
+          return await requestSigned(attempt > 0, attempt === LUMI_SIGNATURE_REPAIR_ATTEMPTS);
         } catch (error) {
           if (!isLumiPairingError(error)) throw error;
           lastPairingError = error;
@@ -299,7 +330,7 @@ function lumiPairingKey(baseUrl: string, token: string): string {
   return `${baseUrl}\n${token}`;
 }
 
-async function getOrCreateLumiPairing(baseUrl: string, token: string, forcePair = false): Promise<LumiPairing> {
+async function getOrCreateLumiPairing(baseUrl: string, token: string, forcePair = false, rotateLauncherId = false): Promise<LumiPairing> {
   if (!forcePair) {
     const cached = await readLumiPairing(baseUrl, token);
     if (cached?.launcherId && cached.launcherSecret) {
@@ -308,11 +339,11 @@ async function getOrCreateLumiPairing(baseUrl: string, token: string, forcePair 
     }
   }
 
-  const key = lumiPairingKey(baseUrl, token);
+  const key = `${lumiPairingKey(baseUrl, token)}\n${rotateLauncherId ? 'rotate' : 'stable'}`;
   const existing = lumiPairingInflight.get(key);
   if (existing) return existing;
 
-  const pairingPromise = pairLumiSecureChannel(baseUrl, token).finally(() => {
+  const pairingPromise = pairLumiSecureChannel(baseUrl, token, rotateLauncherId).finally(() => {
     if (lumiPairingInflight.get(key) === pairingPromise) {
       lumiPairingInflight.delete(key);
     }
@@ -321,9 +352,9 @@ async function getOrCreateLumiPairing(baseUrl: string, token: string, forcePair 
   return pairingPromise;
 }
 
-async function pairLumiSecureChannel(baseUrl: string, token: string): Promise<LumiPairing> {
+async function pairLumiSecureChannel(baseUrl: string, token: string, rotateLauncherId = false): Promise<LumiPairing> {
   const tokenHashValue = await tokenHash(baseUrl, token);
-  const launcherId = getStableLumiLauncherId(baseUrl, tokenHashValue);
+  const launcherId = rotateLauncherId ? createLumiLauncherId() : getStableLumiLauncherId(baseUrl, tokenHashValue);
   const payload = await rawPhoneRequest<any>(
     baseUrl,
     token,
@@ -411,13 +442,17 @@ function stableLumiLauncherKey(baseUrl: string, tokenHashValue: string): string 
   return `${baseUrl}\n${tokenHashValue}`;
 }
 
+function createLumiLauncherId(): string {
+  return `openclaw-${randomHex(8)}`;
+}
+
 function getStableLumiLauncherId(baseUrl: string, tokenHashValue: string): string {
-  if (typeof window === 'undefined') return `openclaw-${randomHex(8)}`;
+  if (typeof window === 'undefined') return createLumiLauncherId();
   const key = stableLumiLauncherKey(baseUrl, tokenHashValue);
   const items = readStableLumiLauncherIds();
   const existing = getTextValue(items[key]);
   if (existing) return existing;
-  const launcherId = `openclaw-${randomHex(8)}`;
+  const launcherId = createLumiLauncherId();
   saveStableLumiLauncherId(baseUrl, tokenHashValue, launcherId);
   return launcherId;
 }
@@ -439,12 +474,12 @@ function readStableLumiLauncherIds(): Record<string, string> {
   }
 }
 
-export async function warmPhoneSecurePairing(baseUrl: string, token: string, forcePair = false): Promise<PhonePairingSummary> {
+export async function warmPhoneSecurePairing(baseUrl: string, token: string, forcePair = false, rotateLauncherId = false): Promise<PhonePairingSummary> {
   const normalizedBase = normalizePhoneBaseUrl(getTextValue(baseUrl));
   const normalizedToken = getTextValue(token);
   if (!normalizedBase) throw new Error('invalid_phone_base_url');
   if (!normalizedToken) throw new Error('missing_token');
-  return pairingSummary(await getOrCreateLumiPairing(normalizedBase, normalizedToken, forcePair));
+  return pairingSummary(await getOrCreateLumiPairing(normalizedBase, normalizedToken, forcePair, rotateLauncherId));
 }
 
 export async function clearPhoneSecurePairing(baseUrl: string, token: string): Promise<void> {

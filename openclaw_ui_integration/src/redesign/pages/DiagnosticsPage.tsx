@@ -3,13 +3,14 @@ import { Download, RefreshCcw, Wrench } from 'lucide-react';
 import { Button, Chip, EmptyState, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
 import { exportDiagnostics, loadDiagnosticsSnapshot, repairDiagnostics } from '../api/adapters';
 import { useAsync } from '../lib/useAsync';
+import { shortenPaths } from '../lib/format';
 import { usePreviewStore } from '../store/appStore';
 import { CodeBlock } from '../components/ui';
 
 export function DiagnosticsPage() {
   const settings = usePreviewStore((state) => state.settings);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const { data, loading, error, refresh } = useAsync(() => loadDiagnosticsSnapshot(settings), [settings]);
+  const { data, loading, error, refresh } = useAsync(() => loadDiagnosticsSnapshot(settings), [settings], { cacheKey: "diagnostics", ttlMs: 60000 });
   const [busy, setBusy] = React.useState(false);
 
   const handleRepair = async () => {
@@ -66,7 +67,7 @@ export function DiagnosticsPage() {
       ) : data ? (
         <section className="content-grid content-grid-diagnostics">
           <Panel className="surface-panel">
-            <SectionHeader eyebrow="检测项" title="健康报告" subtitle="每一项直接映射诊断报告里的状态、消息和详情。" action={<Chip tone={data.source === 'live' ? 'ok' : 'warn'}>{sourceLabel(data.source)}</Chip>} />
+            <SectionHeader eyebrow="检测项" title="健康报告" subtitle="每一项直接映射诊断报告里的状态、消息和详情。" />
             <div className="check-list">
               {data.checks.map((check) => (
                 <div key={check.id} className={`check-row check-row-${check.status}`}>
@@ -74,8 +75,8 @@ export function DiagnosticsPage() {
                     <strong>{check.label}</strong>
                     <Chip tone={check.status === 'ok' ? 'ok' : check.status === 'warn' ? 'warn' : 'danger'}>{toCnStatus(check.status)}</Chip>
                   </div>
-                  <div className="check-message">{check.message}</div>
-                  {check.detail ? <div className="check-detail">{check.detail}</div> : null}
+                  <div className="check-message">{shortenPaths(check.message)}</div>
+                  {check.detail ? <div className="check-detail" title={check.detail}>{shortenPaths(check.detail)}</div> : null}
                 </div>
               ))}
             </div>
@@ -84,7 +85,7 @@ export function DiagnosticsPage() {
           <Panel className="surface-panel">
             <SectionHeader eyebrow="运行时" title="启动上下文" subtitle="这些字段对应后端诊断返回值。" />
             <div className="detail-stack">
-              <div className="detail-row"><span className="detail-label">根路径</span><span className="detail-value">{data.basePath}</span></div>
+              <div className="detail-row"><span className="detail-label">根路径</span><span className="detail-value" title={data.basePath}>{shortenPaths(data.basePath)}</span></div>
               <div className="detail-row"><span className="detail-label">服务运行</span><span className="detail-value">{data.serviceRunning ? '是' : '否'}</span></div>
               <div className="detail-row"><span className="detail-label">PID</span><span className="detail-value">{data.servicePid ?? '未知'}</span></div>
               <div className="detail-row"><span className="detail-label">启动状态</span><span className="detail-value">{data.startupState}</span></div>
@@ -95,7 +96,7 @@ export function DiagnosticsPage() {
           <Panel className="surface-panel">
             <SectionHeader eyebrow="产物" title="导出与修复记录" subtitle="保留可追踪的诊断产物，方便内测用户反馈。" />
             <div className="detail-stack">
-              <div className="detail-row"><span className="detail-label">快照路径</span><span className="detail-value">{data.startupSnapshotPath || '暂无'}</span></div>
+              <div className="detail-row"><span className="detail-label">快照路径</span><span className="detail-value" title={data.startupSnapshotPath}>{shortenPaths(data.startupSnapshotPath) || '暂无'}</span></div>
               <div className="detail-row"><span className="detail-label">已耗时</span><span className="detail-value">{data.startupElapsedSec}s</span></div>
               <div className="detail-row"><span className="detail-label">超时</span><span className="detail-value">{data.startupTimeoutSec}s</span></div>
             </div>
@@ -121,11 +122,3 @@ function toCnStatus(value: string) {
   return map[String(value || '').toLowerCase()] || value;
 }
 
-function sourceLabel(value: string) {
-  const map: Record<string, string> = {
-    mock: '预览',
-    live: '真实接口',
-    mixed: '混合',
-  };
-  return map[value] || value;
-}

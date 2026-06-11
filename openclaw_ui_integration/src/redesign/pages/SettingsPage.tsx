@@ -1,8 +1,9 @@
 import React from 'react';
 import { Command } from '@tauri-apps/plugin-shell';
-import { Copy, ExternalLink, RefreshCcw, Save, Terminal } from 'lucide-react';
+import { RefreshCcw, Save, Terminal } from 'lucide-react';
 import { Button, Chip, Field, Input, Panel, SectionHeader, Select, TextArea } from '../components/ui';
 import { loadSettingsSnapshot, readConfigValue, saveAuthProfiles, writeConfigValue } from '../api/adapters';
+import { applyLauncherUpdate, checkLauncherUpdate, type LauncherUpdateInfo } from '../api/client';
 import { makeCommandOptions, resolvePortableBasePath } from '../api/runtimeCommand';
 import { maskSecret } from '../lib/format';
 import { displayPhoneBaseUrl, normalizeOrCleanPhoneBaseUrl } from '../lib/phoneUrl';
@@ -33,10 +34,6 @@ const IMAGE_CONFIG_PATH = 'imgapi_config.json';
 const VIDEO_CONFIG_PATH = 'videoapi_config.json';
 const OPENCLAW_CONFIG_PATH = 'data/.openclaw/openclaw.json';
 const OPENAI_OAUTH_FALLBACK_MS = '120000';
-
-function psQuote(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
 
 function normalizeOpenAiProxy(value: string): string {
   const trimmed = value.trim();
@@ -71,49 +68,39 @@ function withOpenAiOAuthEnv<T extends object>(options: T, proxy: string): T & { 
   };
 }
 
-function buildOpenClawManualCommand(proxyValue: string, commandArgs: string): string {
-  const proxy = normalizeOpenAiProxy(proxyValue);
-  const lines = [
-    "$env:OPENCLAW_HOME=(Join-Path $PWD 'data')",
-    "$env:OPENCLAW_STATE_DIR=(Join-Path $PWD 'data\\.openclaw')",
-    "$env:OPENCLAW_CONFIG_PATH=(Join-Path $env:OPENCLAW_STATE_DIR 'openclaw.json')",
-    '$env:OPENCLAW_CONFIG=$env:OPENCLAW_CONFIG_PATH',
-    "$env:OPENCLAW_GATEWAY_PORT='18790'",
-    "$env:NO_COLOR='1'",
-    `$env:OPENCLAW_OAUTH_MANUAL_FALLBACK_MS=${psQuote(OPENAI_OAUTH_FALLBACK_MS)}`,
-    "$env:Path=(Join-Path $PWD 'node')+';'+(Join-Path $PWD 'node_modules\\.bin')+';'+$env:Path",
-  ];
-
-  Object.entries(openAiProxyEnv(proxy)).forEach(([key, value]) => {
-    lines.push(`$env:${key}=${psQuote(value)}`);
-  });
-
-  lines.push(`.\\node\\node.exe .\\node_modules\\openclaw\\openclaw.mjs ${commandArgs}`);
-  return lines.join('; ');
-}
-
-function buildOpenAiCodexManualLoginCommand(proxyValue: string): string {
-  return buildOpenClawManualCommand(proxyValue, 'models auth login --provider openai --method oauth --set-default');
-}
-
-function buildOpenClawOnboardManualCommand(proxyValue: string): string {
-  return buildOpenClawManualCommand(proxyValue, 'onboard');
-}
-
 export function SettingsPage() {
   const storeSettings = usePreviewStore((state) => state.settings);
   const updateSettings = usePreviewStore((state) => state.updateSettings);
   const pushToast = usePreviewStore((state) => state.pushToast);
   const openAiProxy = normalizeOpenAiProxy(storeSettings.openaiProxy || '');
-  const openAiManualLoginCommand = React.useMemo(
-    () => buildOpenAiCodexManualLoginCommand(storeSettings.openaiProxy || ''),
-    [storeSettings.openaiProxy],
-  );
-  const onboardManualCommand = React.useMemo(
-    () => buildOpenClawOnboardManualCommand(storeSettings.openaiProxy || ''),
-    [storeSettings.openaiProxy],
-  );
-  const { data, loading, error, refresh } = useAsync(() => loadSettingsSnapshot(storeSettings), [storeSettings]);
+  const { data, loading, error, refresh } = useAsync(() => loadSettingsSnapshot(storeSettings), [storeSettings], { cacheKey: "settings" });
+  const [launcherUpdate, setLauncherUpdate] = React.useState<LauncherUpdateInfo | null>(null);
+  const [launcherUpdateBusy, setLauncherUpdateBusy] = React.useState(false);
+  const handleCheckLauncherUpdate = async () => {
+    setLauncherUpdateBusy(true);
+    try {
+      const info = await checkLauncherUpdate();
+      setLauncherUpdate(info);
+      if (!info.configured) pushToast({ tone: 'warn', title: '未配置更新源', detail: '当前构建未内置启动器更新地址。' });
+      else if (info.available) pushToast({ tone: 'ok', title: '发现新版本', detail: `${info.current} → ${info.latest}` });
+      else pushToast({ tone: 'ok', title: '已是最新', detail: `当前 ${info.current}` });
+    } catch (err) {
+      pushToast({ tone: 'danger', title: '检查更新失败', detail: String(err) });
+    } finally {
+      setLauncherUpdateBusy(false);
+    }
+  };
+  const handleApplyLauncherUpdate = async () => {
+    if (!launcherUpdate?.url) return;
+    setLauncherUpdateBusy(true);
+    try {
+      pushToast({ tone: 'ok', title: '正在下载更新', detail: '下载完成后将启动安装包并退出。' });
+      await applyLauncherUpdate(launcherUpdate.url, launcherUpdate.sha256);
+    } catch (err) {
+      pushToast({ tone: 'danger', title: '更新失败', detail: String(err) });
+      setLauncherUpdateBusy(false);
+    }
+  };
   const [authProfiles, setAuthProfiles] = React.useState<any>({});
   const [imageConfig, setImageConfig] = React.useState<any>({});
   const [videoConfig, setVideoConfig] = React.useState<any>({});
@@ -122,7 +109,6 @@ export function SettingsPage() {
   const [imageForm, setImageForm] = React.useState<ImageForm>({ baseUrl: '', apiKey: '', model: 'gpt-image-2' });
   const [videoForm, setVideoForm] = React.useState<VideoForm>({ providerId: 'agnes', apiBase: 'https://apihub.agnes-ai.com/v1', apiKey: '', model: 'agnes-video-v2.0' });
   const [onboardRunning, setOnboardRunning] = React.useState(false);
-  const [codexLoginRunning, setCodexLoginRunning] = React.useState(false);
   const [jsonDrafts, setJsonDrafts] = React.useState({
     authProfiles: '{}',
     imageConfig: '{}',
@@ -224,53 +210,6 @@ export function SettingsPage() {
     }
   }, [onboardRunning, openAiProxy, pushToast, storeSettings]);
 
-  const handleOpenAiCodexLogin = React.useCallback(async () => {
-    if (codexLoginRunning) return;
-    setCodexLoginRunning(true);
-    try {
-      const cwd = await resolvePortableBasePath(storeSettings);
-      const args = ['scripts/openclaw-auth-terminal.mjs', 'openai-browser'];
-      const options = withOpenAiOAuthEnv(makeCommandOptions(cwd), openAiProxy);
-      let result;
-
-      try {
-        result = await Command.create('openclaw-auth-openai-browser', args, options).execute();
-      } catch {
-        result = await Command.create('openclaw-auth-openai-browser-node-exe', args, options).execute();
-      }
-
-      if (result.code === 0) {
-        pushToast({
-          tone: 'ok',
-          title: 'OpenAI Codex 登录已打开',
-          detail: '会打开一个 PowerShell 登录窗口，并自动弹出 OpenAI 网页。若窗口没出现，请复制备用命令手动执行。',
-        });
-      } else {
-        pushToast({
-          tone: 'danger',
-          title: 'OpenAI Codex 登录启动失败',
-          detail: commandResultDetail(result),
-        });
-      }
-    } catch (err) {
-      pushToast({ tone: 'danger', title: 'OpenAI Codex 登录启动失败', detail: String(err) });
-    } finally {
-      setCodexLoginRunning(false);
-    }
-  }, [codexLoginRunning, openAiProxy, pushToast, storeSettings]);
-
-  const handleCopyOpenAiCodexCommand = React.useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(openAiManualLoginCommand);
-      pushToast({
-        tone: 'ok',
-        title: '登录命令已复制',
-        detail: '在 OpenClawFiles 目录打开 PowerShell 后粘贴执行。',
-      });
-    } catch (err) {
-      pushToast({ tone: 'danger', title: '复制失败', detail: String(err) });
-    }
-  }, [openAiManualLoginCommand, pushToast]);
 
   const handleSaveConfigs = async () => {
     const nextAuth = withPrimaryProvider(authProfiles, gatewayForm);
@@ -279,7 +218,9 @@ export function SettingsPage() {
       gatewayMode: (imageConfig || {}).gatewayMode || 'manual',
       baseUrl: imageForm.baseUrl.trim(),
       apiKey: imageForm.apiKey.trim(),
-      model: imageForm.model.trim() || 'gpt-image-2',
+      // Don't persist the 'gpt-image-2' placeholder — keep it empty so the server
+      // (license) image model wins, matching how video config behaves.
+      model: imageForm.model.trim() === 'gpt-image-2' ? '' : imageForm.model.trim(),
     };
     const nextVideo = {
       ...(videoConfig || {}),
@@ -375,7 +316,6 @@ export function SettingsPage() {
           <SectionHeader
             eyebrow="统一密钥"
             title="模型、图像、视频密钥"
-            subtitle="字段分别映射到 auth-profiles.json、imgapi_config.json、videoapi_config.json，不改后端字段。"
             action={<Chip tone={gatewayForm.apiKey || imageForm.apiKey || videoForm.apiKey ? 'ok' : 'warn'}>{gatewayForm.apiKey || imageForm.apiKey || videoForm.apiKey ? '已配置' : '缺少密钥'}</Chip>}
           />
           <div className="settings-card-grid">
@@ -400,33 +340,7 @@ export function SettingsPage() {
                 >
                   {onboardRunning ? '正在打开...' : '运行 openclaw onboard'}
                 </Button>
-                <Button
-                  variant="secondary"
-                  icon={ExternalLink}
-                  onClick={handleOpenAiCodexLogin}
-                  disabled={codexLoginRunning}
-                  className="settings-card-action"
-                >
-                  {codexLoginRunning ? '正在打开...' : '打开网页登录'}
-                </Button>
-                <Button
-                  variant="secondary"
-                  icon={Copy}
-                  onClick={handleCopyOpenAiCodexCommand}
-                  className="settings-card-action"
-                >
-                  复制 OpenAI 命令
-                </Button>
               </div>
-              <div className="settings-login-command">
-                <span>onboard 备用命令</span>
-                <code>{onboardManualCommand}</code>
-              </div>
-              <div className="settings-login-command">
-                <span>OpenAI 登录备用命令</span>
-                <code>{openAiManualLoginCommand}</code>
-              </div>
-              <div className="settings-card-note">如果没有弹出终端：进入 OpenClaw.exe 同级的 OpenClawFiles 目录，打开 PowerShell，粘贴备用命令。授权完成后重启核心服务让模型登录生效。</div>
             </section>
 
             <section className="settings-card">
@@ -490,6 +404,29 @@ export function SettingsPage() {
               </Field>
             </section>
           </div>
+        </Panel>
+
+        <Panel className="surface-panel">
+          <SectionHeader
+            eyebrow="启动器更新"
+            title="启动器自更新"
+            subtitle="检查并安装新版启动器；更新只替换启动器本体，已下载的运行时层保留。"
+            action={<Button variant="secondary" icon={RefreshCcw} onClick={handleCheckLauncherUpdate} disabled={launcherUpdateBusy}>检查更新</Button>}
+          />
+          {launcherUpdate ? (
+            <div className="detail-stack">
+              <div className="detail-row"><span className="detail-label">当前版本</span><span className="detail-value">{launcherUpdate.current || '未知'}</span></div>
+              <div className="detail-row"><span className="detail-label">最新版本</span><span className="detail-value">{launcherUpdate.configured ? launcherUpdate.latest : '未配置更新源'}</span></div>
+              {launcherUpdate.notes ? (
+                <div className="detail-row"><span className="detail-label">说明</span><span className="detail-value">{launcherUpdate.notes}</span></div>
+              ) : null}
+              {launcherUpdate.available ? (
+                <Button variant="success" onClick={handleApplyLauncherUpdate} disabled={launcherUpdateBusy}>下载并安装 {launcherUpdate.latest}</Button>
+              ) : null}
+            </div>
+          ) : (
+            <p className="settings-hint">点击右上角「检查更新」获取最新启动器版本（仅桌面安装版支持）。</p>
+          )}
         </Panel>
 
         <Panel className="surface-panel">

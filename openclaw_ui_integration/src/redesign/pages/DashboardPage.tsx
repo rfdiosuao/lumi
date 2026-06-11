@@ -1,6 +1,7 @@
 import {
   ArrowRight,
   Cpu,
+  ExternalLink,
   Gauge,
   Layers3,
   Phone,
@@ -118,6 +119,19 @@ export function DashboardPage() {
     }
   };
 
+  // Open the OpenClaw web console in the system browser. Uses the shell plugin
+  // in the desktop app (so it opens the real browser, not the app webview) and
+  // falls back to window.open in the web preview.
+  const handleOpenConsole = async () => {
+    const url = 'http://127.0.0.1:18790';
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(url);
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
   const handleStop = async () => {
     try {
       await stopProcess(settings);
@@ -138,7 +152,6 @@ export function DashboardPage() {
           <div className="hero-mini-signals">
             <Chip tone={service?.running ? 'ok' : 'warn'}>{service?.running ? '核心运行中' : '核心待启动'}</Chip>
             <Chip tone={gateway?.hasGateway ? 'ok' : 'warn'}>{gateway?.hasGateway ? '接口已配置' : '需要设置接口'}</Chip>
-            <Chip tone={settings.transportMode === 'live' ? 'ok' : 'warn'}>{settings.transportMode === 'live' ? '真实桥接' : '预览模式'}</Chip>
           </div>
         </div>
         <div className="launcher-hero-actions hero-action-card">
@@ -155,6 +168,15 @@ export function DashboardPage() {
                 启动核心
               </Button>
             )}
+            <Button
+              variant="secondary"
+              icon={ExternalLink}
+              onClick={handleOpenConsole}
+              disabled={!service?.running}
+              title={service?.running ? '在浏览器打开 127.0.0.1:18790' : '启动核心后可打开'}
+            >
+              打开网页
+            </Button>
             <Button variant="quiet" icon={RefreshCcw} onClick={refresh}>
               刷新
             </Button>

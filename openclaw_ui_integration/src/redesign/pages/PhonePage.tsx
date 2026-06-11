@@ -1,10 +1,9 @@
 import React from 'react';
 import { Camera, CheckCircle2, Copy, KeyRound, PlayCircle, Plus, RefreshCcw, Save, ShieldCheck, Smartphone, StopCircle, Trash2, Unlock } from 'lucide-react';
 import { Button, Chip, EmptyState, Field, Input, InlineState, Modal, Panel, SectionHeader, TextArea, Toggle } from '../components/ui';
-import { getMockPhoneInventory, removeMockPhoneDevice, setMockPhoneSelection, upsertMockPhoneDevice } from '../api/mock';
 import { formatDateTime, maskSecret } from '../lib/format';
-import { readConfigValue, requestPhoneData, writeConfigValue } from '../api/adapters';
-import { clearPhoneSecurePairing, warmPhoneSecurePairing, type PhonePairingSummary } from '../api/client';
+import { loadDesktopModelConfig, readConfigValue, requestPhoneData, writeConfigValue } from '../api/adapters';
+import { clearPhoneSecurePairing, isTauriRuntime, resolveBridgeBaseUrl, warmPhoneSecurePairing, type PhonePairingSummary } from '../api/client';
 import { displayPhoneBaseUrl, normalizeOrCleanPhoneBaseUrl, normalizePhoneBaseUrl } from '../lib/phoneUrl';
 import { usePreviewStore } from '../store/appStore';
 import QRCode from 'qrcode';
@@ -65,6 +64,31 @@ const CORE_SNAPSHOT_TIMEOUT_MS = 7000;
 const EXTRA_SNAPSHOT_TIMEOUT_MS = 2200;
 const PHONE_AGENT_TASK_TIMEOUT_SEC = 600;
 const PHONE_AGENT_TASK_POLL_SECONDS = PHONE_AGENT_TASK_TIMEOUT_SEC + 20;
+const FLEET_CONCURRENCY = 2;
+
+interface FleetRun {
+  id: number;
+  deviceId: string;
+  deviceName: string;
+  status: 'queued' | 'running' | 'success' | 'error' | 'cancelled';
+  detail?: string;
+}
+
+const MOCK_STATE_STORAGE_KEY = 'ui-redesign-preview.mock-state';
+
+// Read the locally-cached device inventory directly (no mock module import), so
+// the phone page can seed instantly without pulling the heavy mock bundle.
+function readCachedPhoneInventory(): { selectedDeviceId: string | null; devices: any[] } {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MOCK_STATE_STORAGE_KEY) || '{}');
+    return {
+      selectedDeviceId: parsed?.phone?.selectedDeviceId || null,
+      devices: Array.isArray(parsed?.phone?.devices) ? parsed.phone.devices : [],
+    };
+  } catch {
+    return { selectedDeviceId: null, devices: [] };
+  }
+}
 
 function createEmptySnapshot(): PhoneSnapshot {
   return {
@@ -77,6 +101,45 @@ function createEmptySnapshot(): PhoneSnapshot {
     recordStatus: null,
     agentTask: null,
   };
+}
+
+// Module-level snapshot cache so revisiting the phone page (it unmounts on
+// navigation) shows the last device snapshot instantly instead of re-running
+// the heavy probe+snapshot sequence and blocking with a spinner. Within the TTL
+// the network is skipped entirely; past it we show the cached snapshot and
+// refresh in the background.
+const PHONE_SNAPSHOT_TTL_MS = 15000;
+const phoneSnapshotCache = new Map<string, { snapshot: PhoneSnapshot; at: number }>();
+
+// Parse a phone pairing code into {baseUrl, token, name}. The APKClaw「电脑配对」
+// screen shows a QR + code; both encode the phone's own connection info so the
+// desktop can fill the form in one paste instead of typing IP/port/Token.
+// Accepts: lumi://pair?b=&t=&n= , base64url(JSON{b,t,n}) , or raw JSON.
+function parsePairCode(raw: string): { baseUrl: string; token: string; name?: string } | null {
+  const code = (raw || '').trim();
+  if (!code) return null;
+  const pick = (obj: Record<string, any>) => {
+    const baseUrl = String(obj.b || obj.baseUrl || obj.url || '').trim();
+    const token = String(obj.t || obj.token || '').trim();
+    const name = String(obj.n || obj.name || '').trim();
+    return baseUrl && token ? { baseUrl, token, name: name || undefined } : null;
+  };
+  try {
+    if (code.toLowerCase().startsWith('lumi://pair')) {
+      const q = new URLSearchParams(code.slice(code.indexOf('?') + 1));
+      return pick(Object.fromEntries(q.entries()));
+    }
+    try {
+      let b64 = code.replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      return pick(JSON.parse(new TextDecoder().decode(bytes)));
+    } catch {
+      return pick(JSON.parse(code));
+    }
+  } catch {
+    return null;
+  }
 }
 
 function defaultDevice(baseUrl = '', token = ''): PhoneDevice {
@@ -176,6 +239,11 @@ function errorText(error: unknown): string {
   return String(error || 'unknown_error');
 }
 
+function isLumiRepairError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('lumi_signature_repair_failed') || lower.includes('invalid lumi signature') || lower.includes('unknown lumi launcher') || lower.includes('missing lumi security headers');
+}
+
 function authErrorHelp(message: string): string {
   const lower = message.toLowerCase();
   if (lower.includes('missing_token')) return '缺少 APKClaw Token。请在手机端查看控制台令牌并填入。';
@@ -190,18 +258,33 @@ function authErrorHelp(message: string): string {
   return message;
 }
 
+function fleetStatusLabel(status: FleetRun['status']): string {
+  switch (status) {
+    case 'queued': return '排队中';
+    case 'running': return '执行中';
+    case 'success': return '成功';
+    case 'cancelled': return '已取消';
+    default: return '失败';
+  }
+}
+
 export function PhonePage() {
   const settings = usePreviewStore((state) => state.settings);
   const updateSettings = usePreviewStore((state) => state.updateSettings);
   const selectedPhoneId = usePreviewStore((state) => state.selectedPhoneId);
   const setSelectedPhoneId = usePreviewStore((state) => state.setSelectedPhoneId);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const initialInventory = React.useMemo(() => getMockPhoneInventory(), []);
+  // Best-effort instant seed from the locally-cached inventory, read inline so
+  // the heavy mock module stays out of the production bundle. The config-load
+  // effect below is the source of truth and corrects this on mount.
+  const initialInventory = React.useMemo(() => readCachedPhoneInventory(), []);
   const [devices, setDevices] = React.useState<PhoneDevice[]>(() => initialInventory.devices.map((item: any, index: number) => normalizePhoneDevice(item, `mock-${index + 1}`)).filter(Boolean) as PhoneDevice[]);
   const [snapshot, setSnapshot] = React.useState<PhoneSnapshot>(() => createEmptySnapshot());
   const [selectedId, setSelectedId] = React.useState<string | null>(selectedPhoneId || initialInventory.selectedDeviceId || devices[0]?.id || null);
   const [deviceDraft, setDeviceDraft] = React.useState<PhoneDevice>(() => devices[0] || defaultDevice(settings.phoneBaseUrl, settings.phoneToken));
   const [configOpen, setConfigOpen] = React.useState(false);
+  const [pairCode, setPairCode] = React.useState('');
+  const [syncingModel, setSyncingModel] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [checkingDevice, setCheckingDevice] = React.useState(false);
@@ -223,11 +306,39 @@ export function PhonePage() {
   const [sending, setSending] = React.useState(false);
   const [activeTaskId, setActiveTaskId] = React.useState('');
   const [taskLogs, setTaskLogs] = React.useState<TaskLogEntry[]>([]);
+  const [fleetTargetIds, setFleetTargetIds] = React.useState<string[]>([]);
+  const [fleetRuns, setFleetRuns] = React.useState<FleetRun[]>([]);
+  const [fleetRunning, setFleetRunning] = React.useState(false);
+  const [fleetCancelling, setFleetCancelling] = React.useState(false);
+  const fleetCancelRef = React.useRef(false);
+  const fleetRunSeqRef = React.useRef(0);
+  const fleetInFlightRef = React.useRef<Map<number, { device: PhoneDevice; taskId: string }>>(new Map());
   const taskRunRef = React.useRef(0);
   const selectedDeviceRef = React.useRef<PhoneDevice | null>(null);
   const refreshRunRef = React.useRef(0);
   const refreshInFlightRef = React.useRef(false);
   const taskBusyRef = React.useRef(false);
+
+  // Mock mode is only ever entered explicitly or in non-Tauri web preview; the
+  // real desktop app stays 'live'. Keep the mock device-store sync gated to mock
+  // mode and lazy-loaded so the ~969-line mock module stays out of the live
+  // first-load bundle.
+  const mockMode =
+    settings.transportMode === 'mock' ||
+    (settings.transportMode === 'auto' && !isTauriRuntime() && !resolveBridgeBaseUrl(settings.bridgeBaseUrl));
+
+  const upsertMockPhoneDevice = React.useCallback((device: PhoneDevice | Record<string, any>) => {
+    if (!mockMode) return;
+    void import('../api/mock').then((mock) => mock.upsertMockPhoneDevice(device)).catch(() => undefined);
+  }, [mockMode]);
+  const setMockPhoneSelection = React.useCallback((deviceId: string | null) => {
+    if (!mockMode) return;
+    void import('../api/mock').then((mock) => mock.setMockPhoneSelection(deviceId)).catch(() => undefined);
+  }, [mockMode]);
+  const removeMockPhoneDevice = React.useCallback((deviceId: string) => {
+    if (!mockMode) return;
+    void import('../api/mock').then((mock) => mock.removeMockPhoneDevice(deviceId)).catch(() => undefined);
+  }, [mockMode]);
 
   const draftPersisted = Boolean(deviceDraft.id && devices.some((device) => device.id === deviceDraft.id));
   const selectedDevice = selectedId ? devices.find((device) => device.id === selectedId) || null : null;
@@ -376,7 +487,9 @@ export function PhonePage() {
     const runId = refreshRunRef.current + 1;
     refreshRunRef.current = runId;
     refreshInFlightRef.current = true;
-    setLoading(true);
+    // Only block with a spinner on the very first load of a device; a revisit
+    // already shows the cached snapshot and refreshes quietly in the background.
+    if (!phoneSnapshotCache.has(device.id)) setLoading(true);
     setError(null);
     try {
       const context = { baseUrl: device.baseUrl, token: device.token };
@@ -418,16 +531,20 @@ export function PhonePage() {
         .filter(Boolean);
       const coreReady = Boolean(status || screenshot || profile || vision);
 
-      setSnapshot((state) => ({
-        ...state,
-        status: status || state.status,
-        screenshotUrl: extractScreenshotUrl(screenshot) || extractScreenshotUrl(vision?.image) || state.screenshotUrl,
-        profile: profile || state.profile,
-        vision: vision || state.vision,
-        tree: tree || state.tree,
-        recordings: recordings?.recordings || state.recordings,
-        recordStatus: recordStatus || state.recordStatus,
-      }));
+      setSnapshot((state) => {
+        const next = {
+          ...state,
+          status: status || state.status,
+          screenshotUrl: extractScreenshotUrl(screenshot) || extractScreenshotUrl(vision?.image) || state.screenshotUrl,
+          profile: profile || state.profile,
+          vision: vision || state.vision,
+          tree: tree || state.tree,
+          recordings: recordings?.recordings || state.recordings,
+          recordStatus: recordStatus || state.recordStatus,
+        };
+        phoneSnapshotCache.set(device.id, { snapshot: next, at: Date.now() });
+        return next;
+      });
 
       if (status || profile || vision) {
         const now = nowIso();
@@ -455,7 +572,19 @@ export function PhonePage() {
   }, [addTaskLog, settings, updateDeviceRuntime]);
 
   React.useEffect(() => {
+    const dev = selectedDevice;
+    if (!dev) return;
+    const cached = phoneSnapshotCache.get(dev.id);
+    if (cached) {
+      // Show the last snapshot immediately so a revisit isn't blank/blocking.
+      setSnapshot(cached.snapshot);
+      setLoading(false);
+      // Within the TTL, skip the network entirely — instant, no probe storm.
+      if (Date.now() - cached.at < PHONE_SNAPSHOT_TTL_MS) return;
+    }
+    // Stale or first time: refresh (background if we already showed a cache).
     refresh('auto');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refresh, selectedDevice?.id, selectedDevice?.baseUrl, selectedDevice?.token]);
 
   const runPhoneAction = async (label: string, path: string, body: Record<string, unknown> = {}) => {
@@ -607,6 +736,153 @@ export function PhonePage() {
     }
   };
 
+  const toggleFleetTarget = React.useCallback((deviceId: string) => {
+    setFleetTargetIds((current) =>
+      current.includes(deviceId) ? current.filter((id) => id !== deviceId) : [...current, deviceId],
+    );
+  }, []);
+
+  const handleCancelFleet = React.useCallback(async () => {
+    if (!fleetCancelRef.current) {
+      fleetCancelRef.current = true;
+      setFleetCancelling(true);
+      addTaskLog('warn', '正在停止群控批次…');
+    }
+    // 还没开跑的立即标记取消；在飞的逐个向手机发取消请求，让其轮询循环尽快结束。
+    setFleetRuns((runs) => runs.map((run) => (run.status === 'queued' ? { ...run, status: 'cancelled', detail: '已取消' } : run)));
+    const inflight = Array.from(fleetInFlightRef.current.values());
+    await Promise.all(
+      inflight.map(({ device, taskId }) =>
+        requestPhoneData(
+          settings,
+          { baseUrl: device.baseUrl, token: device.token },
+          `/api/lumi/agent/tasks/${encodeURIComponent(taskId)}/cancel`,
+          'POST',
+          {},
+          { timeoutMs: 30_000 },
+        ).catch(() => undefined),
+      ),
+    );
+  }, [settings, addTaskLog]);
+
+  const handleRunFleet = async () => {
+    const prompt = actionPrompt.trim();
+    if (!prompt) {
+      pushToast({ tone: 'warn', title: '任务说明不能为空' });
+      return;
+    }
+    // 目标从当前设备列表取，并过滤掉没配置 baseUrl/token 的，避免提交必然失败的请求。
+    const selected = devices.filter((device) => fleetTargetIds.includes(device.id));
+    const targets = selected.filter((device) => normalizePhoneBaseUrl(device.baseUrl) && device.token.trim());
+    if (!targets.length) {
+      pushToast({ tone: 'warn', title: selected.length ? '所选设备还没配置地址/Token' : '请至少选择一台设备' });
+      return;
+    }
+    const skipped = selected.length - targets.length;
+    if (skipped > 0) addTaskLog('warn', `已跳过 ${skipped} 台未配置的设备`);
+
+    fleetCancelRef.current = false;
+    fleetInFlightRef.current = new Map();
+    setFleetCancelling(false);
+    setFleetRunning(true);
+    const batch: FleetRun[] = targets.map((device) => ({
+      id: (fleetRunSeqRef.current += 1),
+      deviceId: device.id,
+      deviceName: device.name || device.id,
+      status: 'queued',
+    }));
+    setFleetRuns(batch);
+    addTaskLog('info', `群控任务已启动：${targets.length} 台`, prompt);
+
+    let success = 0;
+    let failed = 0;
+    let cancelled = 0;
+
+    const runFleetDevice = async (device: PhoneDevice, runId: number): Promise<FleetRun['status']> => {
+      const update = (patch: Partial<FleetRun>) =>
+        setFleetRuns((runs) => runs.map((run) => (run.id === runId ? { ...run, ...patch } : run)));
+      update({ status: 'running' });
+      try {
+        const start = await requestPhoneData<any>(
+          settings,
+          { baseUrl: device.baseUrl, token: device.token },
+          '/api/lumi/agent/tasks',
+          'POST',
+          { prompt, use_template: true, force_agent: false, read_only: false, tool_policy: 'safe_action', timeout_sec: PHONE_AGENT_TASK_TIMEOUT_SEC },
+          { timeoutMs: 60_000 },
+        );
+        const taskId = extractTaskId(start.data);
+        if (!taskId) throw new Error('APKClaw did not return a task id.');
+        fleetInFlightRef.current.set(runId, { device, taskId });
+        for (let i = 0; i < PHONE_AGENT_TASK_POLL_SECONDS; i += 1) {
+          if (fleetCancelRef.current) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          if (fleetCancelRef.current) break;
+          const result = await requestPhoneData<any>(
+            settings,
+            { baseUrl: device.baseUrl, token: device.token },
+            `/api/lumi/agent/tasks/${encodeURIComponent(taskId)}`,
+            'GET',
+            undefined,
+            { timeoutMs: 15_000 },
+          );
+          const task = result.data;
+          if (terminalTaskStatus(task?.status)) {
+            const lower = String(task?.status || '').toLowerCase();
+            const outcome: FleetRun['status'] = lower === 'success' ? 'success' : lower.includes('cancel') ? 'cancelled' : 'error';
+            update({ status: outcome, detail: task?.result?.answer || task?.error || '' });
+            return outcome;
+          }
+        }
+        if (fleetCancelRef.current) {
+          update({ status: 'cancelled', detail: '已取消' });
+          return 'cancelled';
+        }
+        update({ status: 'error', detail: '任务轮询超时' });
+        return 'error';
+      } catch (err) {
+        const aborted = fleetCancelRef.current;
+        const message = aborted ? '已取消' : authErrorHelp(errorText(err));
+        update({ status: aborted ? 'cancelled' : 'error', detail: message });
+        return aborted ? 'cancelled' : 'error';
+      } finally {
+        fleetInFlightRef.current.delete(runId);
+      }
+    };
+
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < targets.length) {
+        if (fleetCancelRef.current) break;
+        const index = nextIndex;
+        nextIndex += 1;
+        const outcome = await runFleetDevice(targets[index], batch[index].id);
+        if (outcome === 'success') success += 1;
+        else if (outcome === 'cancelled') cancelled += 1;
+        else failed += 1;
+      }
+    };
+
+    try {
+      await Promise.all(Array.from({ length: Math.min(FLEET_CONCURRENCY, targets.length) }, worker));
+      // 补算「还没轮到就被取消」的目标。
+      cancelled += Math.max(0, targets.length - (success + failed + cancelled));
+      if (fleetCancelRef.current) {
+        pushToast({ tone: 'warn', title: '群控已停止', detail: `成功 ${success} · 失败 ${failed} · 取消 ${cancelled}` });
+      } else if (failed > 0) {
+        pushToast({ tone: failed === targets.length ? 'danger' : 'warn', title: '群控完成', detail: `成功 ${success}/${targets.length}（失败 ${failed}）` });
+      } else {
+        pushToast({ tone: 'ok', title: '群控完成', detail: `${success} 台全部成功` });
+      }
+      addTaskLog(failed || cancelled ? 'warn' : 'ok', '群控结束', `成功 ${success} · 失败 ${failed} · 取消 ${cancelled}`);
+    } finally {
+      fleetCancelRef.current = false;
+      fleetInFlightRef.current = new Map();
+      setFleetCancelling(false);
+      setFleetRunning(false);
+    }
+  };
+
   const handleToggleRecord = async () => {
     const active = Boolean(snapshot.recordStatus?.recording);
     const result = await runPhoneAction(active ? '录屏已停止' : '录屏已开始', active ? '/api/lumi/media/record/stop' : '/api/lumi/media/record/start');
@@ -616,10 +892,80 @@ export function PhonePage() {
   const handleAddDevice = () => {
     const draft = createPhoneDeviceDraft(devices);
     setDeviceDraft(draft);
-    setSelectedId(draft.id);
     setConfigOpen(true);
-    setSnapshot(createEmptySnapshot());
     setAuthState({ tone: 'neutral', title: '新设备待验证', detail: '输入局域网 IP 会自动补全 http:// 和 9527 端口。' });
+  };
+
+  const handleApplyPairCode = () => {
+    const parsed = parsePairCode(pairCode);
+    if (!parsed) {
+      pushToast({ tone: 'danger', title: '配对码无法识别', detail: '请粘贴手机「电脑配对」里显示的配对码或二维码内容。' });
+      return;
+    }
+    setDeviceDraft((state) => ({
+      ...state,
+      name: parsed.name || state.name,
+      baseUrl: normalizePhoneInputDraft(parsed.baseUrl),
+      token: parsed.token,
+    }));
+    setConfigOpen(true);
+    setPairCode('');
+    pushToast({ tone: 'ok', title: '已填入配对码', detail: '地址和 Token 已自动填好，点「保存并验证」完成安全配对。' });
+  };
+
+  const handleSyncModel = async () => {
+    if (!selectedDevice) return;
+    setSyncingModel(true);
+    try {
+      const cfg = await loadDesktopModelConfig(settings);
+      if (!cfg) {
+        pushToast({ tone: 'danger', title: '电脑未配置主模型', detail: '请先在「统一设置 → 主模型网关」填好地址和密钥。' });
+        return;
+      }
+      const device = selectedDevice;
+      const context = { baseUrl: device.baseUrl, token: device.token };
+      const syncOnce = async (forcePair = false, rotateLauncherId = false) => {
+        await requestPhoneData(settings, context, '/api/device/status', 'GET', undefined, { timeoutMs: 12_000 });
+        const pairing = await warmPhoneSecurePairing(device.baseUrl, device.token, forcePair, rotateLauncherId);
+        await requestPhoneData(settings, context, '/api/lumi/device/profile?includeApps=false&appLimit=1', 'GET', undefined, { timeoutMs: 12_000 });
+        await requestPhoneData(
+          settings,
+          context,
+          '/api/lumi/config/llm/import',
+          'POST',
+          cfg,
+          { timeoutMs: 15_000 },
+        );
+        return pairing;
+      };
+
+      let pairing: PhonePairingSummary;
+      try {
+        pairing = await syncOnce(false, false);
+      } catch (firstError) {
+        const rawMessage = errorText(firstError);
+        if (!isLumiRepairError(rawMessage)) throw firstError;
+        addTaskLog('warn', '安全通道失效，正在重建', authErrorHelp(rawMessage));
+        await clearPhoneSecurePairing(device.baseUrl, device.token);
+        pairing = await syncOnce(true, true);
+      }
+      const now = nowIso();
+      updateDeviceRuntime(device.id, { online: true, lastSeenAt: now, lastAuthorizedAt: now });
+      setAuthState({
+        tone: 'ok',
+        title: 'Token 与 Lumi 安全通道已验证',
+        detail: `Launcher ${pairing.launcherId.slice(0, 18)} · 过期 ${formatDateTime(pairing.expiresAt)}`,
+        pairing,
+      });
+      pushToast({ tone: 'ok', title: '模型已同步到手机', detail: `${cfg.model || '默认模型'} · ${selectedDevice.name}` });
+      addTaskLog('ok', '模型已同步到手机', `${cfg.baseUrl} / ${cfg.model}`);
+    } catch (err) {
+      const message = authErrorHelp(errorText(err));
+      pushToast({ tone: 'danger', title: '同步模型失败', detail: message });
+      addTaskLog('danger', '同步模型失败', message);
+    } finally {
+      setSyncingModel(false);
+    }
   };
 
   const buildValidatedDraft = React.useCallback((): { device?: PhoneDevice; error?: string } => {
@@ -748,6 +1094,7 @@ export function PhonePage() {
           <Button variant="quiet" icon={Smartphone} onClick={() => setApkModalOpen(true)}>下载手机端App</Button>
           <Button variant="primary" icon={RefreshCcw} onClick={() => refresh('manual')} disabled={!selectedDevice || loading}>刷新</Button>
           <Button variant="secondary" icon={Camera} onClick={handleCapture} disabled={!selectedDevice}>截图</Button>
+          <Button variant="secondary" icon={Save} onClick={handleSyncModel} disabled={!selectedDevice || syncingModel}>{syncingModel ? '同步中…' : '同步模型到手机'}</Button>
           <Button variant="success" icon={Unlock} onClick={handleWake} disabled={!selectedDevice}>唤醒</Button>
         </div>
       </section>
@@ -848,12 +1195,94 @@ export function PhonePage() {
           </Panel>
 
           <Panel className="surface-panel">
+            <SectionHeader
+              eyebrow="群控 Fleet"
+              title="多设备批量执行"
+              subtitle="对选中的设备并发下发同一个「任务说明」，可随时停止，结束后汇总成败。"
+              action={
+                <Button
+                  variant="quiet"
+                  onClick={() => setFleetTargetIds(devices.filter((device) => normalizePhoneBaseUrl(device.baseUrl) && device.token.trim()).map((device) => device.id))}
+                  disabled={fleetRunning || devices.length === 0}
+                >
+                  全选已配置
+                </Button>
+              }
+            />
+            {devices.length === 0 ? (
+              <EmptyState title="还没有设备" description="先在上方新增并验证至少一台 APKClaw 设备。" />
+            ) : (
+              <div className="detail-stack">
+                {devices.map((device) => {
+                  const configured = Boolean(normalizePhoneBaseUrl(device.baseUrl) && device.token.trim());
+                  return (
+                    <label
+                      key={device.id}
+                      className="detail-row"
+                      style={{ cursor: configured && !fleetRunning ? 'pointer' : 'not-allowed', opacity: configured ? 1 : 0.5 }}
+                    >
+                      <span className="detail-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={fleetTargetIds.includes(device.id)}
+                          disabled={fleetRunning || !configured}
+                          onChange={() => toggleFleetTarget(device.id)}
+                        />
+                        {device.name || device.id}
+                      </span>
+                      <span className="detail-value">{configured ? displayPhoneBaseUrl(device.baseUrl) : '未配置'}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <div className="button-row">
+              {fleetRunning ? (
+                <Button variant="danger" icon={StopCircle} onClick={() => void handleCancelFleet()} disabled={fleetCancelling}>
+                  {fleetCancelling ? '停止中...' : '停止群控'}
+                </Button>
+              ) : (
+                <Button variant="success" icon={PlayCircle} onClick={() => void handleRunFleet()} disabled={fleetTargetIds.length === 0}>
+                  运行选中设备（{fleetTargetIds.length}）
+                </Button>
+              )}
+            </div>
+            {fleetRuns.length > 0 ? (
+              <div className="detail-stack">
+                {fleetRuns.map((run) => (
+                  <div key={run.id} className="detail-row">
+                    <span className="detail-label">{run.deviceName}</span>
+                    <span className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <Chip tone={run.status === 'success' ? 'ok' : run.status === 'error' ? 'danger' : run.status === 'cancelled' ? 'warn' : 'neutral'}>
+                        {fleetStatusLabel(run.status)}
+                      </Chip>
+                      {run.detail ? (
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200, fontSize: 12, opacity: 0.75 }}>
+                          {run.detail}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </Panel>
+
+          <Panel className="surface-panel">
             <details
               className="settings-details"
               open={configOpen}
               onToggle={(event) => setConfigOpen(event.currentTarget.open)}
             >
               <summary>设备配置</summary>
+              <div className="phone-paircode">
+                <Field label="扫码配对 · 配对码" hint="手机 APKClaw「电脑配对」里显示配对码/二维码，粘贴到这里自动填好地址和 Token">
+                  <div className="phone-paircode-row">
+                    <Input value={pairCode} onChange={(event) => setPairCode(event.target.value)} placeholder="粘贴 lumi://pair... 或配对码" />
+                    <Button variant="secondary" onClick={handleApplyPairCode} disabled={!pairCode.trim()}>解析</Button>
+                  </div>
+                </Field>
+              </div>
               <div className="form-grid form-grid-phone">
                 <Field label="设备 ID"><Input value={deviceDraft.id} onChange={(event) => setDeviceDraft((state) => ({ ...state, id: event.target.value }))} /></Field>
                 <Field label="名称"><Input value={deviceDraft.name} onChange={(event) => setDeviceDraft((state) => ({ ...state, name: event.target.value }))} placeholder="Redmi Note" /></Field>

@@ -10,8 +10,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from PIL import Image
-
 from core.constants import IMAGE_MODEL
 
 
@@ -57,6 +55,11 @@ class ImageApiClient:
         model: str = "",
     ) -> list[bytes]:
         base_url = base_url.rstrip("/")
+        # The request builders append "/v1/images/...", so the base must be the
+        # provider root. Tolerate a base that already ends in /v1 (e.g. copied
+        # from a member-gateway URL) instead of producing a broken /v1/v1 path.
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3].rstrip("/")
         count = max(1, min(count, 9))
         try:
             request = self._build_edit_request(base_url, prompt, size, edit_image_path, model=model) if edit_image_path else self._build_generation_request(base_url, prompt, size, count=count, model=model)
@@ -91,6 +94,10 @@ class ImageApiClient:
         with open(image_path, "rb") as file:
             file_data = file.read()
         try:
+            # Imported lazily so Pillow (a heavy C-extension) stays off the
+            # bridge cold-start path — it is only needed for image editing.
+            from PIL import Image
+
             source = Image.open(io.BytesIO(file_data))
             buffer = io.BytesIO()
             source.save(buffer, format="PNG")

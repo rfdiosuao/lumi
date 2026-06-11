@@ -1,6 +1,6 @@
 import React from 'react';
 import { BadgeCheck, ExternalLink, RefreshCcw, ShieldCheck } from 'lucide-react';
-import { activateLicense, loadClientConfig, loadLicenseBundle, refreshMember } from '../api/adapters';
+import { activateLicense, loadClientConfig, loadLicenseBundle, refreshMember, startProcess } from '../api/adapters';
 import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
 import { useAsync } from '../lib/useAsync';
 import { usePreviewStore } from '../store/appStore';
@@ -13,7 +13,7 @@ export function LicensePage() {
   const { data, loading, error, refresh } = useAsync(async () => {
     const [bundle, clientConfig] = await Promise.all([loadLicenseBundle(settings), loadClientConfig(settings)]);
     return { ...bundle, clientConfig: clientConfig.data };
-  }, [settings]);
+  }, [settings], { cacheKey: 'license' });
 
   const license = data?.license;
   const member = data?.member;
@@ -30,6 +30,14 @@ export function LicensePage() {
       await activateLicense(settings, licenseCode.trim());
       pushToast({ tone: 'ok', title: '授权已激活', detail: licenseCode.trim() });
       refresh();
+      // 授权成功后自动拉起核心服务,免去用户再手动点一次「启动」。运行时层在
+      // 首启时已无条件下载,通常此刻已就绪;若仍在初始化则提示稍后手动启动。
+      try {
+        await startProcess(settings);
+        pushToast({ tone: 'ok', title: '核心服务启动中', detail: '授权已生效,正在拉起 OpenClaw 运行时。' });
+      } catch {
+        pushToast({ tone: 'warn', title: '已授权,服务待启动', detail: '运行时可能还在初始化,稍后可在「服务 / CLI」页手动启动。' });
+      }
     } catch (err) {
       pushToast({ tone: 'danger', title: '激活失败', detail: String(err) });
     } finally {
@@ -50,9 +58,19 @@ export function LicensePage() {
     }
   };
 
-  const openCardSite = () => {
-    if (!cardSite?.url) return;
-    window.open(cardSite.url, '_blank', 'noopener,noreferrer');
+  // window.open is a no-op inside the Tauri webview — use the shell opener so the
+  // card site launches in the real browser, falling back to window.open in web preview.
+  const openCardSite = async () => {
+    if (!cardSite?.url) {
+      pushToast({ tone: 'warn', title: '发卡网站未配置', detail: '服务端 client-config 未返回 cardSite.url。' });
+      return;
+    }
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(cardSite.url);
+    } catch {
+      window.open(cardSite.url, '_blank', 'noopener,noreferrer');
+    }
   };
 
   return (
@@ -61,7 +79,6 @@ export function LicensePage() {
         <div className="hero-copy">
           <div className="eyebrow">授权内测</div>
           <h1>授权、成员状态和发卡入口集中管理。</h1>
-          <p>授权码仍然走现有接口；发卡网站按钮读取服务端 client-config，不在前端写死。成员信息只展示服务端租约和用量。</p>
         </div>
         <div className="hero-actions">
           <Button variant="primary" icon={RefreshCcw} onClick={refresh}>
@@ -92,8 +109,6 @@ export function LicensePage() {
             <SectionHeader
               eyebrow="授权"
               title="当前授权"
-              subtitle="对齐 /api/license/current 返回的 license 与 gatewayProfile 字段。"
-              action={<Chip tone={license?.authorized ? 'ok' : 'warn'}>{sourceLabel(license?.rawHint || 'mock')}</Chip>}
             />
             {license?.authorized ? (
               <div className="detail-stack">
@@ -105,7 +120,7 @@ export function LicensePage() {
                 <div className="detail-row"><span className="detail-label">网关</span><span className="detail-value">{license.gatewayBaseUrl || '暂无'}</span></div>
               </div>
             ) : (
-              <EmptyState title="暂无授权" description="在右侧授权码区域激活后，会显示授权主体、版本、能力和网关信息。" />
+              <EmptyState title="暂无授权" description="在右侧输入授权码激活。" />
             )}
           </Panel>
 
@@ -113,7 +128,6 @@ export function LicensePage() {
             <SectionHeader
               eyebrow="激活"
               title="授权码"
-              subtitle="这里只保留授权码激活。成员信息通过服务端租约刷新。"
             />
             <Field label="授权码" hint="OC-PRO-xxxx-xxxx">
               <Input value={licenseCode} onChange={(event) => setLicenseCode(event.target.value)} placeholder="OC-PRO-XXXX-XXXX-XXXX-XXXX" />
@@ -157,7 +171,6 @@ export function LicensePage() {
             <SectionHeader
               eyebrow="网关 / 发卡"
               title="服务端配置映射"
-              subtitle="发卡网站来自 /api/license/client-config 的 cardSite.label 与 cardSite.url。"
               action={<Chip tone={cardSite?.enabled ? 'ok' : 'neutral'}>{cardSite?.enabled ? '服务端开启' : '未开启'}</Chip>}
             />
             <div className="detail-stack">
@@ -182,15 +195,6 @@ export function LicensePage() {
       ) : null}
     </div>
   );
-}
-
-function sourceLabel(value: string) {
-  const map: Record<string, string> = {
-    mock: '预览',
-    live: '真实接口',
-    mixed: '混合',
-  };
-  return map[value] || value;
 }
 
 function displayEdition(value?: string) {
