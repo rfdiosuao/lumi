@@ -55,6 +55,18 @@ try {
         if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
     }
 
+    # Drop per-user state files so the installer's `File /r` never clobbers a
+    # user's saved settings on update. Missing = the app reads default {} and
+    # recreates on first save; member users also fall back to the license gateway.
+    $userState = @(
+        "OpenClawFiles\imgapi_config.json",
+        "OpenClawFiles\video_config.json"
+    )
+    foreach ($rel in $userState) {
+        $p = Join-Path $stage $rel
+        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }
+    }
+
     # Refresh the bundled bridge with the live python SOURCE only. CRITICAL: use
     # /E (overlay), NOT /MIR — the bundled _up_\python also holds ~37MB of
     # vendored deps (PIL/fastapi/uvicorn/cryptography/…) that are NOT in the repo
