@@ -111,6 +111,37 @@ function createEmptySnapshot(): PhoneSnapshot {
 const PHONE_SNAPSHOT_TTL_MS = 15000;
 const phoneSnapshotCache = new Map<string, { snapshot: PhoneSnapshot; at: number }>();
 
+// Parse a phone pairing code into {baseUrl, token, name}. The APKClaw「电脑配对」
+// screen shows a QR + code; both encode the phone's own connection info so the
+// desktop can fill the form in one paste instead of typing IP/port/Token.
+// Accepts: lumi://pair?b=&t=&n= , base64url(JSON{b,t,n}) , or raw JSON.
+function parsePairCode(raw: string): { baseUrl: string; token: string; name?: string } | null {
+  const code = (raw || '').trim();
+  if (!code) return null;
+  const pick = (obj: Record<string, any>) => {
+    const baseUrl = String(obj.b || obj.baseUrl || obj.url || '').trim();
+    const token = String(obj.t || obj.token || '').trim();
+    const name = String(obj.n || obj.name || '').trim();
+    return baseUrl && token ? { baseUrl, token, name: name || undefined } : null;
+  };
+  try {
+    if (code.toLowerCase().startsWith('lumi://pair')) {
+      const q = new URLSearchParams(code.slice(code.indexOf('?') + 1));
+      return pick(Object.fromEntries(q.entries()));
+    }
+    try {
+      let b64 = code.replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      return pick(JSON.parse(new TextDecoder().decode(bytes)));
+    } catch {
+      return pick(JSON.parse(code));
+    }
+  } catch {
+    return null;
+  }
+}
+
 function defaultDevice(baseUrl = '', token = ''): PhoneDevice {
   return {
     id: 'primary-phone',
@@ -247,6 +278,7 @@ export function PhonePage() {
   const [selectedId, setSelectedId] = React.useState<string | null>(selectedPhoneId || initialInventory.selectedDeviceId || devices[0]?.id || null);
   const [deviceDraft, setDeviceDraft] = React.useState<PhoneDevice>(() => devices[0] || defaultDevice(settings.phoneBaseUrl, settings.phoneToken));
   const [configOpen, setConfigOpen] = React.useState(false);
+  const [pairCode, setPairCode] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [checkingDevice, setCheckingDevice] = React.useState(false);
@@ -858,6 +890,23 @@ export function PhonePage() {
     setAuthState({ tone: 'neutral', title: '新设备待验证', detail: '输入局域网 IP 会自动补全 http:// 和 9527 端口。' });
   };
 
+  const handleApplyPairCode = () => {
+    const parsed = parsePairCode(pairCode);
+    if (!parsed) {
+      pushToast({ tone: 'danger', title: '配对码无法识别', detail: '请粘贴手机「电脑配对」里显示的配对码或二维码内容。' });
+      return;
+    }
+    setDeviceDraft((state) => ({
+      ...state,
+      name: parsed.name || state.name,
+      baseUrl: normalizePhoneInputDraft(parsed.baseUrl),
+      token: parsed.token,
+    }));
+    setConfigOpen(true);
+    setPairCode('');
+    pushToast({ tone: 'ok', title: '已填入配对码', detail: '地址和 Token 已自动填好，点「保存并验证」完成安全配对。' });
+  };
+
   const buildValidatedDraft = React.useCallback((): { device?: PhoneDevice; error?: string } => {
     const normalizedBaseUrl = normalizePhoneBaseUrl(deviceDraft.baseUrl);
     if (deviceDraft.baseUrl.trim() && !normalizedBaseUrl) {
@@ -1164,6 +1213,14 @@ export function PhonePage() {
               onToggle={(event) => setConfigOpen(event.currentTarget.open)}
             >
               <summary>设备配置</summary>
+              <div className="phone-paircode">
+                <Field label="扫码配对 · 配对码" hint="手机 APKClaw「电脑配对」里显示配对码/二维码，粘贴到这里自动填好地址和 Token">
+                  <div className="phone-paircode-row">
+                    <Input value={pairCode} onChange={(event) => setPairCode(event.target.value)} placeholder="粘贴 lumi://pair... 或配对码" />
+                    <Button variant="secondary" onClick={handleApplyPairCode} disabled={!pairCode.trim()}>解析</Button>
+                  </div>
+                </Field>
+              </div>
               <div className="form-grid form-grid-phone">
                 <Field label="设备 ID"><Input value={deviceDraft.id} onChange={(event) => setDeviceDraft((state) => ({ ...state, id: event.target.value }))} /></Field>
                 <Field label="名称"><Input value={deviceDraft.name} onChange={(event) => setDeviceDraft((state) => ({ ...state, name: event.target.value }))} placeholder="Redmi Note" /></Field>

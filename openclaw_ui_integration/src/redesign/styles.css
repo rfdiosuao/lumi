@@ -1276,6 +1276,21 @@ a {
   100% { margin-left: 100%; }
 }
 
+.phone-paircode {
+  margin-bottom: 12px;
+}
+
+.phone-paircode-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.phone-paircode-row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
 .template-gallery {
   margin-bottom: 14px;
   padding: 12px;
