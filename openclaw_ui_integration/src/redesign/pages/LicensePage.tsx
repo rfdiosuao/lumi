@@ -58,9 +58,19 @@ export function LicensePage() {
     }
   };
 
-  const openCardSite = () => {
-    if (!cardSite?.url) return;
-    window.open(cardSite.url, '_blank', 'noopener,noreferrer');
+  // window.open is a no-op inside the Tauri webview — use the shell opener so the
+  // card site launches in the real browser, falling back to window.open in web preview.
+  const openCardSite = async () => {
+    if (!cardSite?.url) {
+      pushToast({ tone: 'warn', title: '发卡网站未配置', detail: '服务端 client-config 未返回 cardSite.url。' });
+      return;
+    }
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(cardSite.url);
+    } catch {
+      window.open(cardSite.url, '_blank', 'noopener,noreferrer');
+    }
   };
 
   return (
@@ -69,7 +79,6 @@ export function LicensePage() {
         <div className="hero-copy">
           <div className="eyebrow">授权内测</div>
           <h1>授权、成员状态和发卡入口集中管理。</h1>
-          <p>授权码仍然走现有接口；发卡网站按钮读取服务端 client-config，不在前端写死。成员信息只展示服务端租约和用量。</p>
         </div>
         <div className="hero-actions">
           <Button variant="primary" icon={RefreshCcw} onClick={refresh}>
@@ -100,7 +109,6 @@ export function LicensePage() {
             <SectionHeader
               eyebrow="授权"
               title="当前授权"
-              subtitle="对齐 /api/license/current 返回的 license 与 gatewayProfile 字段。"
               action={<Chip tone={license?.authorized ? 'ok' : 'warn'}>{sourceLabel(license?.rawHint || 'mock')}</Chip>}
             />
             {license?.authorized ? (
@@ -113,7 +121,7 @@ export function LicensePage() {
                 <div className="detail-row"><span className="detail-label">网关</span><span className="detail-value">{license.gatewayBaseUrl || '暂无'}</span></div>
               </div>
             ) : (
-              <EmptyState title="暂无授权" description="在右侧授权码区域激活后，会显示授权主体、版本、能力和网关信息。" />
+              <EmptyState title="暂无授权" description="在右侧输入授权码激活。" />
             )}
           </Panel>
 
@@ -121,7 +129,6 @@ export function LicensePage() {
             <SectionHeader
               eyebrow="激活"
               title="授权码"
-              subtitle="这里只保留授权码激活。成员信息通过服务端租约刷新。"
             />
             <Field label="授权码" hint="OC-PRO-xxxx-xxxx">
               <Input value={licenseCode} onChange={(event) => setLicenseCode(event.target.value)} placeholder="OC-PRO-XXXX-XXXX-XXXX-XXXX" />
@@ -165,7 +172,6 @@ export function LicensePage() {
             <SectionHeader
               eyebrow="网关 / 发卡"
               title="服务端配置映射"
-              subtitle="发卡网站来自 /api/license/client-config 的 cardSite.label 与 cardSite.url。"
               action={<Chip tone={cardSite?.enabled ? 'ok' : 'neutral'}>{cardSite?.enabled ? '服务端开启' : '未开启'}</Chip>}
             />
             <div className="detail-stack">
