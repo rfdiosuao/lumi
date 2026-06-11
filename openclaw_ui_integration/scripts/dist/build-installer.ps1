@@ -14,10 +14,12 @@ param(
     [Parameter(Mandatory = $true)][string]$ThinZip,
     [string]$Out = "",
     [string]$Version = "2.0.6",
-    # Display brand: installer name, shortcuts, install dir, wizard text. The
-    # payload executable stays OpenClaw.exe (the engine), so the .nsi keeps its
-    # OpenClaw.exe references; only ${APP} (display) follows -AppName.
+    # -AppName = install IDENTITY (folder + registry + uninstall key). MUST stay
+    # "OpenClaw" so updates land in-place over the legacy OpenClaw installs.
+    # -Brand = DISPLAY brand (window title, shortcuts, wizard text) = "LumiClaw".
+    # The payload executable is always OpenClaw.exe (the engine).
     [string]$AppName = "OpenClaw",
+    [string]$Brand = "LumiClaw",
     [string]$Makensis = "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe"
 )
 
@@ -28,7 +30,7 @@ $nsi = Join-Path $here "installer.nsi"
 if (-not (Test-Path -LiteralPath $ThinZip)) { throw "ThinZip not found: $ThinZip" }
 if (-not (Test-Path -LiteralPath $Makensis)) { throw "makensis not found: $Makensis (install via a Tauri NSIS build, or set -Makensis)" }
 if (-not (Test-Path -LiteralPath $nsi)) { throw "installer.nsi not found: $nsi" }
-if ($Out -eq "") { $Out = Join-Path (Split-Path $ThinZip -Parent) ("OpenClaw-Setup-v$Version.exe") }
+if ($Out -eq "") { $Out = Join-Path (Split-Path $ThinZip -Parent) ("$Brand-Setup-v$Version.exe") }
 
 $stage = Join-Path $env:TEMP ("openclaw-setup-" + [System.IO.Path]::GetRandomFileName())
 $payload = Join-Path $stage "payload"
@@ -51,7 +53,7 @@ try {
     $nsiBom = Join-Path $stage "installer.bom.nsi"
     $nsiText = [System.IO.File]::ReadAllText($nsi, [System.Text.Encoding]::UTF8)
     [System.IO.File]::WriteAllText($nsiBom, $nsiText, (New-Object System.Text.UTF8Encoding $true))
-    $nsisArgs = @("/DAPP=$AppName", "/DAPPVERSION=$Version", "/DPAYLOAD_DIR=$payload", "/DOUTFILE=$outAbs", "/DART_DIR=$artDir")
+    $nsisArgs = @("/DAPP=$AppName", "/DBRAND=$Brand", "/DAPPVERSION=$Version", "/DPAYLOAD_DIR=$payload", "/DOUTFILE=$outAbs", "/DART_DIR=$artDir")
     if (Test-Path -LiteralPath $icon) { $nsisArgs += "/DICON=$icon" }
     $nsisArgs += $nsiBom
 
