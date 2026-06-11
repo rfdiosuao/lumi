@@ -158,6 +158,17 @@ export interface StudioSnapshot {
   videoHistory: VideoResult[];
 }
 
+export interface PromptTemplate {
+  id: number;
+  kind: 'image' | 'video';
+  title: string;
+  prompt: string;
+  params: Record<string, any>;
+  coverUrl: string;
+  tags: string[];
+  sort: number;
+}
+
 export interface PhoneDeviceSummary {
   id: string;
   name: string;

@@ -1,9 +1,9 @@
 import React from 'react';
 import { Film, ImagePlus, RefreshCcw, Settings2, Upload, X } from 'lucide-react';
 import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, Select, Tabs, TextArea } from '../components/ui';
-import { generateImage, generateVideo, loadStudioSnapshot, requestPhoneData } from '../api/adapters';
+import { generateImage, generateVideo, loadPromptTemplates, loadStudioSnapshot, requestPhoneData } from '../api/adapters';
 import { useAsync } from '../lib/useAsync';
-import type { ImageResult, VideoResult } from '../types';
+import type { ImageResult, PromptTemplate, VideoResult } from '../types';
 import { usePreviewStore } from '../store/appStore';
 
 type StudioTab = 'image' | 'video';
@@ -36,6 +36,70 @@ const VIDEO_RATIO_OPTIONS = [
   { value: '21:9', label: '21:9 宽银幕' },
 ];
 
+const IMAGE_LOADING_TIPS = [
+  '正在连接图像网关…',
+  '模型绘制中，请稍候…',
+  '高分辨率渲染需要一点时间…',
+  '马上好了，正在收尾…',
+];
+
+const VIDEO_LOADING_TIPS = [
+  '正在提交视频任务…',
+  '生成中，视频通常需要 1-3 分钟…',
+  '正在轮询任务进度…',
+  '即将完成，正在下载结果…',
+];
+
+function StudioLoading({ kind }: { kind: 'image' | 'video' }) {
+  const [secs, setSecs] = React.useState(0);
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setSecs((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const tips = kind === 'image' ? IMAGE_LOADING_TIPS : VIDEO_LOADING_TIPS;
+  const step = kind === 'image' ? 8 : 20; // 视频更慢，换一条提示的间隔更长
+  const tip = tips[Math.min(tips.length - 1, Math.floor(secs / step))];
+  return (
+    <div className="studio-loading" role="status" aria-live="polite">
+      <div className="studio-spinner" aria-hidden="true" />
+      <div className="studio-loading-title">{kind === 'image' ? '正在生成图像' : '正在生成视频'}</div>
+      <div className="studio-loading-tip">{tip}</div>
+      <div className="studio-loading-bar"><span /></div>
+      <div className="studio-loading-secs">已用时 {secs}s</div>
+    </div>
+  );
+}
+
+function TemplateGallery({ templates, onApply, onCopy }: {
+  templates: PromptTemplate[];
+  onApply: (template: PromptTemplate) => void;
+  onCopy: (template: PromptTemplate) => void;
+}) {
+  if (!templates.length) return null;
+  return (
+    <div className="template-gallery">
+      <div className="template-gallery-head">模板库 · 一键套用</div>
+      <div className="template-row">
+        {templates.map((template) => (
+          <div key={template.id} className="template-card">
+            <div className="template-card-title">{template.title}</div>
+            <div className="template-card-prompt">{template.prompt}</div>
+            {template.tags.length ? (
+              <div className="template-card-tags">
+                {template.tags.map((tag) => <span key={tag}>#{tag}</span>)}
+              </div>
+            ) : null}
+            <div className="template-card-actions">
+              <button type="button" className="template-btn primary" onClick={() => onApply(template)}>套用</button>
+              <button type="button" className="template-btn" onClick={() => onCopy(template)}>复制</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function StudioPage() {
   const settings = usePreviewStore((state) => state.settings);
   const navigate = usePreviewStore((state) => state.navigate);
@@ -61,6 +125,35 @@ export function StudioPage() {
   const [videoHistory, setVideoHistory] = React.useState<VideoResult[]>([]);
   const imageReferenceInputRef = React.useRef<HTMLInputElement>(null);
   const videoReferenceInputRef = React.useRef<HTMLInputElement>(null);
+
+  const { data: imageTemplates } = useAsync(() => loadPromptTemplates(settings, 'image'), [settings], { cacheKey: 'templates-image', ttlMs: 300000 });
+  const { data: videoTemplates } = useAsync(() => loadPromptTemplates(settings, 'video'), [settings], { cacheKey: 'templates-video', ttlMs: 300000 });
+
+  const applyImageTemplate = React.useCallback((template: PromptTemplate) => {
+    setImagePrompt(template.prompt);
+    const size = template.params?.size;
+    if (size) setImageSize(String(size));
+    pushToast({ tone: 'ok', title: '已套用模板', detail: template.title });
+  }, [pushToast]);
+
+  const applyVideoTemplate = React.useCallback((template: PromptTemplate) => {
+    setVideoPrompt(template.prompt);
+    const params = template.params || {};
+    if (params.mode) setVideoMode(String(params.mode));
+    if (params.resolution) setVideoResolution(String(params.resolution));
+    if (params.ratio) setVideoRatio(String(params.ratio));
+    if (params.duration) setVideoDuration(Number(params.duration) || 5);
+    pushToast({ tone: 'ok', title: '已套用模板', detail: template.title });
+  }, [pushToast]);
+
+  const copyTemplate = React.useCallback(async (template: PromptTemplate) => {
+    try {
+      await navigator.clipboard.writeText(template.prompt);
+      pushToast({ tone: 'ok', title: '已复制提示词', detail: template.title });
+    } catch {
+      pushToast({ tone: 'danger', title: '复制失败', detail: '请手动选择文本复制。' });
+    }
+  }, [pushToast]);
 
   React.useEffect(() => {
     if (!data) return;
@@ -281,6 +374,7 @@ export function StudioPage() {
           {tab === 'image' ? (
             <div className="studio-layout">
               <div className="studio-form">
+                <TemplateGallery templates={imageTemplates || []} onApply={applyImageTemplate} onCopy={copyTemplate} />
                 <Field label="提示词" hint="映射到 /api/image/generate.prompt">
                   <TextArea rows={7} value={imagePrompt} onChange={(event) => setImagePrompt(event.target.value)} />
                 </Field>
@@ -315,7 +409,9 @@ export function StudioPage() {
 
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="图像结果" subtitle="最新结果在上方，历史结果在下方。" />
-                {selectedImage ? (
+                {busy ? (
+                  <StudioLoading kind="image" />
+                ) : selectedImage ? (
                   <div className="result-grid">
                     {selectedImage.previewUrls.map((url, index) => (
                       <button type="button" key={url + index} className="result-card" onClick={() => setSelectedImage(selectedImage)}>
@@ -345,6 +441,7 @@ export function StudioPage() {
           ) : (
             <div className="studio-layout">
               <div className="studio-form">
+                <TemplateGallery templates={videoTemplates || []} onApply={applyVideoTemplate} onCopy={copyTemplate} />
                 <Field label="提示词" hint="映射到 /api/video/generate.prompt">
                   <TextArea rows={7} value={videoPrompt} onChange={(event) => setVideoPrompt(event.target.value)} />
                 </Field>
@@ -389,7 +486,9 @@ export function StudioPage() {
 
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="视频结果" subtitle="真实模式返回 mp4；Agnes 视频会自动按任务接口轮询。" />
-                {selectedVideo ? (
+                {busy ? (
+                  <StudioLoading kind="video" />
+                ) : selectedVideo ? (
                   <div className="video-preview-shell">
                     {selectedVideo.mime.startsWith('video/') ? (
                       <video controls src={selectedVideo.previewUrl} className="video-preview" />

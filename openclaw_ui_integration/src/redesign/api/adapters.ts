@@ -5,6 +5,7 @@ import type {
   ImageResult,
   LicenseSnapshot,
   MemberSnapshot,
+  PromptTemplate,
   ServiceSnapshot,
   SkillSnapshot,
   StudioSnapshot,
@@ -594,6 +595,27 @@ export async function loadStudioSnapshot(settings: PreviewSettings): Promise<Stu
     imageHistory: [],
     videoHistory: [],
   };
+}
+
+const BUILTIN_TEMPLATES: PromptTemplate[] = [
+  { id: -1, kind: 'image', title: '产品白底图', prompt: '一张高清产品摄影，纯白背景，柔和棚拍光，居中构图，电商主图风格，细节锐利', params: { size: '1024x1024' }, coverUrl: '', tags: ['电商', '产品'], sort: 10 },
+  { id: -2, kind: 'image', title: '国风插画', prompt: '中国风工笔插画，青绿山水，留白，细腻线条，雅致配色，高分辨率', params: { size: '1024x1536' }, coverUrl: '', tags: ['插画', '国风'], sort: 20 },
+  { id: -3, kind: 'video', title: '城市夜景延时', prompt: '繁华都市夜景，车流光轨，霓虹灯，延时摄影质感，电影级色调，运镜平稳', params: { mode: 't2v', resolution: '720P', ratio: '16:9', duration: 5 }, coverUrl: '', tags: ['城市', '延时'], sort: 10 },
+];
+
+export async function loadPromptTemplates(settings: PreviewSettings, kind: 'image' | 'video'): Promise<PromptTemplate[]> {
+  const result = await requestBridgeDataSoft<{ templates?: PromptTemplate[] }>(
+    settings,
+    '/api/templates?kind=' + kind,
+    { templates: [] },
+    4000,
+  );
+  const list = result?.data?.templates;
+  if (Array.isArray(list) && list.length) {
+    return list.filter((item) => item && item.kind === kind);
+  }
+  // License/bridge offline — fall back to the built-in starters so the library is never blank.
+  return BUILTIN_TEMPLATES.filter((item) => item.kind === kind);
 }
 
 function inferVideoProviderId(providerId: unknown, apiBase: unknown, model: unknown): string {
