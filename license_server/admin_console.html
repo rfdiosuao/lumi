@@ -3116,6 +3116,19 @@
         setValue("plan", plan.planKey);
         setValue("features", asArray(plan.features).join(","));
         defaultExpiry(Number(plan.durationDays || 31));
+        // 同步模板的网关地址与模型到表单（密钥不下发，生成时由服务端按模板填入；
+        // 这里把密钥框的提示改成「已继承模板密钥」，留空即用模板里的密钥）。
+        setValue("gatewayBaseUrl", plan.gatewayBaseUrl || "");
+        setValue("gatewayImageBaseUrl", plan.gatewayImageBaseUrl || "");
+        setValue("gatewayVideoBaseUrl", plan.gatewayVideoBaseUrl || "");
+        setValue("gatewayDefaultModel", plan.gatewayDefaultModel || "");
+        setValue("gatewayImageModel", plan.gatewayImageModel || "");
+        setValue("gatewayVideoModel", plan.gatewayVideoModel || "");
+        setValue("gatewayModels", asArray(plan.gatewayModels).join(","));
+        const inheritHint = "已继承模板密钥（留空即用）";
+        const gt = document.getElementById("gatewayToken"); if (gt) gt.placeholder = plan.gatewayConfigured ? inheritHint : "用于文本对话；留空使用模板配置";
+        const git = document.getElementById("gatewayImageToken"); if (git) git.placeholder = plan.gatewayImageConfigured ? inheritHint : "留空继承通用 Token";
+        const gvt = document.getElementById("gatewayVideoToken"); if (gvt) gvt.placeholder = plan.gatewayVideoConfigured ? inheritHint : "留空继承通用 Token";
       };
     }
 
