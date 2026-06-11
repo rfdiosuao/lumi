@@ -1741,7 +1741,7 @@ def create_code_records(
 
 # --- Daily beta-code claim (public, IP-limited, admin-configurable) ----------
 BETA_CONFIG_KEY = "beta_claim"
-BETA_DEFAULTS = {"enabled": True, "dailyQuota": 10, "validDays": 7, "edition": "trial", "licensee": "内测用户"}
+BETA_DEFAULTS = {"enabled": True, "dailyQuota": 10, "validDays": 7, "edition": "trial", "licensee": "内测用户", "planTemplate": ""}
 
 
 def beta_today() -> str:
@@ -1771,6 +1771,9 @@ def set_beta_config(patch: dict[str, Any]) -> dict[str, Any]:
         cfg["dailyQuota"] = max(0, min(int(patch["dailyQuota"]), 100000))
     if "validDays" in patch:
         cfg["validDays"] = max(1, min(int(patch["validDays"]), 3650))
+    if "planTemplate" in patch:
+        raw_tpl = str(patch.get("planTemplate") or "").strip()
+        cfg["planTemplate"] = normalize_plan_key(raw_tpl) if raw_tpl else ""
     with connect() as conn:
         conn.execute(
             "insert into settings (key, value_json, updated_at) values (?, ?, ?) "
@@ -1835,13 +1838,31 @@ def beta_claim_code(ip: str) -> dict[str, Any]:
         raise ActivationError("今日内测码已领完，明天再来", status=429)
 
     owner_id = beta_owner_account_id()
-    gw = apply_account_gateway_defaults({}, owner_id, explicit_body={})
+    # 若配置了套餐模板，内测码继承该模板的网关与功能；否则退回账号网关默认值。
+    plan_key = str(cfg.get("planTemplate") or "").strip()
+    plan_row = get_plan_row(normalize_plan_key(plan_key)) if plan_key else None
+    if plan_row is not None and not bool(plan_row["disabled"]):
+        gw = {
+            "gatewayBaseUrl": plan_row["gateway_base_url"],
+            "gatewayImageBaseUrl": plan_row["gateway_image_base_url"],
+            "gatewayVideoBaseUrl": plan_row["gateway_video_base_url"],
+            "gatewayToken": plan_row["gateway_token"],
+            "gatewayImageToken": plan_row["gateway_image_token"],
+            "gatewayVideoToken": plan_row["gateway_video_token"],
+            "gatewayDefaultModel": plan_row["gateway_default_model"],
+            "gatewayImageModel": plan_row["gateway_image_model"],
+            "gatewayVideoModel": plan_row["gateway_video_model"],
+        }
+        features = load_json_value(plan_row["features_json"], DEFAULT_FEATURES) or list(DEFAULT_FEATURES)
+    else:
+        gw = apply_account_gateway_defaults({}, owner_id, explicit_body={})
+        features = list(DEFAULT_FEATURES)
     expires = add_days_date(cfg["validDays"])
     codes = create_code_records(
         count=1,
         licensee=str(cfg.get("licensee") or "内测用户"),
         edition=str(cfg.get("edition") or "trial"),
-        features=list(DEFAULT_FEATURES),
+        features=features,
         expires=expires,
         max_activations=1,
         gateway_base_url=str(gw.get("gatewayBaseUrl") or ""),
