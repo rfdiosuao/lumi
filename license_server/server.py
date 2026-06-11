@@ -237,6 +237,13 @@ def add_days_iso(days: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0).isoformat()
 
 
+def add_days_date(days: int) -> str:
+    """Date-only (YYYY-MM-DD) expiry, matching admin-created codes. The launcher
+    validates a license `expires` with date.fromisoformat(), which rejects full
+    ISO timestamps — so codes must use this format, not add_days_iso()."""
+    return (datetime.now(timezone.utc) + timedelta(days=days)).date().isoformat()
+
+
 def extract_bearer_token(headers: Any) -> str:
     auth = str(headers.get("Authorization", "") or "")
     if auth.lower().startswith("bearer "):
@@ -1795,7 +1802,7 @@ def beta_claim_code(ip: str) -> dict[str, Any]:
 
     owner_id = beta_owner_account_id()
     gw = apply_account_gateway_defaults({}, owner_id, explicit_body={})
-    expires = add_days_iso(cfg["validDays"])
+    expires = add_days_date(cfg["validDays"])
     codes = create_code_records(
         count=1,
         licensee=str(cfg.get("licensee") or "内测用户"),
@@ -3092,6 +3099,23 @@ class Handler(BaseHTTPRequestHandler):
         return context_account_id(context)
 
     def request_ip(self) -> str:
+        # Behind the nginx TLS proxy the socket peer is always 127.0.0.1, so the
+        # real visitor IP arrives in proxy headers. The site sits behind
+        # Cloudflare, which puts the true client in CF-Connecting-IP (a single
+        # value it sets itself); prefer it. Otherwise X-Real-IP (nginx
+        # $remote_addr = the CF edge), then the last X-Forwarded-For entry, then
+        # the socket peer.
+        cf_ip = self.headers.get("CF-Connecting-IP", "").strip()
+        if cf_ip:
+            return cf_ip
+        real_ip = self.headers.get("X-Real-IP", "").strip()
+        if real_ip:
+            return real_ip
+        forwarded = self.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            if parts:
+                return parts[-1]
         return self.client_address[0] if self.client_address else ""
 
     def require_admin(self, role: str | None = None, *, allow_legacy: bool = True) -> bool:
