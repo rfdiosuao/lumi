@@ -271,8 +271,17 @@ class DashScopeVideoClient:
                 "Authorization": f"Bearer {api_key}",
             },
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        # Video submits can be slow to queue (some gateways hold the connection
+        # while they accept the task); 60s was too tight and surfaced as a raw
+        # "read operation timed out". Give it room and report timeouts clearly.
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError) as error:
+            reason = getattr(error, "reason", error)
+            raise VideoApiError(
+                f"视频网关提交超时/失败：{reason}。可能是网关繁忙或视频较长，请稍后重试。"
+            ) from error
         task_id = data.get("id") or data.get("task_id") or data.get("output", {}).get("task_id")
         if not task_id:
             raise VideoApiError(_api_error_message(data, "Agnes 任务提交失败"))
