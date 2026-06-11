@@ -148,7 +148,7 @@ export function SkillsPage() {
         </Panel>
 
         <Panel className="surface-panel">
-          <SectionHeader eyebrow="已安装" title="可用 Skills" subtitle="启用、查看和移除操作直接放在每条记录旁边。" action={<Chip tone={data?.source === 'live' ? 'ok' : 'warn'}>{sourceLabel(data?.source || 'mock')}</Chip>} />
+          <SectionHeader eyebrow="已安装" title="可用 Skills" subtitle="启用、查看和移除操作直接放在每条记录旁边。" />
           {loading ? (
             <div className="panel-loading-inline">正在读取 Skills...</div>
           ) : error ? (
@@ -203,11 +203,3 @@ export function SkillsPage() {
   );
 }
 
-function sourceLabel(value: string) {
-  const map: Record<string, string> = {
-    mock: '预览',
-    live: '真实接口',
-    mixed: '混合',
-  };
-  return map[value] || value;
-}

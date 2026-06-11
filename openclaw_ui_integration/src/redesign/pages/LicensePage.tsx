@@ -109,7 +109,6 @@ export function LicensePage() {
             <SectionHeader
               eyebrow="授权"
               title="当前授权"
-              action={<Chip tone={license?.authorized ? 'ok' : 'warn'}>{sourceLabel(license?.rawHint || 'mock')}</Chip>}
             />
             {license?.authorized ? (
               <div className="detail-stack">
@@ -196,15 +195,6 @@ export function LicensePage() {
       ) : null}
     </div>
   );
-}
-
-function sourceLabel(value: string) {
-  const map: Record<string, string> = {
-    mock: '预览',
-    live: '真实接口',
-    mixed: '混合',
-  };
-  return map[value] || value;
 }
 
 function displayEdition(value?: string) {

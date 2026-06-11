@@ -67,7 +67,7 @@ export function DiagnosticsPage() {
       ) : data ? (
         <section className="content-grid content-grid-diagnostics">
           <Panel className="surface-panel">
-            <SectionHeader eyebrow="检测项" title="健康报告" subtitle="每一项直接映射诊断报告里的状态、消息和详情。" action={<Chip tone={data.source === 'live' ? 'ok' : 'warn'}>{sourceLabel(data.source)}</Chip>} />
+            <SectionHeader eyebrow="检测项" title="健康报告" subtitle="每一项直接映射诊断报告里的状态、消息和详情。" />
             <div className="check-list">
               {data.checks.map((check) => (
                 <div key={check.id} className={`check-row check-row-${check.status}`}>
@@ -122,11 +122,3 @@ function toCnStatus(value: string) {
   return map[String(value || '').toLowerCase()] || value;
 }
 
-function sourceLabel(value: string) {
-  const map: Record<string, string> = {
-    mock: '预览',
-    live: '真实接口',
-    mixed: '混合',
-  };
-  return map[value] || value;
-}

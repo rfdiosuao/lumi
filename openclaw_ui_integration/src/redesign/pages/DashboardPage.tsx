@@ -152,7 +152,6 @@ export function DashboardPage() {
           <div className="hero-mini-signals">
             <Chip tone={service?.running ? 'ok' : 'warn'}>{service?.running ? '核心运行中' : '核心待启动'}</Chip>
             <Chip tone={gateway?.hasGateway ? 'ok' : 'warn'}>{gateway?.hasGateway ? '接口已配置' : '需要设置接口'}</Chip>
-            <Chip tone={settings.transportMode === 'live' ? 'ok' : 'warn'}>{settings.transportMode === 'live' ? '真实桥接' : '预览模式'}</Chip>
           </div>
         </div>
         <div className="launcher-hero-actions hero-action-card">

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Camera, MessageCircleMore, RefreshCcw, Send, SquareTerminal, SquareStack, StopCircle } from 'lucide-react';
-import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, TextArea, Toggle } from '../components/ui';
+import { Button, EmptyState, Field, Input, InlineState, Panel, SectionHeader, TextArea, Toggle } from '../components/ui';
 import { loadDesktopSnapshot, requestBridgeData, saveDesktopAgentConfig, startDesktopAgent, stopDesktopAgent } from '../api/adapters';
 import { useAsync } from '../lib/useAsync';
 import { usePreviewStore } from '../store/appStore';
@@ -106,7 +106,7 @@ export function DesktopPage() {
       ) : data ? (
         <section className="content-grid content-grid-desktop">
           <Panel className="surface-panel">
-            <SectionHeader eyebrow="状态" title="桌面 Agent 健康状态" subtitle="读取 /api/desktop-agent/status 与 /health 返回值。" action={<Chip tone={data.source === 'live' ? 'ok' : 'warn'}>{sourceLabel(data.source)}</Chip>} />
+            <SectionHeader eyebrow="状态" title="桌面 Agent 健康状态" subtitle="读取 /api/desktop-agent/status 与 /health 返回值。" />
             <div className="detail-stack">
               <div className="detail-row"><span className="detail-label">PID</span><span className="detail-value">{data.pid ?? '未知'}</span></div>
               <div className="detail-row"><span className="detail-label">命令</span><span className="detail-value">{data.command.join(' ') || '暂无'}</span></div>
@@ -182,11 +182,3 @@ function StatCard({ label, value, tone = 'neutral' }: { label: string; value: Re
   );
 }
 
-function sourceLabel(value: string) {
-  const map: Record<string, string> = {
-    mock: '预览',
-    live: '真实接口',
-    mixed: '混合',
-  };
-  return map[value] || value;
-}

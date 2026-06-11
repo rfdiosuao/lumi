@@ -318,7 +318,6 @@ export function StudioPage() {
         <div className="hero-actions">
           <Button variant="primary" icon={RefreshCcw} onClick={refresh}>刷新默认值</Button>
           <Button variant="secondary" icon={Settings2} onClick={() => navigate('settings')}>打开设置</Button>
-          <Chip tone={data?.source === 'live' ? 'ok' : 'warn'}>{sourceLabel(data?.source || 'mock')}</Chip>
         </div>
       </section>
 
@@ -545,11 +544,3 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-function sourceLabel(value: string) {
-  const map: Record<string, string> = {
-    mock: '预览',
-    live: '真实接口',
-    mixed: '混合',
-  };
-  return map[value] || value;
-}
