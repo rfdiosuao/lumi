@@ -2,7 +2,7 @@ import React from 'react';
 import { Camera, CheckCircle2, Copy, KeyRound, PlayCircle, Plus, RefreshCcw, Save, ShieldCheck, Smartphone, StopCircle, Trash2, Unlock } from 'lucide-react';
 import { Button, Chip, EmptyState, Field, Input, InlineState, Modal, Panel, SectionHeader, TextArea, Toggle } from '../components/ui';
 import { formatDateTime, maskSecret } from '../lib/format';
-import { readConfigValue, requestPhoneData, writeConfigValue } from '../api/adapters';
+import { loadDesktopModelConfig, readConfigValue, requestPhoneData, writeConfigValue } from '../api/adapters';
 import { clearPhoneSecurePairing, isTauriRuntime, resolveBridgeBaseUrl, warmPhoneSecurePairing, type PhonePairingSummary } from '../api/client';
 import { displayPhoneBaseUrl, normalizeOrCleanPhoneBaseUrl, normalizePhoneBaseUrl } from '../lib/phoneUrl';
 import { usePreviewStore } from '../store/appStore';
@@ -279,6 +279,7 @@ export function PhonePage() {
   const [deviceDraft, setDeviceDraft] = React.useState<PhoneDevice>(() => devices[0] || defaultDevice(settings.phoneBaseUrl, settings.phoneToken));
   const [configOpen, setConfigOpen] = React.useState(false);
   const [pairCode, setPairCode] = React.useState('');
+  const [syncingModel, setSyncingModel] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [checkingDevice, setCheckingDevice] = React.useState(false);
@@ -907,6 +908,34 @@ export function PhonePage() {
     pushToast({ tone: 'ok', title: '已填入配对码', detail: '地址和 Token 已自动填好，点「保存并验证」完成安全配对。' });
   };
 
+  const handleSyncModel = async () => {
+    if (!selectedDevice) return;
+    setSyncingModel(true);
+    try {
+      const cfg = await loadDesktopModelConfig(settings);
+      if (!cfg) {
+        pushToast({ tone: 'danger', title: '电脑未配置主模型', detail: '请先在「统一设置 → 主模型网关」填好地址和密钥。' });
+        return;
+      }
+      await requestPhoneData(
+        settings,
+        { baseUrl: selectedDevice.baseUrl, token: selectedDevice.token },
+        '/api/lumi/config/llm/import',
+        'POST',
+        cfg,
+        { timeoutMs: 15_000 },
+      );
+      pushToast({ tone: 'ok', title: '模型已同步到手机', detail: `${cfg.model || '默认模型'} · ${selectedDevice.name}` });
+      addTaskLog('ok', '模型已同步到手机', `${cfg.baseUrl} / ${cfg.model}`);
+    } catch (err) {
+      const message = String(err);
+      pushToast({ tone: 'danger', title: '同步模型失败', detail: message });
+      addTaskLog('danger', '同步模型失败', message);
+    } finally {
+      setSyncingModel(false);
+    }
+  };
+
   const buildValidatedDraft = React.useCallback((): { device?: PhoneDevice; error?: string } => {
     const normalizedBaseUrl = normalizePhoneBaseUrl(deviceDraft.baseUrl);
     if (deviceDraft.baseUrl.trim() && !normalizedBaseUrl) {
@@ -1033,6 +1062,7 @@ export function PhonePage() {
           <Button variant="quiet" icon={Smartphone} onClick={() => setApkModalOpen(true)}>下载手机端App</Button>
           <Button variant="primary" icon={RefreshCcw} onClick={() => refresh('manual')} disabled={!selectedDevice || loading}>刷新</Button>
           <Button variant="secondary" icon={Camera} onClick={handleCapture} disabled={!selectedDevice}>截图</Button>
+          <Button variant="secondary" icon={Save} onClick={handleSyncModel} disabled={!selectedDevice || syncingModel}>{syncingModel ? '同步中…' : '同步模型到手机'}</Button>
           <Button variant="success" icon={Unlock} onClick={handleWake} disabled={!selectedDevice}>唤醒</Button>
         </div>
       </section>

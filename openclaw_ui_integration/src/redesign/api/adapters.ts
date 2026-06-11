@@ -603,6 +603,25 @@ const BUILTIN_TEMPLATES: PromptTemplate[] = [
   { id: -3, kind: 'video', title: '城市夜景延时', prompt: '繁华都市夜景，车流光轨，霓虹灯，延时摄影质感，电影级色调，运镜平稳', params: { mode: 't2v', resolution: '720P', ratio: '16:9', duration: 5 }, coverUrl: '', tags: ['城市', '延时'], sort: 10 },
 ];
 
+// Read the desktop's primary LLM gateway (auth-profiles.json) as {baseUrl, apiKey, model}
+// so it can be pushed to a paired phone. Mirrors SettingsPage.formFromAuthProfiles.
+export async function loadDesktopModelConfig(
+  settings: PreviewSettings,
+): Promise<{ baseUrl: string; apiKey: string; model: string } | null> {
+  const resp = await requestBridgeData<any>(settings, '/api/config/read', 'POST', { path: 'auth-profiles.json', default: {} });
+  const src = resp.data?.data || {};
+  const providers = (src.models?.providers && typeof src.models.providers === 'object') ? src.models.providers : {};
+  const primaryKey = (src.models?.primary && providers[src.models.primary]) ? src.models.primary : Object.keys(providers)[0];
+  const provider = primaryKey ? (providers[primaryKey] || {}) : {};
+  const models = Array.isArray(provider.models) ? provider.models : [];
+  const firstModel = models.map((m: any) => (typeof m === 'string' ? m : m?.id)).find(Boolean);
+  const baseUrl = String(provider.baseUrl || provider.url || '').trim();
+  const apiKey = String(provider.apiKey || '').trim();
+  const model = String(firstModel || provider.model || '').trim();
+  if (!baseUrl || !apiKey) return null;
+  return { baseUrl, apiKey, model };
+}
+
 export async function loadPromptTemplates(settings: PreviewSettings, kind: 'image' | 'video'): Promise<PromptTemplate[]> {
   const result = await requestBridgeDataSoft<{ templates?: PromptTemplate[] }>(
     settings,
