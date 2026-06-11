@@ -611,6 +611,16 @@ async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn install_distribution_layer(app: tauri::AppHandle, layer_id: String) -> Result<(), String> {
+    let layer_id = layer_id.trim().to_string();
+    if layer_id.is_empty() {
+        return Err("distribution layer id is empty".to_string());
+    }
+    let root = bootstrap::install_root()?;
+    bootstrap::install_layer_by_id(app, root, layer_id).await
+}
+
+#[tauri::command]
 async fn proxy_request(
     app: tauri::AppHandle,
     path: String,
@@ -864,6 +874,7 @@ pub fn run() {
             bridge_startup_report,
             verify_license,
             start_bridge,
+            install_distribution_layer,
             proxy_request,
             phone_proxy_request,
             export_log,

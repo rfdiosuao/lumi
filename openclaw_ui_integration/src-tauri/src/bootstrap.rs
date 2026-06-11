@@ -66,6 +66,24 @@ struct ProgressMeta {
     count: usize,
 }
 
+fn layer_title(layer: &Layer) -> String {
+    if layer.title.is_empty() {
+        layer.id.clone()
+    } else {
+        layer.title.clone()
+    }
+}
+
+fn emit_start(app: &AppHandle, layers: &[&Layer]) {
+    let _ = app.emit(
+        "dist://start",
+        serde_json::json!({
+            "count": layers.len(),
+            "layers": layers.iter().map(|l| LayerInfo { id: l.id.clone(), title: layer_title(l), size: 0 }).collect::<Vec<_>>(),
+        }),
+    );
+}
+
 fn emit_progress(app: &AppHandle, meta: &ProgressMeta, phase: &str, downloaded: u64, total: u64) {
     let _ = app.emit(
         "dist://progress",
@@ -403,19 +421,13 @@ pub async fn ensure_layers(app: AppHandle, install_root: PathBuf) -> Result<(), 
     if missing.is_empty() {
         return Ok(());
     }
-    let _ = app.emit(
-        "dist://start",
-        serde_json::json!({
-            "count": missing.len(),
-            "layers": missing.iter().map(|l| LayerInfo { id: l.id.clone(), title: if l.title.is_empty() { l.id.clone() } else { l.title.clone() }, size: 0 }).collect::<Vec<_>>(),
-        }),
-    );
+    emit_start(&app, &missing);
 
     let count = missing.len();
     for (i, layer) in missing.iter().enumerate() {
         let meta = ProgressMeta {
             id: layer.id.clone(),
-            title: if layer.title.is_empty() { layer.id.clone() } else { layer.title.clone() },
+            title: layer_title(layer),
             index: i + 1,
             count,
         };
@@ -427,5 +439,55 @@ pub async fn ensure_layers(app: AppHandle, install_root: PathBuf) -> Result<(), 
         eprintln!("[bootstrap] layer {} installed", layer.id);
     }
     let _ = app.emit("dist://done", serde_json::json!({ "count": count }));
+    Ok(())
+}
+
+/// Install one optional distribution layer on demand. This uses the same
+/// manifest, mirrors, sha256 verification, extraction, and marker logic as the
+/// first-run bootstrap path.
+pub async fn install_layer_by_id(app: AppHandle, install_root: PathBuf, layer_id: String) -> Result<(), String> {
+    let layer_id = layer_id.trim().to_string();
+    if layer_id.is_empty() {
+        return Err("distribution layer id is empty".to_string());
+    }
+
+    let sources = manifest_sources();
+    if sources.is_empty() {
+        return Err("distribution manifest is not configured".to_string());
+    }
+
+    let manifest_cache = manifest_cache_path(&install_root);
+    let manifest = fetch_manifest(&sources, &manifest_cache).await?;
+    let cache = manifest_cache
+        .parent()
+        .map(|p| p.join("layers"))
+        .unwrap_or_else(|| std::env::temp_dir().join("openclaw-dist-cache"));
+
+    let layer = manifest
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("distribution layer not found: {layer_id}"))?;
+
+    if is_present(&install_root, layer) {
+        return Ok(());
+    }
+
+    let selected = vec![layer];
+    emit_start(&app, &selected);
+    let meta = ProgressMeta {
+        id: layer.id.clone(),
+        title: layer_title(layer),
+        index: 1,
+        count: 1,
+    };
+
+    eprintln!("[bootstrap] installing optional layer {}", layer.id);
+    if let Err(e) = install_layer(&app, &meta, &install_root, &manifest.mirrors, layer, &cache).await {
+        let _ = app.emit("dist://error", serde_json::json!({ "message": e }));
+        return Err(e);
+    }
+    eprintln!("[bootstrap] optional layer {} installed", layer.id);
+    let _ = app.emit("dist://done", serde_json::json!({ "count": 1 }));
     Ok(())
 }

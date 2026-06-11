@@ -239,6 +239,11 @@ function errorText(error: unknown): string {
   return String(error || 'unknown_error');
 }
 
+function isLumiRepairError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('lumi_signature_repair_failed') || lower.includes('invalid lumi signature') || lower.includes('unknown lumi launcher') || lower.includes('missing lumi security headers');
+}
+
 function authErrorHelp(message: string): string {
   const lower = message.toLowerCase();
   if (lower.includes('missing_token')) return '缺少 APKClaw Token。请在手机端查看控制台令牌并填入。';
@@ -917,18 +922,45 @@ export function PhonePage() {
         pushToast({ tone: 'danger', title: '电脑未配置主模型', detail: '请先在「统一设置 → 主模型网关」填好地址和密钥。' });
         return;
       }
-      await requestPhoneData(
-        settings,
-        { baseUrl: selectedDevice.baseUrl, token: selectedDevice.token },
-        '/api/lumi/config/llm/import',
-        'POST',
-        cfg,
-        { timeoutMs: 15_000 },
-      );
+      const device = selectedDevice;
+      const context = { baseUrl: device.baseUrl, token: device.token };
+      const syncOnce = async (forcePair = false, rotateLauncherId = false) => {
+        await requestPhoneData(settings, context, '/api/device/status', 'GET', undefined, { timeoutMs: 12_000 });
+        const pairing = await warmPhoneSecurePairing(device.baseUrl, device.token, forcePair, rotateLauncherId);
+        await requestPhoneData(settings, context, '/api/lumi/device/profile?includeApps=false&appLimit=1', 'GET', undefined, { timeoutMs: 12_000 });
+        await requestPhoneData(
+          settings,
+          context,
+          '/api/lumi/config/llm/import',
+          'POST',
+          cfg,
+          { timeoutMs: 15_000 },
+        );
+        return pairing;
+      };
+
+      let pairing: PhonePairingSummary;
+      try {
+        pairing = await syncOnce(false, false);
+      } catch (firstError) {
+        const rawMessage = errorText(firstError);
+        if (!isLumiRepairError(rawMessage)) throw firstError;
+        addTaskLog('warn', '安全通道失效，正在重建', authErrorHelp(rawMessage));
+        await clearPhoneSecurePairing(device.baseUrl, device.token);
+        pairing = await syncOnce(true, true);
+      }
+      const now = nowIso();
+      updateDeviceRuntime(device.id, { online: true, lastSeenAt: now, lastAuthorizedAt: now });
+      setAuthState({
+        tone: 'ok',
+        title: 'Token 与 Lumi 安全通道已验证',
+        detail: `Launcher ${pairing.launcherId.slice(0, 18)} · 过期 ${formatDateTime(pairing.expiresAt)}`,
+        pairing,
+      });
       pushToast({ tone: 'ok', title: '模型已同步到手机', detail: `${cfg.model || '默认模型'} · ${selectedDevice.name}` });
       addTaskLog('ok', '模型已同步到手机', `${cfg.baseUrl} / ${cfg.model}`);
     } catch (err) {
-      const message = String(err);
+      const message = authErrorHelp(errorText(err));
       pushToast({ tone: 'danger', title: '同步模型失败', detail: message });
       addTaskLog('danger', '同步模型失败', message);
     } finally {

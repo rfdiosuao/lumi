@@ -87,9 +87,9 @@ export function SetupGate() {
   return (
     <div style={overlay}>
       <div style={card}>
-        <div style={{ fontSize: 17, fontWeight: 800 }}>首次初始化运行时</div>
+        <div style={{ fontSize: 17, fontWeight: 800 }}>正在安装 OpenClaw 组件</div>
         <div style={{ marginTop: 6, fontSize: 13, color: '#8b949e' }}>
-          正在下载并校验运行组件，仅首次需要，请保持联网。
+          正在下载并校验组件文件，请保持联网；已安装的组件不会重复下载。
         </div>
         {error ? (
           <div style={{ marginTop: 18, fontSize: 13, color: '#ff7b72', lineHeight: 1.6 }}>

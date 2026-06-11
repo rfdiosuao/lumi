@@ -14,7 +14,7 @@ import type {
   TransportMode,
   VideoResult,
 } from '../types';
-import { bridgeRequest, isTauriRuntime, phoneRequest, resolveBridgeBaseUrl, type PhoneRequestOptions } from './client';
+import { bridgeRequest, installDistributionLayer, isTauriRuntime, phoneRequest, resolveBridgeBaseUrl, type PhoneRequestOptions } from './client';
 import { cleanArray, maskSecret, pickText, toBool, toNumber, toText } from '../lib/format';
 import type { PreviewSettings } from '../store/appStore';
 
@@ -819,6 +819,14 @@ export async function stopDesktopAgent(settings: PreviewSettings) {
 
 export async function saveDesktopAgentConfig(settings: PreviewSettings, config: Record<string, unknown>) {
   return requestBridgeData(settings, '/api/desktop-agent/config', 'POST', config);
+}
+
+export async function installDesktopAgentLayer(settings: PreviewSettings) {
+  if (effectiveMode(settings) === 'mock') {
+    return { data: { installed: true, layerId: 'luminode-desktop' }, source: 'mock' as DataSource };
+  }
+  await installDistributionLayer('luminode-desktop');
+  return { data: { installed: true, layerId: 'luminode-desktop' }, source: 'live' as DataSource };
 }
 
 export async function loadSettingsSnapshot(settings: PreviewSettings): Promise<SettingsSnapshot> {
