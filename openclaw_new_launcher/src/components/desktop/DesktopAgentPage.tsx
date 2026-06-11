@@ -75,6 +75,7 @@ export const DesktopAgentPage: React.FC = () => {
   const [status, setStatus] = React.useState<DesktopAgentStatus | null>(null);
   const [config, setConfig] = React.useState<DesktopAgentConfig>(defaultConfig);
   const [busy, setBusy] = React.useState(false);
+  const [installing, setInstalling] = React.useState(false);
   const [screenshot, setScreenshot] = React.useState('');
 
   const refresh = React.useCallback(async () => {
@@ -127,6 +128,23 @@ export const DesktopAgentPage: React.FC = () => {
       showToast('桌面 Agent 配置已保存', 'success');
       return result;
     });
+  };
+
+  const installLuminode = async () => {
+    setInstalling(true);
+    try {
+      appendLog('[桌面 Agent] 开始安装 Luminode 组件\n');
+      await desktopAgentApi.installLayer('luminode-desktop');
+      appendLog('[桌面 Agent] Luminode 组件安装完成\n');
+      showToast('Luminode 组件已安装', 'success');
+      await refresh();
+    } catch (error: any) {
+      const message = error?.error || error;
+      appendLog(`[桌面 Agent] Luminode 组件安装失败：${message}\n`);
+      showToast(`Luminode 组件安装失败：${message}`, 'error');
+    } finally {
+      setInstalling(false);
+    }
   };
 
   const captureScreenshot = async () => {
@@ -274,6 +292,11 @@ export const DesktopAgentPage: React.FC = () => {
               <div>Token：{status?.config.tokenPreview || '未生成'}</div>
             </div>
             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+              {!status?.present && (
+                <Button variant="primary" onClick={installLuminode} disabled={busy || installing} className="md:col-span-2">
+                  {installing ? '安装中...' : '下载并安装 Luminode'}
+                </Button>
+              )}
               <Button variant="success" onClick={() => run('启动桌面代理', () => desktopAgentApi.start())} disabled={busy || status?.running}>启动</Button>
               <Button variant="danger" onClick={() => run('停止桌面代理', () => desktopAgentApi.stop())} disabled={busy || !status?.running}>停止</Button>
               <Button variant="quiet" onClick={() => run('健康检查', () => desktopAgentApi.health())} disabled={busy}>健康检查</Button>

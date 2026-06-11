@@ -25,6 +25,8 @@
     "desktop:reply": "node scripts/openclaw-desktop-agent.mjs reply",
     "measure:cold-start": "powershell -ExecutionPolicy Bypass -File scripts/measure-cold-start.ps1",
     "openclaw:context": "node scripts/openclaw-context.mjs",
+    "package:mac:complete": "node scripts/package-mac-complete.mjs",
+    "package:mac:online": "node scripts/package-mac-online.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

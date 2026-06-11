@@ -365,6 +365,8 @@ export const desktopAgentApi = {
   status: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/status'),
   config: (config: Partial<DesktopAgentConfig>): Promise<{ config: DesktopAgentConfig }> =>
     api('/api/desktop-agent/config', 'POST', config as Record<string, unknown>),
+  installLayer: (layerId = 'luminode-desktop'): Promise<void> =>
+    invoke<void>('install_distribution_layer', { layerId }),
   start: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/start', 'POST'),
   stop: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/stop', 'POST'),
   health: (): Promise<Record<string, unknown>> => api('/api/desktop-agent/health'),
