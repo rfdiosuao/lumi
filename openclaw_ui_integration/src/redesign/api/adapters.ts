@@ -548,7 +548,9 @@ export async function loadStudioSnapshot(settings: PreviewSettings): Promise<Stu
         gatewaySource.apiKey,
         gatewaySource.token,
       )),
-      model: pickText(imageConfig.model, licenseSource.gatewayImageModel, licenseSource.gatewayDefaultModel, gatewaySource.imageModel, gateway.imageModel, gateway.defaultModel, 'gpt-image-2'),
+      // 'gpt-image-2' is the placeholder default, not a real Agnes model — treat it
+      // as unset so the server (license) image model takes effect, like video does.
+      model: pickText(imageConfig.model && imageConfig.model !== 'gpt-image-2' ? imageConfig.model : '', licenseSource.gatewayImageModel, licenseSource.gatewayDefaultModel, gatewaySource.imageModel, gateway.imageModel, gateway.defaultModel, 'gpt-image-2'),
     },
     videoDefaults: {
       apiBase: pickText(
@@ -608,8 +610,9 @@ const BUILTIN_TEMPLATES: PromptTemplate[] = [
 export async function loadDesktopModelConfig(
   settings: PreviewSettings,
 ): Promise<{ baseUrl: string; apiKey: string; model: string } | null> {
-  const resp = await requestBridgeData<any>(settings, '/api/config/read', 'POST', { path: 'auth-profiles.json', default: {} });
-  const src = resp.data?.data || {};
+  // auth-profiles lives under the state dir; the 授权码 sync writes the member
+  // gateway here as the primary provider (same source SettingsPage reads).
+  const src = (await readConfigValue(settings, 'data/.openclaw/agents/main/agent/auth-profiles.json', { models: { providers: {} } })) || {};
   const providers = (src.models?.providers && typeof src.models.providers === 'object') ? src.models.providers : {};
   const primaryKey = (src.models?.primary && providers[src.models.primary]) ? src.models.primary : Object.keys(providers)[0];
   const provider = primaryKey ? (providers[primaryKey] || {}) : {};

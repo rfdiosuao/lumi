@@ -218,7 +218,9 @@ export function SettingsPage() {
       gatewayMode: (imageConfig || {}).gatewayMode || 'manual',
       baseUrl: imageForm.baseUrl.trim(),
       apiKey: imageForm.apiKey.trim(),
-      model: imageForm.model.trim() || 'gpt-image-2',
+      // Don't persist the 'gpt-image-2' placeholder — keep it empty so the server
+      // (license) image model wins, matching how video config behaves.
+      model: imageForm.model.trim() === 'gpt-image-2' ? '' : imageForm.model.trim(),
     };
     const nextVideo = {
       ...(videoConfig || {}),
