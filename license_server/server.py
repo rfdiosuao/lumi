@@ -14,7 +14,7 @@ import shutil
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -242,6 +242,22 @@ def add_days_date(days: int) -> str:
     validates a license `expires` with date.fromisoformat(), which rejects full
     ISO timestamps — so codes must use this format, not add_days_iso()."""
     return (datetime.now(timezone.utc) + timedelta(days=days)).date().isoformat()
+
+
+def normalize_code_expires(value: str) -> str:
+    """A code's `expires` must be a date-only YYYY-MM-DD the launcher can parse
+    with date.fromisoformat() (4-digit year, 1-9999). Trim a stray time part if
+    present, then validate — so a typo like '33333-03-31' or an ISO timestamp
+    can't mint a code that activates server-side but the client rejects."""
+    raw = str(value or "").strip()
+    if not raw:
+        raise ActivationError("到期日期不能为空")
+    candidate = raw.split("T", 1)[0].strip()  # tolerate full ISO timestamps
+    try:
+        date.fromisoformat(candidate)
+    except ValueError:
+        raise ActivationError(f"到期日期格式无效，需为 YYYY-MM-DD（年份 1-9999）：{raw}")
+    return candidate
 
 
 def extract_bearer_token(headers: Any) -> str:
@@ -1160,6 +1176,23 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        create table if not exists prompt_templates (
+            id integer primary key autoincrement,
+            kind text not null,
+            title text not null,
+            prompt text not null,
+            params_json text not null default '{}',
+            cover_url text not null default '',
+            tags text not null default '',
+            sort integer not null default 0,
+            enabled integer not null default 1,
+            created_at text not null,
+            updated_at text not null
+        )
+        """
+    )
+    conn.execute(
+        """
         create table if not exists account_gateway_settings (
             account_id integer primary key,
             gateway_base_url text not null default '',
@@ -1658,6 +1691,7 @@ def create_code_records(
 ) -> list[str]:
     count = max(1, min(int(count), 100))
     max_activations = max(1, min(int(max_activations), 20))
+    expires = normalize_code_expires(expires)
     codes: list[str] = []
     with connect() as conn:
         for _ in range(count):
@@ -1838,6 +1872,139 @@ def beta_claim_code(ip: str) -> dict[str, Any]:
     return _result(code, expires, False)
 
 
+# --- Prompt template library (public read, admin-managed) --------------------
+TEMPLATE_KINDS = ("image", "video")
+DEFAULT_TEMPLATES = [
+    {
+        "kind": "image",
+        "title": "产品白底图",
+        "prompt": "一张高清产品摄影，纯白背景，柔和棚拍光，居中构图，电商主图风格，细节锐利",
+        "params": {"size": "1024x1024"},
+        "tags": "电商,产品",
+        "sort": 10,
+    },
+    {
+        "kind": "image",
+        "title": "国风插画",
+        "prompt": "中国风工笔插画，青绿山水，留白，细腻线条，雅致配色，高分辨率",
+        "params": {"size": "1024x1536"},
+        "tags": "插画,国风",
+        "sort": 20,
+    },
+    {
+        "kind": "video",
+        "title": "城市夜景延时",
+        "prompt": "繁华都市夜景，车流光轨，霓虹灯，延时摄影质感，电影级色调，运镜平稳",
+        "params": {"mode": "t2v", "resolution": "720P", "ratio": "16:9", "duration": 5},
+        "tags": "城市,延时",
+        "sort": 10,
+    },
+]
+
+
+def template_public(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "kind": str(row["kind"] or ""),
+        "title": str(row["title"] or ""),
+        "prompt": str(row["prompt"] or ""),
+        "params": load_json_value(row["params_json"], {}) or {},
+        "coverUrl": str(row["cover_url"] or ""),
+        "tags": [t.strip() for t in str(row["tags"] or "").split(",") if t.strip()],
+        "sort": int(row["sort"] or 0),
+        "enabled": bool(row["enabled"]),
+        "updatedAt": str(row["updated_at"] or ""),
+    }
+
+
+def seed_default_templates() -> None:
+    """Populate a few starter templates the first time the table is empty, so the
+    client library is never blank out of the box."""
+    with connect() as conn:
+        existing = conn.execute("select count(*) as c from prompt_templates").fetchone()["c"]
+        if existing:
+            return
+        now = utc_now()
+        for tpl in DEFAULT_TEMPLATES:
+            conn.execute(
+                """
+                insert into prompt_templates (kind, title, prompt, params_json, cover_url, tags, sort, enabled, created_at, updated_at)
+                values (?, ?, ?, ?, '', ?, ?, 1, ?, ?)
+                """,
+                (
+                    tpl["kind"], tpl["title"], tpl["prompt"],
+                    json.dumps(tpl.get("params") or {}, ensure_ascii=False),
+                    tpl.get("tags", ""), int(tpl.get("sort", 0)), now, now,
+                ),
+            )
+        conn.commit()
+
+
+def list_templates(kind: str = "", *, only_enabled: bool = False) -> list[dict[str, Any]]:
+    clauses = []
+    args: list[Any] = []
+    if kind in TEMPLATE_KINDS:
+        clauses.append("kind = ?")
+        args.append(kind)
+    if only_enabled:
+        clauses.append("enabled = 1")
+    where = (" where " + " and ".join(clauses)) if clauses else ""
+    with connect() as conn:
+        rows = conn.execute(
+            f"select * from prompt_templates{where} order by kind asc, sort asc, id asc", args
+        ).fetchall()
+    return [template_public(r) for r in rows]
+
+
+def save_template(body: dict[str, Any]) -> dict[str, Any]:
+    kind = str(body.get("kind", "")).strip().lower()
+    if kind not in TEMPLATE_KINDS:
+        raise ActivationError("kind 必须是 image 或 video")
+    title = str(body.get("title", "")).strip()
+    prompt = str(body.get("prompt", "")).strip()
+    if not title or not prompt:
+        raise ActivationError("标题和提示词不能为空")
+    params = body.get("params")
+    if isinstance(params, str):
+        params = parse_json_object(params)
+    if not isinstance(params, dict):
+        params = {}
+    cover_url = str(body.get("coverUrl", "")).strip()
+    tags_value = body.get("tags", "")
+    tags = ",".join(t.strip() for t in tags_value if str(t).strip()) if isinstance(tags_value, list) else str(tags_value or "").strip()
+    sort = int(body.get("sort", 0) or 0)
+    enabled = 1 if body.get("enabled", True) else 0
+    now = utc_now()
+    template_id = int(body.get("id", 0) or 0)
+    with connect() as conn:
+        if template_id > 0:
+            conn.execute(
+                """
+                update prompt_templates set kind=?, title=?, prompt=?, params_json=?, cover_url=?, tags=?, sort=?, enabled=?, updated_at=?
+                where id=?
+                """,
+                (kind, title, prompt, json.dumps(params, ensure_ascii=False), cover_url, tags, sort, enabled, now, template_id),
+            )
+        else:
+            cur = conn.execute(
+                """
+                insert into prompt_templates (kind, title, prompt, params_json, cover_url, tags, sort, enabled, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (kind, title, prompt, json.dumps(params, ensure_ascii=False), cover_url, tags, sort, enabled, now, now),
+            )
+            template_id = int(cur.lastrowid)
+        conn.commit()
+        row = conn.execute("select * from prompt_templates where id=?", (template_id,)).fetchone()
+    return template_public(row)
+
+
+def delete_template(template_id: int) -> None:
+    with connect() as conn:
+        conn.execute("delete from prompt_templates where id=?", (int(template_id),))
+        conn.commit()
+
+
 def update_code_record(body: dict[str, Any], current_account: dict[str, Any] | None = None) -> None:
     code_hash_value = str(body.get("codeHash", "")).strip()
     if not code_hash_value:
@@ -1848,6 +2015,7 @@ def update_code_record(body: dict[str, Any], current_account: dict[str, Any] | N
     expires = str(body.get("expires", "")).strip()
     if not expires:
         raise ActivationError("请填写到期时间")
+    expires = normalize_code_expires(expires)
 
     max_activations = max(1, min(int(body.get("maxActivations", 1)), 999))
     features = parse_features(str(body.get("features", ",".join(DEFAULT_FEATURES))))
@@ -3181,6 +3349,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(200, {"ok": True, "data": get_beta_config()})
             return
+        if path == "/api/templates":
+            kind = str(parse_qs(parsed.query).get("kind", [""])[0]).strip().lower()
+            self.send_json(200, {"ok": True, "data": list_templates(kind, only_enabled=True)})
+            return
+        if path == "/admin/api/templates":
+            if not self.require_admin():
+                return
+            kind = str(parse_qs(parsed.query).get("kind", [""])[0]).strip().lower()
+            self.send_json(200, {"ok": True, "data": list_templates(kind)})
+            return
         if path in {"/api/lumi/relay/health", "/api/lumi/publish/health"}:
             authorized = publish_relay_token_valid(self.headers)
             self.send_json(
@@ -3355,6 +3533,26 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 cfg = set_beta_config(self.read_json())
                 self.send_json(200, {"ok": True, "data": cfg})
+            except Exception as error:
+                self.send_json(400, {"ok": False, "error": str(error)})
+            return
+        if path == "/admin/api/templates":
+            if not self.require_admin():
+                return
+            try:
+                tpl = save_template(self.read_json())
+                self.send_json(200, {"ok": True, "data": tpl})
+            except ActivationError as error:
+                self.send_json(error.status, {"ok": False, "error": str(error)})
+            except Exception as error:
+                self.send_json(400, {"ok": False, "error": str(error)})
+            return
+        if path == "/admin/api/templates/delete":
+            if not self.require_admin():
+                return
+            try:
+                delete_template(int(self.read_json().get("id", 0) or 0))
+                self.send_json(200, {"ok": True})
             except Exception as error:
                 self.send_json(400, {"ok": False, "error": str(error)})
             return
@@ -4190,6 +4388,7 @@ def activate_code(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def serve(_args: argparse.Namespace) -> None:
+    seed_default_templates()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"OpenClaw license server listening on {HOST}:{PORT}")
     httpd.serve_forever()
