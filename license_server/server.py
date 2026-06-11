@@ -1874,6 +1874,10 @@ def beta_claim_code(ip: str) -> dict[str, Any]:
         gateway_default_model=str(gw.get("gatewayDefaultModel") or ""),
         gateway_image_model=str(gw.get("gatewayImageModel") or gw.get("gateway_image_model") or ""),
         gateway_video_model=str(gw.get("gatewayVideoModel") or gw.get("gateway_video_model") or ""),
+        # 关键：有网关时必须 member_mode=1，否则激活时网关不会写进签名 license，
+        # 客户端就看不到 URL/apikey。
+        member_mode=bool(str(gw.get("gatewayBaseUrl") or "").strip()),
+        plan=normalize_plan_key(plan_key) if plan_row is not None else "",
         owner_account_id=owner_id,
     )
     code = codes[0]
