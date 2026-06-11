@@ -72,9 +72,18 @@ BrandingText "${BRAND} ${APPVERSION}"
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-Section "Install"
-  ; Stop a running instance so files can be overwritten (self-update case).
+; Stop the launcher AND its child processes (the bundled node gateway + python
+; bridge run from $INSTDIR). If they keep running they lock OpenClawFiles, which
+; is why an uninstall used to leave that folder behind.
+!macro KillInstallProcesses
   ExecWait 'taskkill /IM OpenClaw.exe /F' $0
+  ExecWait `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith('$INSTDIR', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"` $0
+  Sleep 800
+!macroend
+
+Section "Install"
+  ; Stop running launcher + children so files can be overwritten (self-update).
+  !insertmacro KillInstallProcesses
   SetOutPath "$INSTDIR"
   File /r "${PAYLOAD_DIR}\*.*"
 
@@ -100,7 +109,7 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
-  ExecWait 'taskkill /IM OpenClaw.exe /F' $0
+  !insertmacro KillInstallProcesses
   Delete "$DESKTOP\${BRAND}.lnk"
   Delete "$DESKTOP\OpenClaw.lnk"
   RMDir /r "$SMPROGRAMS\${BRAND}"
