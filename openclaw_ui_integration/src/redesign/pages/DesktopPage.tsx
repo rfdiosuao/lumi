@@ -20,10 +20,17 @@ export function DesktopPage() {
   const [screenshot, setScreenshot] = React.useState('');
   const [message, setMessage] = React.useState('你好，这是一条来自 OpenClaw 桌面 RPA 的预设回复。');
   const [installing, setInstalling] = React.useState(false);
+  const [agentBusy, setAgentBusy] = React.useState<'start' | 'stop' | null>(null);
 
   React.useEffect(() => {
     if (data?.config) setConfigDraft(data.config);
   }, [data]);
+
+  const refreshAfterAgentAction = React.useCallback(() => {
+    refresh();
+    window.setTimeout(refresh, 1200);
+    window.setTimeout(refresh, 3500);
+  }, [refresh]);
 
   const handleInstall = async () => {
     setInstalling(true);
@@ -43,26 +50,36 @@ export function DesktopPage() {
   };
 
   const handleStart = async () => {
+    if (agentBusy) return;
     if (!data?.present) {
       await handleInstall();
       return;
     }
+    setAgentBusy('start');
+    pushToast({ tone: 'ok', title: '正在启动桌面 Agent' });
     try {
       await startDesktopAgent(settings);
-      pushToast({ tone: 'ok', title: '桌面 Agent 已启动', detail: '已启动 Luminode 桌面控制组件。' });
-      refresh();
+      pushToast({ tone: 'ok', title: '桌面 Agent 已启动' });
     } catch (err) {
       pushToast({ tone: 'danger', title: '启动失败', detail: String(err) });
+    } finally {
+      setAgentBusy(null);
+      refreshAfterAgentAction();
     }
   };
 
   const handleStop = async () => {
+    if (agentBusy) return;
+    setAgentBusy('stop');
+    pushToast({ tone: 'warn', title: '正在停止桌面 Agent' });
     try {
       await stopDesktopAgent(settings);
-      pushToast({ tone: 'warn', title: '桌面 Agent 已停止', detail: '桌面控制组件已停止。' });
-      refresh();
+      pushToast({ tone: 'warn', title: '桌面 Agent 已停止' });
     } catch (err) {
       pushToast({ tone: 'danger', title: '停止失败', detail: String(err) });
+    } finally {
+      setAgentBusy(null);
+      refreshAfterAgentAction();
     }
   };
 
@@ -97,17 +114,19 @@ export function DesktopPage() {
 
   const resolvedAgentDir = String((data?.config as any)?.resolvedAgentDir || (data?.config as any)?.agentDir || '');
   const installButtonLabel = installing ? '安装中...' : '下载并安装桌面组件';
+  const runtimeStatusLabel = agentBusy === 'start' ? '启动中' : agentBusy === 'stop' ? '停止中' : data?.running ? '运行中' : '未运行';
+  const runtimeStatusTone = agentBusy ? 'warn' : data?.running ? 'ok' : 'warn';
   const primaryAction = !data?.present ? (
-    <Button variant="primary" icon={Download} onClick={handleInstall} disabled={installing || loading}>
+    <Button variant="primary" icon={Download} onClick={handleInstall} disabled={installing || loading || Boolean(agentBusy)}>
       {installButtonLabel}
     </Button>
   ) : data.running ? (
-    <Button variant="danger" icon={StopCircle} onClick={handleStop}>
-      停止
+    <Button variant="danger" icon={StopCircle} onClick={handleStop} disabled={Boolean(agentBusy)}>
+      {agentBusy === 'stop' ? '停止中...' : '停止'}
     </Button>
   ) : (
-    <Button variant="primary" icon={SquareTerminal} onClick={handleStart} disabled={installing}>
-      启动
+    <Button variant="primary" icon={SquareTerminal} onClick={handleStart} disabled={installing || Boolean(agentBusy)}>
+      {agentBusy === 'start' ? '启动中...' : '启动'}
     </Button>
   );
 
@@ -121,14 +140,14 @@ export function DesktopPage() {
         </div>
         <div className="hero-actions">
           {primaryAction}
-          <Button variant="quiet" icon={RefreshCcw} onClick={refresh} disabled={installing}>
+          <Button variant="quiet" icon={RefreshCcw} onClick={refresh} disabled={installing || Boolean(agentBusy)}>
             刷新
           </Button>
         </div>
       </section>
 
       <section className="stats-grid">
-        <StatCard label="运行状态" value={data?.running ? '运行中' : '未运行'} tone={data?.running ? 'ok' : 'warn'} />
+        <StatCard label="运行状态" value={runtimeStatusLabel} tone={runtimeStatusTone} />
         <StatCard label="API 状态" value={data?.apiReady ? '就绪' : '等待'} tone={data?.apiReady ? 'ok' : 'warn'} />
         <StatCard label="桌面组件" value={data?.present ? '已安装' : '未安装'} tone={data?.present ? 'ok' : 'warn'} />
         <StatCard label="配置" value={data?.configured ? '已配置' : '默认配置'} tone={data?.configured ? 'ok' : 'warn'} />
@@ -171,9 +190,9 @@ export function DesktopPage() {
             <Panel className="surface-panel rpa-actions-panel">
               <SectionHeader eyebrow="操作" title="自动回复动作" subtitle="通过现有 API 截屏、读取未读消息，或发送准备好的微信回复。" />
               <div className="button-row">
-                <Button variant="secondary" icon={Camera} onClick={handleScreenshot} disabled={!data.present || installing}>截图</Button>
-                <Button variant="secondary" icon={MessageCircleMore} onClick={() => handleAction('/api/desktop-agent/wechat/unread', {})} disabled={!data.present || installing}>未读</Button>
-                <Button variant="success" icon={Send} onClick={() => handleAction('/api/desktop-agent/wechat/send', { text: message })} disabled={!data.present || installing}>发送</Button>
+                <Button variant="secondary" icon={Camera} onClick={handleScreenshot} disabled={!data.present || installing || Boolean(agentBusy)}>截图</Button>
+                <Button variant="secondary" icon={MessageCircleMore} onClick={() => handleAction('/api/desktop-agent/wechat/unread', {})} disabled={!data.present || installing || Boolean(agentBusy)}>未读</Button>
+                <Button variant="success" icon={Send} onClick={() => handleAction('/api/desktop-agent/wechat/send', { text: message })} disabled={!data.present || installing || Boolean(agentBusy)}>发送</Button>
               </div>
               <Field label="回复内容"><TextArea rows={5} value={message} onChange={(event) => setMessage(event.target.value)} /></Field>
             </Panel>

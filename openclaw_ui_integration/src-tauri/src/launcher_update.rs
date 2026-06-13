@@ -19,6 +19,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+const UPDATE_HOSTS_ENV: &str = "OPENCLAW_LAUNCHER_UPDATE_ALLOW_HOSTS";
+
 #[derive(Serialize)]
 pub struct LauncherUpdateInfo {
     pub available: bool,
@@ -81,6 +83,63 @@ fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("http client: {e}"))
 }
 
+fn parse_https_url(value: &str, label: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(value.trim()).map_err(|e| format!("{label}无效：{e}"))?;
+    if url.scheme() != "https" {
+        return Err(format!("{label}必须使用 HTTPS"));
+    }
+    if url.host_str().unwrap_or("").is_empty() {
+        return Err(format!("{label}缺少域名"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(format!("{label}不能包含用户名或密码"));
+    }
+    Ok(url)
+}
+
+fn configured_update_hosts() -> Result<Vec<String>, String> {
+    let mut hosts = Vec::new();
+    if let Some(source) = update_url() {
+        let url = parse_https_url(&source, "启动器更新源")?;
+        if let Some(host) = url.host_str() {
+            hosts.push(host.to_ascii_lowercase());
+        }
+    }
+    if let Ok(extra) = std::env::var(UPDATE_HOSTS_ENV) {
+        hosts.extend(
+            extra
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| item.to_ascii_lowercase()),
+        );
+    }
+    hosts.sort();
+    hosts.dedup();
+    Ok(hosts)
+}
+
+fn validate_update_package_url(value: &str) -> Result<reqwest::Url, String> {
+    let url = parse_https_url(value, "安装包地址")?;
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let allowed = configured_update_hosts()?;
+    if allowed.is_empty() || !allowed.iter().any(|item| item == &host) {
+        return Err(format!(
+            "安装包域名不在启动器更新白名单中：{}",
+            host
+        ));
+    }
+    Ok(url)
+}
+
+fn validate_sha256(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("安装包 sha256 必须是 64 位十六进制字符串".to_string());
+    }
+    Ok(normalized)
+}
+
 #[tauri::command]
 pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
@@ -98,8 +157,9 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
             })
         }
     };
+    let manifest_url = parse_https_url(&url, "启动器更新源")?;
     let text = http_client()?
-        .get(&url)
+        .get(manifest_url)
         .send()
         .await
         .map_err(|e| format!("检查更新失败：{e}"))?
@@ -110,12 +170,14 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
         .map_err(|e| format!("读取更新清单失败：{e}"))?;
     let manifest: LauncherManifest =
         serde_json::from_str(&text).map_err(|e| format!("更新清单解析失败：{e}"))?;
+    let package_url = validate_update_package_url(&manifest.url)?;
+    let sha256 = validate_sha256(&manifest.sha256)?;
     Ok(LauncherUpdateInfo {
         available: is_newer(&manifest.version, &current),
         current,
         latest: manifest.version,
-        url: manifest.url,
-        sha256: manifest.sha256,
+        url: package_url.to_string(),
+        sha256,
         notes: manifest.notes,
         configured: true,
     })
@@ -127,11 +189,10 @@ pub async fn apply_launcher_update(
     url: String,
     sha256: String,
 ) -> Result<(), String> {
-    if url.trim().is_empty() {
-        return Err("更新地址为空".to_string());
-    }
+    let package_url = validate_update_package_url(&url)?;
+    let expected_sha256 = validate_sha256(&sha256)?;
     let bytes = http_client()?
-        .get(&url)
+        .get(package_url)
         .send()
         .await
         .map_err(|e| format!("下载安装包失败：{e}"))?
@@ -140,17 +201,15 @@ pub async fn apply_launcher_update(
         .bytes()
         .await
         .map_err(|e| format!("下载安装包失败：{e}"))?;
-    if !sha256.trim().is_empty() {
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let got = hex(&hasher.finalize());
-        if !got.eq_ignore_ascii_case(sha256.trim()) {
-            return Err(format!(
-                "安装包校验失败：期望 {}… 实际 {}…",
-                &sha256.trim()[..16.min(sha256.trim().len())],
-                &got[..16]
-            ));
-        }
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let got = hex(&hasher.finalize());
+    if !got.eq_ignore_ascii_case(&expected_sha256) {
+        return Err(format!(
+            "安装包校验失败：期望 {}… 实际 {}…",
+            &expected_sha256[..16],
+            &got[..16]
+        ));
     }
     let setup = std::env::temp_dir().join("OpenClaw-Setup-update.exe");
     std::fs::write(&setup, &bytes).map_err(|e| format!("写入安装包失败：{e}"))?;

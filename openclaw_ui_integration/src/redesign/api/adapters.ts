@@ -41,6 +41,13 @@ interface BridgeJob<T = any> {
   status?: string;
   result?: T;
   error?: string;
+  message?: string;
+  progress?: {
+    message?: string;
+    tone?: string;
+    updatedAt?: number;
+    history?: Array<{ message?: string; tone?: string; updatedAt?: number }>;
+  };
 }
 
 const DASHBOARD_CACHE_TTL_MS = 2500;
@@ -119,12 +126,16 @@ async function waitForBridgeJob<T>(
   settings: PreviewSettings,
   jobId: string,
   timeoutMs: number,
+  onProgress?: (job: BridgeJob<T>) => void,
 ): Promise<RequestResult<T>> {
   const startedAt = Date.now();
   let attempt = 0;
+  let lastJob: BridgeJob<T> = {};
   while (Date.now() - startedAt < timeoutMs) {
     const response = await requestBridgeData<{ job?: BridgeJob<T> }>(settings, `/api/jobs/${encodeURIComponent(jobId)}`);
     const job = response.data?.job || {};
+    lastJob = job;
+    onProgress?.(job);
     const status = String(job.status || '').toLowerCase();
     if (isJobDone(status)) {
       return { data: job.result as T, source: response.source };
@@ -135,7 +146,8 @@ async function waitForBridgeJob<T>(
     attempt += 1;
     await delay(Math.min(2500, 900 + attempt * 200));
   }
-  throw new Error(`job_timeout:${jobId}`);
+  const lastMessage = pickText(lastJob.progress?.message, lastJob.message);
+  throw new Error(lastMessage ? `job_timeout:${jobId} · ${lastMessage}` : `job_timeout:${jobId}`);
 }
 
 export async function requestBridgeData<T = any>(
@@ -708,7 +720,7 @@ export async function generateVideo(settings: PreviewSettings, payload: {
   duration: number;
   ratio: string;
   imagePath?: string;
-}): Promise<RequestResult<VideoResult>> {
+}, onProgress?: (job: BridgeJob<any>) => void): Promise<RequestResult<VideoResult>> {
   const mode = effectiveMode(settings);
   const submitResponse = await requestBridgeData<any>(
     settings,
@@ -718,7 +730,7 @@ export async function generateVideo(settings: PreviewSettings, payload: {
   );
   const jobId = pickText(submitResponse.data?.jobId, submitResponse.data?.job?.id);
   const resultResponse = jobId
-    ? await waitForBridgeJob<any>(settings, jobId, 20 * 60 * 1000)
+    ? await waitForBridgeJob<any>(settings, jobId, 20 * 60 * 1000, onProgress)
     : submitResponse;
   const source = mergeSource(submitResponse.source, resultResponse.source);
   const video = pickText(resultResponse.data?.video, '');

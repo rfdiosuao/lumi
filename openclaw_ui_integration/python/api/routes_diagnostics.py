@@ -117,6 +117,7 @@ def register_diagnostics_routes(app, ctx) -> None:
             archive.writestr("configs/auth-profiles.json", json.dumps(ctx.read_sanitized_json(ctx.paths.auth_profiles, {}), ensure_ascii=False, indent=2))
             archive.writestr("configs/imgapi_config.json", json.dumps(ctx.read_sanitized_json(ctx.paths.image_config, {}), ensure_ascii=False, indent=2))
             archive.writestr("configs/video_config.json", json.dumps(ctx.read_sanitized_json(ctx.paths.video_config, {}), ensure_ascii=False, indent=2))
+            archive.writestr("configs/videoapi_config.json", json.dumps(ctx.read_sanitized_json(ctx.paths.videoapi_config, {}), ensure_ascii=False, indent=2))
 
         return ctx.fastapi_json({
             "path": zip_path,

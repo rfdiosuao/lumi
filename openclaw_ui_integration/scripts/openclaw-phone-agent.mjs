@@ -13,6 +13,10 @@ const DEFAULT_TIMEOUT_SEC = 600;
 const DEFAULT_MAX_ROUNDS = 60;
 const HISTORY_PATH = path.join(PROJECT_ROOT, 'data', '.openclaw', 'logs', 'phone-agent-history.jsonl');
 const QUEUE_PATH = path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agent-queue.json');
+const QUEUE_DRAIN_LOCK_PATH = `${QUEUE_PATH}.drain.lock`;
+const QUEUE_RW_LOCK_PATH = `${QUEUE_PATH}.rw.lock`;
+const DRAIN_LOCK_STALE_MS = 30 * 60 * 1000;
+const QUEUE_RW_LOCK_STALE_MS = 5 * 60 * 1000;
 
 function usage() {
   return `
@@ -399,9 +403,157 @@ async function readQueue() {
 }
 
 async function writeQueue(queue) {
+  const release = await acquireQueueRwLock();
+  try {
+    const current = await readQueue();
+    await writeQueueUnlocked(mergeQueue(current, queue));
+  } finally {
+    await release();
+  }
+}
+
+async function writeQueueUnlocked(queue) {
   await fs.mkdir(path.dirname(QUEUE_PATH), { recursive: true });
   const payload = { schema: 'openclaw.phone-agent.queue.v1', updatedAt: new Date().toISOString(), items: queue.items || [] };
-  await fs.writeFile(QUEUE_PATH, JSON.stringify(payload, null, 2), 'utf8');
+  const tmpPath = `${QUEUE_PATH}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
+  await fs.rename(tmpPath, QUEUE_PATH);
+}
+
+function mergeQueue(current, incoming) {
+  const merged = new Map();
+  for (const item of Array.isArray(current?.items) ? current.items : []) {
+    if (item?.id) merged.set(String(item.id), item);
+  }
+  for (const item of Array.isArray(incoming?.items) ? incoming.items : []) {
+    if (item?.id) merged.set(String(item.id), item);
+  }
+  return {
+    schema: 'openclaw.phone-agent.queue.v1',
+    updatedAt: new Date().toISOString(),
+    items: Array.from(merged.values()),
+  };
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+async function readDrainLock() {
+  try {
+    const raw = await fs.readFile(QUEUE_DRAIN_LOCK_PATH, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function removeStaleDrainLock() {
+  let stat;
+  try {
+    stat = await fs.stat(QUEUE_DRAIN_LOCK_PATH);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  const info = await readDrainLock();
+  const pid = Number(info.pid);
+  const ageMs = Date.now() - stat.mtimeMs;
+  if (isProcessAlive(pid) && ageMs < DRAIN_LOCK_STALE_MS) return false;
+  try {
+    await fs.unlink(QUEUE_DRAIN_LOCK_PATH);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return true;
+    throw error;
+  }
+}
+
+async function acquireDrainLock() {
+  await fs.mkdir(path.dirname(QUEUE_DRAIN_LOCK_PATH), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await fs.open(QUEUE_DRAIN_LOCK_PATH, 'wx');
+      try {
+        await handle.writeFile(JSON.stringify({
+          schema: 'openclaw.phone-agent.drain-lock.v1',
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+        }, null, 2));
+      } finally {
+        await handle.close();
+      }
+      return async () => {
+        try {
+          const info = await readDrainLock();
+          if (!info.pid || Number(info.pid) === process.pid) await fs.unlink(QUEUE_DRAIN_LOCK_PATH);
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error;
+        }
+      };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const removed = await removeStaleDrainLock();
+      if (!removed) return null;
+    }
+  }
+  return null;
+}
+
+async function removeStaleQueueRwLock() {
+  let stat;
+  try {
+    stat = await fs.stat(QUEUE_RW_LOCK_PATH);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  const ageMs = Date.now() - stat.mtimeMs;
+  if (ageMs < QUEUE_RW_LOCK_STALE_MS) return false;
+  try {
+    await fs.unlink(QUEUE_RW_LOCK_PATH);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return true;
+    throw error;
+  }
+}
+
+async function acquireQueueRwLock() {
+  await fs.mkdir(path.dirname(QUEUE_RW_LOCK_PATH), { recursive: true });
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      const handle = await fs.open(QUEUE_RW_LOCK_PATH, 'wx');
+      try {
+        await handle.writeFile(JSON.stringify({
+          schema: 'openclaw.phone-agent.queue-rw-lock.v1',
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+        }, null, 2));
+      } finally {
+        await handle.close();
+      }
+      return async () => {
+        try {
+          await fs.unlink(QUEUE_RW_LOCK_PATH);
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error;
+        }
+      };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const removed = await removeStaleQueueRwLock();
+      if (!removed && Date.now() >= deadline) throw new Error('phone queue is busy');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }
 
 function createQueueItem(config) {
@@ -427,7 +579,8 @@ function createQueueItem(config) {
   };
 }
 
-function queueItemConfig(baseConfig, item) {
+async function queueItemConfig(baseConfig, item) {
+  const launcherPhone = item.deviceId ? await readLauncherPhoneConfigByDevice(item.deviceId) : {};
   return {
     ...baseConfig,
     prompt: item.prompt || baseConfig.prompt,
@@ -436,9 +589,9 @@ function queueItemConfig(baseConfig, item) {
     maxRounds: Number(item.maxRounds) || baseConfig.maxRounds,
     maxWaitSec: Number(item.maxWaitSec) || baseConfig.maxWaitSec,
     pollMs: Number(item.pollMs) || baseConfig.pollMs,
-    deviceId: item.deviceId || baseConfig.deviceId,
-    phoneUrl: item.phoneUrl || baseConfig.phoneUrl,
-    phoneToken: item.phoneToken || baseConfig.phoneToken,
+    deviceId: item.deviceId || launcherPhone.id || baseConfig.deviceId,
+    phoneUrl: item.phoneUrl || launcherPhone.phoneUrl || baseConfig.phoneUrl,
+    phoneToken: item.phoneToken || launcherPhone.phoneToken || baseConfig.phoneToken,
   };
 }
 
@@ -447,6 +600,18 @@ function queueSummary(items) {
   return items
     .map((item) => `${item.updatedAt || item.createdAt || '-'} ${item.status || 'pending'} priority=${item.priority || 0} ${item.id} ${item.taskId ? `task=${String(item.taskId).slice(0, 8)}` : ''} ${item.promptPreview || ''}`.trim())
     .join('\n');
+}
+
+function maxAttempts(item) {
+  const value = Number(item.maxAttempts);
+  return Number.isFinite(value) && value > 0 ? value : 3;
+}
+
+function canDrainItem(item) {
+  const status = item.status || 'pending';
+  if (['pending', 'running', 'submitted'].includes(status)) return true;
+  if (status === 'error') return Number(item.attempts || 0) < maxAttempts(item);
+  return false;
 }
 
 async function enqueueTask(config) {
@@ -459,14 +624,20 @@ async function enqueueTask(config) {
 }
 
 async function drainQueue(config) {
+  const releaseDrainLock = await acquireDrainLock();
+  if (!releaseDrainLock) {
+    const lock = await readDrainLock();
+    return { queuePath: QUEUE_PATH, lockPath: QUEUE_DRAIN_LOCK_PATH, lockBusy: true, lock, count: 0, results: [], items: (await readQueue()).items };
+  }
+  try {
   const queue = await readQueue();
   const candidates = queue.items
-    .filter((item) => ['pending', 'running', 'submitted', 'error'].includes(item.status || 'pending'))
+    .filter((item) => canDrainItem(item))
     .filter((item) => !config.queueId || item.id === config.queueId)
     .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0) || String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
   const results = [];
   for (const item of candidates) {
-    const itemConfig = queueItemConfig(config, item);
+    const itemConfig = await queueItemConfig(config, item);
     ensurePhoneConfig(itemConfig);
     item.status = 'running';
     item.updatedAt = new Date().toISOString();
@@ -484,7 +655,7 @@ async function drainQueue(config) {
       }
       const finalTask = await waitForTask(itemConfig, item.taskId);
       const ok = finalTask.task?.status === 'success';
-      item.status = ok ? 'completed' : finalTask.task?.status || 'error';
+      item.status = ok ? 'completed' : item.attempts >= maxAttempts(item) ? 'failed' : finalTask.task?.status || 'error';
       item.finishedAt = new Date().toISOString();
       item.updatedAt = item.finishedAt;
       item.error = ok ? '' : (finalTask.task?.result?.error || finalTask.task?.error || '');
@@ -508,12 +679,12 @@ async function drainQueue(config) {
       });
       results.push({ ok, item, final: finalTask.task });
     } catch (error) {
-      item.status = 'error';
+      item.status = item.attempts >= maxAttempts(item) ? 'failed' : 'error';
       item.error = error?.message || 'queue_item_failed';
       item.updatedAt = new Date().toISOString();
       await appendHistory({
         command: 'drain',
-        status: 'error',
+        status: item.status,
         submittedAt,
         finishedAt: item.updatedAt,
         queueId: item.id,
@@ -527,7 +698,10 @@ async function drainQueue(config) {
     }
     await writeQueue(queue);
   }
-  return { queuePath: QUEUE_PATH, count: candidates.length, results, items: queue.items };
+  return { queuePath: QUEUE_PATH, lockPath: QUEUE_DRAIN_LOCK_PATH, count: candidates.length, results, items: queue.items };
+  } finally {
+    await releaseDrainLock();
+  }
 }
 
 function print(config, payload, human) {

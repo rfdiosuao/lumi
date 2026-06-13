@@ -50,7 +50,7 @@ const VIDEO_LOADING_TIPS = [
   '即将完成，正在下载结果…',
 ];
 
-function StudioLoading({ kind }: { kind: 'image' | 'video' }) {
+function StudioLoading({ kind, message = '' }: { kind: 'image' | 'video'; message?: string }) {
   const [secs, setSecs] = React.useState(0);
   React.useEffect(() => {
     const timer = window.setInterval(() => setSecs((value) => value + 1), 1000);
@@ -58,7 +58,7 @@ function StudioLoading({ kind }: { kind: 'image' | 'video' }) {
   }, []);
   const tips = kind === 'image' ? IMAGE_LOADING_TIPS : VIDEO_LOADING_TIPS;
   const step = kind === 'image' ? 8 : 20; // 视频更慢，换一条提示的间隔更长
-  const tip = tips[Math.min(tips.length - 1, Math.floor(secs / step))];
+  const tip = message || tips[Math.min(tips.length - 1, Math.floor(secs / step))];
   return (
     <div className="studio-loading" role="status" aria-live="polite">
       <div className="studio-spinner" aria-hidden="true" />
@@ -118,6 +118,7 @@ export function StudioPage() {
   const [videoRatio, setVideoRatio] = React.useState('16:9');
   const [videoImagePath, setVideoImagePath] = React.useState('');
   const [videoReferenceName, setVideoReferenceName] = React.useState('');
+  const [videoProgress, setVideoProgress] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [selectedImage, setSelectedImage] = React.useState<ImageResult | null>(null);
   const [selectedVideo, setSelectedVideo] = React.useState<VideoResult | null>(null);
@@ -254,6 +255,7 @@ export function StudioPage() {
       return;
     }
     setBusy(true);
+    setVideoProgress('正在提交视频任务');
     try {
       const result = await generateVideo(settings, {
         providerId,
@@ -266,6 +268,9 @@ export function StudioPage() {
         duration: videoDuration,
         ratio: videoRatio,
         imagePath: videoImagePath.trim() || undefined,
+      }, (job) => {
+        const message = String(job.progress?.message || job.message || '').trim();
+        if (message) setVideoProgress(message);
       });
       setSelectedVideo(result.data);
       setVideoHistory((history) => [result.data, ...history].slice(0, 6));
@@ -283,6 +288,7 @@ export function StudioPage() {
       pushToast({ tone: 'danger', title: '视频生成失败', detail: String(err) });
     } finally {
       setBusy(false);
+      setVideoProgress('');
     }
   };
 
@@ -486,10 +492,12 @@ export function StudioPage() {
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="视频结果" subtitle="真实模式返回 mp4；Agnes 视频会自动按任务接口轮询。" />
                 {busy ? (
-                  <StudioLoading kind="video" />
+                  <StudioLoading kind="video" message={videoProgress} />
                 ) : selectedVideo ? (
                   <div className="video-preview-shell">
-                    {selectedVideo.mime.startsWith('video/') ? (
+                    {!selectedVideo.previewUrl ? (
+                      <EmptyState title="视频已保存" description={selectedVideo.file?.filename || '文件已写入本地目录'} />
+                    ) : selectedVideo.mime.startsWith('video/') ? (
                       <video controls src={selectedVideo.previewUrl} className="video-preview" />
                     ) : (
                       <img src={selectedVideo.previewUrl} alt={selectedVideo.prompt} className="video-preview" />
@@ -543,4 +551,3 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
-

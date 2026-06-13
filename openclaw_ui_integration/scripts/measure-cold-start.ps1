@@ -1,11 +1,16 @@
 param(
     [string]$Root = (Get-Location).Path,
     [string]$LauncherExe = "OpenClaw.exe",
-[int]$TimeoutSec = 600,
-[int]$PollMs = 500,
-[switch]$StopAfterMeasure,
-[string]$OutputPath = "",
-[int]$BudgetMs = 30000
+    [Alias("timeout-sec")]
+    [int]$TimeoutSec = 600,
+    [Alias("poll-ms")]
+    [int]$PollMs = 500,
+    [Alias("stop-after-measure")]
+    [switch]$StopAfterMeasure,
+    [Alias("output-path")]
+    [string]$OutputPath = "",
+    [Alias("budget-ms")]
+    [int]$BudgetMs = 30000
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,7 +54,8 @@ if (-not (Test-Path -LiteralPath $helperScript)) {
 $argsList = @(
     $helperScript,
     "--root", $Root,
-    "--timeout-sec", $TimeoutSec
+    "--timeout-sec", $TimeoutSec,
+    "--poll-ms", $PollMs
 )
 if ($StopAfterMeasure) {
     $argsList += "--stop-after-measure"

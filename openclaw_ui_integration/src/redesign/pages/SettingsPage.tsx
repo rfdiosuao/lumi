@@ -1,12 +1,11 @@
 import React from 'react';
 import { Command } from '@tauri-apps/plugin-shell';
-import { RefreshCcw, Save, Terminal } from 'lucide-react';
+import { RefreshCcw, Save, SquareTerminal, Terminal } from 'lucide-react';
 import { Button, Chip, Field, Input, Panel, SectionHeader, Select, TextArea } from '../components/ui';
-import { loadSettingsSnapshot, readConfigValue, saveAuthProfiles, writeConfigValue } from '../api/adapters';
+import { loadSettingsSnapshot, readConfigValue, saveAuthProfiles, saveDesktopAgentConfig, writeConfigValue } from '../api/adapters';
 import { applyLauncherUpdate, checkLauncherUpdate, type LauncherUpdateInfo } from '../api/client';
 import { makeCommandOptions, resolvePortableBasePath } from '../api/runtimeCommand';
 import { maskSecret } from '../lib/format';
-import { displayPhoneBaseUrl, normalizeOrCleanPhoneBaseUrl } from '../lib/phoneUrl';
 import { useAsync } from '../lib/useAsync';
 import { usePreviewStore } from '../store/appStore';
 
@@ -109,6 +108,7 @@ export function SettingsPage() {
   const [imageForm, setImageForm] = React.useState<ImageForm>({ baseUrl: '', apiKey: '', model: 'gpt-image-2' });
   const [videoForm, setVideoForm] = React.useState<VideoForm>({ providerId: 'agnes', apiBase: 'https://apihub.agnes-ai.com/v1', apiKey: '', model: 'agnes-video-v2.0' });
   const [onboardRunning, setOnboardRunning] = React.useState(false);
+  const [syncingDesktopRpa, setSyncingDesktopRpa] = React.useState(false);
   const [jsonDrafts, setJsonDrafts] = React.useState({
     authProfiles: '{}',
     imageConfig: '{}',
@@ -256,13 +256,42 @@ export function SettingsPage() {
     }
   };
 
+  const handleSyncDesktopRpa = async () => {
+    const baseUrl = gatewayForm.baseUrl.trim();
+    const apiKey = gatewayForm.apiKey.trim();
+    const model = gatewayForm.model.trim();
+    if (!baseUrl || !apiKey) {
+      pushToast({ tone: 'warn', title: '缺少模型网关', detail: '先填写主模型地址和密钥。' });
+      return;
+    }
+    setSyncingDesktopRpa(true);
+    try {
+      const provider = {
+        apiKey,
+        baseUrl,
+        baseURL: baseUrl,
+        model,
+      };
+      await saveDesktopAgentConfig(storeSettings, {
+        provider,
+        llm: provider,
+        chatProvider: { config: provider },
+      });
+      pushToast({ tone: 'ok', title: '桌面 RPA 已同步', detail: model ? `${model} · ${baseUrl}` : baseUrl });
+    } catch (err) {
+      pushToast({ tone: 'danger', title: '同步桌面 RPA 失败', detail: String(err) });
+    } finally {
+      setSyncingDesktopRpa(false);
+    }
+  };
+
   return (
     <div className="page-grid">
       <section className="hero-band">
         <div className="hero-copy">
           <div className="eyebrow">统一设置</div>
-          <h1>所有密钥和连接参数，只放在这一个设置页。</h1>
-          <p>旧的模型配置、图像生成、视频生成、桥接地址和手机控制台参数都从这里维护，业务页面只读取结果。</p>
+          <h1>模型和运行时配置。</h1>
+          <p>OpenClaw 引导、主模型、媒体生成和桌面 RPA 同步入口集中维护。</p>
         </div>
         <div className="hero-actions">
           <Button variant="primary" icon={RefreshCcw} onClick={() => { refresh(); loadConfigs(); }}>
@@ -275,43 +304,6 @@ export function SettingsPage() {
       </section>
 
       <section className="content-grid content-grid-settings">
-        <Panel className="surface-panel">
-          <SectionHeader
-            eyebrow="启动器连接"
-            title="启动器连接"
-            subtitle="控制预览版如何连接桥接服务，以及手机控制台如何连接 APKClaw。"
-            action={<Chip tone={storeSettings.transportMode === 'live' ? 'ok' : storeSettings.transportMode === 'mock' ? 'warn' : 'neutral'}>{transportLabel(storeSettings.transportMode)}</Chip>}
-          />
-          <div className="form-grid">
-            <Field label="连接模式">
-              <Select value={storeSettings.transportMode} onChange={(event) => updateSettings({ transportMode: event.target.value as any })}>
-                <option value="live">真实接口</option>
-                <option value="auto">自动选择</option>
-              </Select>
-            </Field>
-            <Field label="桥接地址">
-              <Input value={storeSettings.bridgeBaseUrl} onChange={(event) => updateSettings({ bridgeBaseUrl: event.target.value })} placeholder="例如 /api 或 http://127.0.0.1:18791" />
-            </Field>
-            <Field label="桥接令牌">
-              <Input type="password" value={storeSettings.bridgeToken} onChange={(event) => updateSettings({ bridgeToken: event.target.value })} placeholder="示例：桥接令牌" />
-            </Field>
-            <Field label="代理目标">
-              <Input value={storeSettings.proxyTarget} onChange={(event) => updateSettings({ proxyTarget: event.target.value })} placeholder="http://127.0.0.1:18791" />
-            </Field>
-            <Field label="手机控制台地址">
-              <Input
-                value={displayPhoneBaseUrl(storeSettings.phoneBaseUrl)}
-                onChange={(event) => updateSettings({ phoneBaseUrl: event.target.value })}
-                onBlur={(event) => updateSettings({ phoneBaseUrl: normalizeOrCleanPhoneBaseUrl(event.target.value) })}
-                placeholder="192.168.1.137:9527"
-              />
-            </Field>
-            <Field label="手机令牌">
-              <Input type="password" value={storeSettings.phoneToken} onChange={(event) => updateSettings({ phoneToken: event.target.value })} placeholder="示例：Bearer 令牌" />
-            </Field>
-          </div>
-        </Panel>
-
         <Panel className="surface-panel surface-panel-wide">
           <SectionHeader
             eyebrow="统一密钥"
@@ -354,6 +346,16 @@ export function SettingsPage() {
               <Field label="主模型">
                 <Input value={gatewayForm.model} onChange={(event) => setGatewayForm((state) => ({ ...state, model: event.target.value }))} placeholder="gpt-4o" />
               </Field>
+              <div className="settings-card-actions">
+                <Button
+                  variant="secondary"
+                  icon={SquareTerminal}
+                  onClick={handleSyncDesktopRpa}
+                  disabled={syncingDesktopRpa || !gatewayForm.baseUrl.trim() || !gatewayForm.apiKey.trim()}
+                >
+                  {syncingDesktopRpa ? '同步中...' : '同步到桌面 RPA'}
+                </Button>
+              </div>
             </section>
 
             <section className="settings-card">
@@ -599,13 +601,4 @@ function sanitizeOpenClawConfig(value: any) {
 function commandResultDetail(result: { code?: number | null; stdout?: string; stderr?: string } | undefined) {
   const detail = [result?.stderr, result?.stdout].filter(Boolean).join('\n').trim();
   return detail || `退出码：${result?.code ?? 'unknown'}`;
-}
-
-function transportLabel(value: string) {
-  const map: Record<string, string> = {
-    mock: '预览模式',
-    auto: '自动选择',
-    live: '真实接口',
-  };
-  return map[value] || value;
 }

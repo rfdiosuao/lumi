@@ -1,11 +1,15 @@
 {
   "name": "openclaw-new-launcher",
-  "version": "2.1.5",
+  "version": "2.1.8",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "verify:automation": "node scripts/verify-phone-automation.mjs",
+    "verify:scheduler": "node scripts/run-python-script.mjs scripts/verify-phone-scheduler.py",
+    "verify:performance": "node scripts/verify-launcher-performance.mjs",
+    "stress:scheduler": "node scripts/run-python-script.mjs scripts/stress-phone-scheduler.py",
     "verify:phone": "powershell -ExecutionPolicy Bypass -File scripts/verify-phone-agent.ps1",
     "phone:image": "node scripts/openclaw-image-phone.mjs",
     "phone:image:edit": "node scripts/openclaw-image-phone.mjs --mode edit",

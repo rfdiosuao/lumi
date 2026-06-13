@@ -34,6 +34,7 @@ from services.video_api import DashScopeVideoClient
 from services.updater import OpenClawUpdater
 from services.skills import SkillService
 from services.jobs import JobManager
+from services.phone_scheduler import PhoneAutomationScheduler
 
 paths = AppPaths.discover()
 log_buffer: list[str] = []
@@ -69,6 +70,7 @@ _video_client: DashScopeVideoClient | None = None
 _theme_mgr: ThemeManager | None = None
 _skill_svc: SkillService | None = None
 _job_mgr: JobManager | None = None
+_phone_scheduler: PhoneAutomationScheduler | None = None
 _cache_lock = threading.Lock()
 _cache_store: dict[str, tuple[float, object]] = {}
 
@@ -139,6 +141,12 @@ def _get_job_mgr() -> JobManager:
     if _job_mgr is None:
         _job_mgr = JobManager(append_log)
     return _job_mgr
+
+def _get_phone_scheduler() -> PhoneAutomationScheduler:
+    global _phone_scheduler
+    if _phone_scheduler is None:
+        _phone_scheduler = PhoneAutomationScheduler(paths, append_log)
+    return _phone_scheduler
 
 def _cached(key: str, ttl: float, builder: Callable[[], object]) -> object:
     now = time.time()
@@ -736,6 +744,7 @@ def _build_fastapi_context():
         get_license_mgr=_get_license_mgr,
         get_member_mgr=_get_member_mgr,
         get_process_svc=_get_process_svc,
+        get_phone_scheduler=_get_phone_scheduler,
         get_skill_svc=_get_skill_svc,
         get_theme_mgr=_get_theme_mgr,
         get_updater=_get_updater,
@@ -775,6 +784,7 @@ def _serve_fastapi(port: int, token: str) -> None:
         allow_credentials=False,
     )
     register_fastapi_routes(app, _build_fastapi_context())
+    _get_phone_scheduler().start()
 
     print(f"BRIDGE_PORT={port}", flush=True)
     print(f"BRIDGE_TOKEN={token}", flush=True)

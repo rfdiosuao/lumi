@@ -2290,6 +2290,224 @@ a {
   border-color: rgba(255, 112, 112, 0.32);
 }
 
+.phone-automation-panel {
+  border-color: rgba(199, 166, 106, 0.2);
+}
+
+.phone-automation-panel .tabs {
+  margin-bottom: 14px;
+}
+
+.automation-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.automation-template-groups,
+.automation-editor,
+.automation-schedule-form,
+.automation-schedule-list,
+.automation-log-layout {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.automation-group-title {
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.automation-template-list,
+.automation-queue-strip,
+.automation-log-table {
+  display: grid;
+  gap: 10px;
+}
+
+.automation-template-row,
+.automation-schedule-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.automation-template-main {
+  min-width: 0;
+}
+
+.automation-template-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.automation-template-head strong,
+.automation-schedule-row strong,
+.automation-queue-item strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.automation-template-row p,
+.automation-schedule-row p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.automation-schedule-row small,
+.automation-device-option small,
+.automation-queue-item small {
+  color: var(--subtle);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.automation-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.automation-tags span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.automation-template-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.automation-template-actions .toggle {
+  min-width: 118px;
+}
+
+.automation-editor,
+.automation-schedule-form,
+.automation-schedule-list {
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.automation-device-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.automation-device-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.automation-device-option span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.automation-log-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.automation-queue-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.automation-queue-item {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.automation-queue-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.automation-log-row {
+  display: grid;
+  grid-template-columns: 132px 78px minmax(90px, 0.7fr) minmax(120px, 0.9fr) minmax(180px, 1.2fr) minmax(160px, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.automation-log-row span,
+.automation-log-row code {
+  min-width: 0;
+  color: var(--subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.automation-log-row strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.automation-log-row p {
+  margin: 0;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.automation-log-success {
+  border-color: rgba(106, 210, 164, 0.26);
+}
+
+.automation-log-failed {
+  border-color: rgba(255, 112, 112, 0.32);
+}
+
+.automation-log-skipped {
+  border-color: rgba(199, 166, 106, 0.3);
+}
+
 @media (max-width: 1280px) {
   .content-grid-dashboard,
   .content-grid-dashboard-bottom,
@@ -2324,6 +2542,15 @@ a {
 
   .phone-simple-grid {
     grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  }
+
+  .automation-layout,
+  .automation-log-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-queue-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -2433,7 +2660,10 @@ a {
 
   .skill-row,
   .tree-row,
-  .phone-task-log-row {
+  .phone-task-log-row,
+  .automation-template-row,
+  .automation-schedule-row,
+  .automation-log-row {
     grid-template-columns: 1fr;
   }
 
@@ -2468,7 +2698,8 @@ a {
 
   .launcher-grid,
   .settings-card-grid,
-  .phone-simple-grid {
+  .phone-simple-grid,
+  .automation-queue-strip {
     grid-template-columns: 1fr;
   }
 

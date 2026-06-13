@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 
 from core.constants import IMAGE_MODEL
+from services.url_safety import assert_public_http_url
 
 
 class ImageApiError(RuntimeError):
@@ -54,7 +55,7 @@ class ImageApiClient:
         edit_image_path: str | None = None,
         model: str = "",
     ) -> list[bytes]:
-        base_url = base_url.rstrip("/")
+        base_url = assert_public_http_url(base_url, "image baseUrl").rstrip("/")
         # The request builders append "/v1/images/...", so the base must be the
         # provider root. Tolerate a base that already ends in /v1 (e.g. copied
         # from a member-gateway URL) instead of producing a broken /v1/v1 path.
@@ -117,10 +118,10 @@ class ImageApiClient:
         image_url = image_url.strip()
         parsed = urllib.parse.urlparse(image_url)
         if parsed.scheme in ("http", "https"):
-            return image_url
+            return assert_public_http_url(image_url, "图片 URL")
         if parsed.scheme:
             raise ImageApiError(f"不支持的图片 URL 协议: {parsed.scheme}")
-        return urllib.parse.urljoin(f"{base_url.rstrip('/')}/", image_url)
+        return assert_public_http_url(urllib.parse.urljoin(f"{base_url.rstrip('/')}/", image_url), "图片 URL")
 
     def _extract_images_bytes(self, data: dict, base_url: str) -> list[bytes]:
         items = data.get("data")

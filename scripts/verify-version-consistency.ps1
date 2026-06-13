@@ -5,7 +5,22 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$LauncherDir = Join-Path $Root "openclaw_new_launcher"
+
+function Resolve-LauncherDir {
+    $candidates = @("openclaw_ui_integration", "openclaw_new_launcher")
+    foreach ($candidate in $candidates) {
+        $path = Join-Path $Root $candidate
+        if (
+            (Test-Path -LiteralPath (Join-Path $path "package.json")) -and
+            (Test-Path -LiteralPath (Join-Path $path "src-tauri"))
+        ) {
+            return $path
+        }
+    }
+    throw "No launcher project found. Expected openclaw_ui_integration or openclaw_new_launcher."
+}
+
+$LauncherDir = Resolve-LauncherDir
 $TauriDir = Join-Path $LauncherDir "src-tauri"
 
 function Read-JsonVersion {
@@ -56,11 +71,52 @@ function Read-CargoPackageVersion {
     throw "Unable to read [package] version from $Path"
 }
 
+function Read-CargoLockPackageVersion {
+    param(
+        [string]$Path,
+        [string]$PackageName
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Missing file: $Path"
+    }
+
+    $inPackage = $false
+    $matchedName = $false
+    $version = ""
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^\[\[package\]\]\s*$') {
+            if ($inPackage -and $matchedName -and -not [string]::IsNullOrWhiteSpace($version)) {
+                return $version
+            }
+            $inPackage = $true
+            $matchedName = $false
+            $version = ""
+            continue
+        }
+        if (-not $inPackage) {
+            continue
+        }
+        if ($line -match '^name\s*=\s*"(?<name>[^"]+)"') {
+            $matchedName = $Matches["name"] -eq $PackageName
+            continue
+        }
+        if ($line -match '^version\s*=\s*"(?<version>[^"]+)"') {
+            $version = $Matches["version"]
+        }
+    }
+
+    if ($inPackage -and $matchedName -and -not [string]::IsNullOrWhiteSpace($version)) {
+        return $version
+    }
+    throw "Unable to read Cargo.lock package version for $PackageName from $Path"
+}
+
 $packageJsonVersion = Read-JsonVersion (Join-Path $LauncherDir "package.json")
 $packageLockVersion = Read-JsonVersion (Join-Path $LauncherDir "package-lock.json")
 $packageLockRootPackageVersion = Read-PackageLockRootPackageVersion (Join-Path $LauncherDir "package-lock.json")
 $tauriConfigVersion = Read-JsonVersion (Join-Path $TauriDir "tauri.conf.json")
 $cargoVersion = Read-CargoPackageVersion (Join-Path $TauriDir "Cargo.toml")
+$cargoLockVersion = Read-CargoLockPackageVersion (Join-Path $TauriDir "Cargo.lock") "app"
 
 $versions = [ordered]@{
     "package.json" = [string]$packageJsonVersion
@@ -68,6 +124,7 @@ $versions = [ordered]@{
     "package-lock.json packages root" = [string]$packageLockRootPackageVersion
     "tauri.conf.json" = [string]$tauriConfigVersion
     "Cargo.toml" = [string]$cargoVersion
+    "Cargo.lock" = [string]$cargoLockVersion
 }
 
 $expected = $versions["package.json"]

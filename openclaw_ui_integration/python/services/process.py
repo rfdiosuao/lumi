@@ -6,6 +6,7 @@ import os
 import json
 import hashlib
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -204,12 +205,7 @@ class OpenClawProcessService:
                 return
             self.append_log("[OpenClaw] Startup did not become ready; cleaning up process tree.\n")
             if self.process and self.process.poll() is None:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
-                    capture_output=True,
-                    text=True,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
+                self._kill_pid(str(self.process.pid))
             self.running = False
             self.process = None
             self.startup_state = "failed"
@@ -219,7 +215,7 @@ class OpenClawProcessService:
         if self.process and self.process.poll() is None:
             pid = self.process.pid
             self.append_log("\n[OpenClaw] Stopping...\n")
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, text=True)
+            self._kill_pid(str(pid))
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -601,7 +597,10 @@ class OpenClawProcessService:
         package_json_path = os.path.join(self.paths.base_path, "package.json")
         launcher_runtime = self._read_json_if_exists(os.path.join(self.paths.data_dir, "launcher_runtime.json"))
         image_config = self._read_json_if_exists(self.paths.image_config)
-        video_config = self._read_json_if_exists(self.paths.video_config)
+        video_config = self._merge_config(
+            self._read_json_if_exists(self.paths.video_config),
+            self._read_json_if_exists(self.paths.videoapi_config),
+        )
         member_license = self._read_json_if_exists(self.paths.license_file)
         member_session = self._read_json_if_exists(self.paths.member_session_file)
         member_gateway_configured = False
@@ -886,6 +885,12 @@ class OpenClawProcessService:
     def _has_config_values(self, value: dict) -> bool:
         return any(isinstance(item, str) and bool(item.strip()) for item in value.values())
 
+    def _merge_config(self, base: dict, updates: dict) -> dict:
+        merged = dict(base) if isinstance(base, dict) else {}
+        if isinstance(updates, dict):
+            merged.update({key: value for key, value in updates.items() if value not in (None, "")})
+        return merged
+
     def _member_gateway_check(self) -> dict:
         license_data = self._read_json_if_exists(self.paths.license_file)
         if not isinstance(license_data, dict):
@@ -1130,9 +1135,13 @@ class OpenClawProcessService:
         }
 
     def _python_runtime_check(self) -> dict:
+        exe = "python.exe" if os.name == "nt" else "bin/python3"
+        alt_exe = "python.exe" if os.name == "nt" else "bin/python"
         candidates = [
-            os.path.join(self.paths.base_path, "_up_", "python-runtime", "python.exe"),
-            os.path.join(self.paths.base_path, "python-runtime", "python.exe"),
+            os.path.join(self.paths.base_path, "_up_", "python-runtime", exe),
+            os.path.join(self.paths.base_path, "_up_", "python-runtime", alt_exe),
+            os.path.join(self.paths.base_path, "python-runtime", exe),
+            os.path.join(self.paths.base_path, "python-runtime", alt_exe),
             sys.executable,
         ]
         python_exe = next((path for path in candidates if path and os.path.exists(path)), "")
@@ -1622,19 +1631,7 @@ class OpenClawProcessService:
             self.ui_call(on_exit, exit_code)
 
     def _kill_port_processes(self, port: int) -> int:
-        try:
-            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except Exception:
-            return 0
-        pids: set[str] = set()
-        marker = f":{port}"
-        stdout = result.stdout or ""
-        for line in stdout.splitlines():
-            if marker not in line or "LISTENING" not in line.upper():
-                continue
-            parts = line.split()
-            if parts:
-                pids.add(parts[-1])
+        pids = self._port_pids(port)
         killed = 0
         for pid in pids:
             if self._kill_pid(pid):
@@ -1654,6 +1651,8 @@ class OpenClawProcessService:
         return killed
 
     def _stop_registered_gateway(self) -> int:
+        if os.name != "nt":
+            return 0
         completed = subprocess.run(
             ["schtasks", "/End", "/TN", "OpenClaw Gateway"],
             capture_output=True,
@@ -1663,22 +1662,15 @@ class OpenClawProcessService:
         return 1 if completed.returncode == 0 else 0
 
     def _port_listeners(self, port: int) -> list[dict[str, str]]:
-        try:
-            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except Exception:
-            return []
-        pids: set[str] = set()
-        marker = f":{port}"
-        for line in (result.stdout or "").splitlines():
-            if marker not in line or "LISTENING" not in line.upper():
-                continue
-            parts = line.split()
-            if parts and parts[-1].isdigit():
-                pids.add(parts[-1])
-        return self._describe_pids(pids)
+        return self._describe_pids(self._port_pids(port))
 
     def _port_range_listeners(self, start: int, end: int, exclude_pids: set[str] | None = None) -> list[dict[str, str]]:
         exclude_pids = exclude_pids or set()
+        if os.name != "nt":
+            pids: set[str] = set()
+            for port in range(start, end + 1):
+                pids.update(self._port_pids(port))
+            return self._describe_pids({pid for pid in pids if pid not in exclude_pids})
         try:
             result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
@@ -1696,6 +1688,8 @@ class OpenClawProcessService:
         return self._describe_pids(pids)
 
     def _clawpanel_processes(self) -> list[dict[str, str]]:
+        if os.name != "nt":
+            return []
         command = (
             "$ErrorActionPreference='SilentlyContinue'; "
             "Get-CimInstance Win32_Process | "
@@ -1715,6 +1709,8 @@ class OpenClawProcessService:
         return self._describe_pids(pids)
 
     def _openclaw_gateway_processes(self) -> list[dict[str, str]]:
+        if os.name != "nt":
+            return []
         command = (
             "$ErrorActionPreference='SilentlyContinue'; "
             "Get-CimInstance Win32_Process | "
@@ -1737,6 +1733,8 @@ class OpenClawProcessService:
         return self._describe_pids(pids)
 
     def _describe_pids(self, pids: set[str]) -> list[dict[str, str]]:
+        if os.name != "nt":
+            return [{"pid": pid, "name": "process", "command": ""} for pid in sorted(pids) if pid.isdigit()]
         processes: list[dict[str, str]] = []
         for pid in sorted(pids):
             if not pid.isdigit():
@@ -1785,6 +1783,8 @@ class OpenClawProcessService:
             return "unknown"
 
     def _kill_clawpanel_processes(self) -> int:
+        if os.name != "nt":
+            return 0
         command = (
             "$ErrorActionPreference='SilentlyContinue'; "
             "Get-CimInstance Win32_Process | "
@@ -1808,6 +1808,8 @@ class OpenClawProcessService:
         return killed
 
     def _kill_openclaw_gateway_processes(self) -> int:
+        if os.name != "nt":
+            return 0
         command = (
             "$ErrorActionPreference='SilentlyContinue'; "
             "Get-CimInstance Win32_Process | "
@@ -1834,6 +1836,18 @@ class OpenClawProcessService:
         return killed
 
     def _kill_pid(self, pid: str) -> bool:
+        if os.name != "nt":
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+                return True
+            except ProcessLookupError:
+                return True
+            except Exception:
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                    return True
+                except Exception:
+                    return False
         completed = subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(pid)],
             capture_output=True,
@@ -1841,6 +1855,27 @@ class OpenClawProcessService:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return completed.returncode == 0
+
+    def _port_pids(self, port: int) -> set[str]:
+        if os.name != "nt":
+            try:
+                result = subprocess.run(["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True, timeout=3)
+            except Exception:
+                return set()
+            return {line.strip() for line in (result.stdout or "").splitlines() if line.strip().isdigit()}
+        try:
+            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            return set()
+        pids: set[str] = set()
+        marker = f":{port}"
+        for line in (result.stdout or "").splitlines():
+            if marker not in line or "LISTENING" not in line.upper():
+                continue
+            parts = line.split()
+            if parts and parts[-1].isdigit():
+                pids.add(parts[-1])
+        return pids
 
     def _wait_until_ready(self, port: int, timeout: float) -> None:
         deadline = time.time() + timeout
@@ -1867,6 +1902,8 @@ class OpenClawProcessService:
         except OSError:
             pass
         try:
+            if os.name != "nt":
+                return False
             result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
             return False

@@ -129,6 +129,10 @@ class AppPaths:
         return os.path.join(self.base_path, "video_config.json")
 
     @property
+    def videoapi_config(self) -> str:
+        return os.path.join(self.base_path, "videoapi_config.json")
+
+    @property
     def member_session_file(self) -> str:
         return os.path.join(self.launcher_dir, "member-session.json")
 
