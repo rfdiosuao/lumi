@@ -7,12 +7,30 @@
 | 项 | 当前值 |
 | --- | --- |
 | 启动器包 | `openclaw_ui_integration` |
-| package 版本 | `2.1.5` |
+| package 版本 | `2.1.8` |
 | Tauri 版本 | `2.11.0` |
 | Rust edition | `2021` |
 | Node 版本 | CI 使用 `22` |
 | Python 版本 | CI 使用 `3.11` |
-| OpenClaw runtime | Release workflow 默认 `2026.6.1` |
+| OpenClaw runtime | 当前交付包使用 `2026.6.5` |
+| Runtime layers Release | [rfdiosuao/openclaw-runtime-layers v2.1.8](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.8) |
+
+## v2.1.8 资产清单
+
+| 资产 | 用途 | SHA256 |
+| --- | --- | --- |
+| `LumiClaw-Online-v2.1.8.zip` | 小于 100MB 的在线便携包 | `9AF277666BE0C30BB1DFF6BEBDA121224928D6706675C07B58F567A3C15F90DA` |
+| `OpenClaw-Portable-v2.1.8-2026.06.14-full-offline.zip` | 完整离线包 | `2D26B96314BDB455D6FEF3D4761E18BEF9E19649A06F099EB5BCBC63F819DFEA` |
+| `LumiClaw-Setup-v2.1.8.exe` | 启动器自更新安装器 | `6B6DF7A7B77147A2F9692E01457233C86B2F99661AA4E1E3EB35B58B75540F95` |
+
+运行时分层资产：
+
+| 层 | 用途 |
+| --- | --- |
+| `node.tar.gz` | Node 运行时 |
+| `python-runtime.tar.gz` | Python 运行时 |
+| `openclaw-deps.tar.gz` | OpenClaw npm 运行时和依赖 |
+| `luminode-desktop.tar.gz` | 桌面 RPA 组件 |
 
 ## 本地构建
 
@@ -39,7 +57,7 @@ Release workflow 的输入：
 | 输入 | 说明 |
 | --- | --- |
 | `release_tag` | GitHub Release tag |
-| `openclaw_version` | OpenClaw npm runtime 版本，默认 `2026.6.1` |
+| `openclaw_version` | OpenClaw npm runtime 版本；当前交付口径是 `2026.6.5` |
 | `package_kind` | `all`、`source`、`windows-portable` |
 | `include_phone_agent_apk` | 是否附带手机 APK |
 
@@ -85,6 +103,9 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-version-consistency.ps1
 | --- | --- |
 | `OpenClaw-Launcher-Source-*.zip` | Mac/Linux 适配和源码审查 |
 | `OpenClaw-Portable-*.zip` | Windows 客户便携包 |
+| `LumiClaw-Online-*.zip` | Windows 在线瘦包 |
+| `manifest.json` | 运行时层下载清单 |
+| `launcher.json` | 启动器自更新清单 |
 | `*.sha256.txt` | 校验下载完整性 |
 | Release notes | 说明版本、runtime、已知问题和升级建议 |
 

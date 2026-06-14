@@ -9,6 +9,7 @@
 | 401 AuthenticationError | 模型网关 | 检查 Base URL、API Key、Model |
 | Invalid Lumi signature | 手机安全通道 | 重新保存设备并验证 Token 与签名 |
 | Task timeout 120s | 手机任务执行 | 查锁屏、无障碍、任务是否过大 |
+| 广告等待超时 | 手机定时任务 | 检查 `maxWatchSeconds`、链式广告和未知弹窗 |
 | 403 blocked | 桌面策略或手机签名 | 看错误体，确认是 Bridge policy 还是 Lumi |
 | fetch failed | 网络或服务未启动 | 检查 URL、端口、Bridge、manifest 源 |
 | 模板缺失 | 打包层 | 检查 OpenClaw `src/agents/templates` |
@@ -21,6 +22,7 @@
 | `Invalid Lumi signature` | Token 或签名状态不一致 | 删除旧设备，重新配对，确认时间同步 |
 | `lumi_signature_repair_failed` | 自动修复签名失败 | 重新保存 Token，重启手机端 Agent |
 | `Task timed out after 120s` | 锁屏、无障碍关闭、任务太大 | 解锁，检查无障碍，拆小任务 |
+| 广告任务一直不结束 | 链式广告、奖励按钮未出现或页面变化 | 限制最大等待，遇到未知弹窗停止并留截图 |
 | 截图一直加载 | 手机端截图接口慢或异常 | 先请求 `/api/device/status` |
 | 显示已连接但任务失败 | 连接只证明基础 HTTP 可达 | 再查签名、无障碍和任务接口 |
 
@@ -29,6 +31,7 @@
 | 报错 | 可能原因 | 处理 |
 | --- | --- | --- |
 | 组件未安装 | 在线包未包含 Luminode | 点击安装组件或放入 agents 目录 |
+| 同步 RPA 配置失败 | URL、API Key、Bridge Token 或组件缺失 | 回到统一设置同步配置，再运行 health |
 | health 失败 | sidecar 未启动 | 通过启动器按钮启动，避免手写端口 |
 | 403 blocked | policy 禁止点击/输入/发送 | 打开策略，并在 CLI 带 `--confirmed` |
 | 401 | Bridge token 不匹配 | 让 CLI 自动读取 token，避免直连 |

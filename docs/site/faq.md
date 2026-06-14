@@ -6,7 +6,9 @@
 
 ## 当前启动器版本是多少
 
-当前源码口径是 `openclaw_ui_integration` 版本 `2.1.5`。Release workflow 默认 OpenClaw runtime 版本是 `2026.6.1`。
+当前交付口径是 `openclaw_ui_integration` 版本 `2.1.8`。最新完整离线包和在线包使用 OpenClaw runtime `2026.6.5`。
+
+发布资产在 [openclaw-runtime-layers v2.1.8](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.8)。
 
 ## 为什么有时显示 Mock 预览
 

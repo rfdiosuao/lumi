@@ -38,6 +38,7 @@ export default defineConfig({
       { text: "快速开始", link: "/guide/getting-started" },
       { text: "功能手册", link: "/guide/phone-control" },
       { text: "稳定性", link: "/advanced/stability" },
+      { text: "更新日志", link: "/updates/changelog" },
       { text: "二开", link: "/dev/secondary-development" },
       { text: "待确认", link: "/confirmations" }
     ],
@@ -66,6 +67,7 @@ export default defineConfig({
         text: "稳定交付",
         collapsed: false,
         items: [
+          { text: "更新日志", link: "/updates/changelog" },
           { text: "稳定性手册", link: "/advanced/stability" },
           { text: "故障排查矩阵", link: "/advanced/troubleshooting" },
           { text: "打包发布与 CI/CD", link: "/advanced/release-packaging" }

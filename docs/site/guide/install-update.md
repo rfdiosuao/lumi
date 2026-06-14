@@ -2,6 +2,17 @@
 
 OpenClaw 当前有两类交付方式：完整便携包和在线瘦包。完整包侧重离线可用，在线瘦包侧重体积和首次下载流程；两者的验收标准应分别定义。
 
+## 当前发布版本
+
+| 项 | 当前值 |
+| --- | --- |
+| 最新启动器 | `2.1.8` |
+| OpenClaw runtime | `2026.6.5` |
+| 在线便携包 | `LumiClaw-Online-v2.1.8.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.8-2026.06.14-full-offline.zip` |
+| 更新安装器 | `LumiClaw-Setup-v2.1.8.exe` |
+| Release 地址 | [openclaw-runtime-layers v2.1.8](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.8) |
+
 ## 交付形态
 
 | 类型 | 适合谁 | 包里有什么 | 风险 |
@@ -47,6 +58,18 @@ OpenClaw-Portable-*/
 4. SHA256 是否匹配。
 5. 失败后能否回滚到旧包。
 
+当前线上 `launcher.json` 指向：
+
+```text
+https://github.com/rfdiosuao/openclaw-runtime-layers/releases/download/v2.1.8/LumiClaw-Setup-v2.1.8.exe
+```
+
+SHA256：
+
+```text
+6B6DF7A7B77147A2F9692E01457233C86B2F99661AA4E1E3EB35B58B75540F95
+```
+
 ## 在线瘦包的稳定设计
 
 瘦包不是“少打文件”这么简单，它需要稳定的 bootstrap。
@@ -60,6 +83,8 @@ OpenClaw-Portable-*/
 5. 离线提示：告诉用户当前缺哪一层、去哪下载、放到哪个目录。
 
 <div class="danger-line">公共 ghproxy 只能当临时兜底，不适合作为生产唯一下载源。</div>
+
+v2.1.8 在线瘦包当前使用 GitHub Release 主源和 ghproxy 备用源。后续如果切换到自有 OSS/CDN，应同时更新 `manifest.json`、`launcher.json`、文档站和 Release note。
 
 ## 更新失败怎么判断
 

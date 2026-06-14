@@ -7,8 +7,8 @@
 | 项 | 当前状态 | 需要谁确认 |
 | --- | --- | --- |
 | 品牌名最终用 OpenClaw、Lumi 还是 LumiClaw | 文档暂用 OpenClaw / Lumi | 产品负责人 |
-| 启动器公开版本号 | 源码是 `2.1.5` | 发版负责人 |
-| OpenClaw runtime 默认版本 | Release workflow 默认 `2026.6.1` | 发版负责人 |
+| 启动器公开版本号 | 当前发布 `2.1.8` | 发版负责人 |
+| OpenClaw runtime 默认版本 | 当前完整包使用 `2026.6.5` | 发版负责人 |
 | Mac 包发布时间 | 未确认 | Mac 适配负责人 |
 
 ## 授权与商业
@@ -24,9 +24,9 @@
 
 | 项 | 当前状态 |
 | --- | --- |
-| 在线瘦包 manifest 主源 | 待确认 |
+| 在线瘦包 manifest 主源 | GitHub Release；生产 OSS/CDN 主源待确认 |
 | 备用 CDN | 待确认 |
-| 桌面 RPA 组件下载源 | 待确认 |
+| 桌面 RPA 组件下载源 | `openclaw-runtime-layers` Release 中的 `luminode-desktop.tar.gz`；生产镜像待确认 |
 | 手机 APK 下载源 | 待确认 |
 | ghproxy 是否保留 | 可作为临时兜底，不作为生产唯一源 |
 
