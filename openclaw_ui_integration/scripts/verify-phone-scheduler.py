@@ -396,6 +396,44 @@ def test_guardrails(paths: TestPaths, server_url: str) -> None:
     assert_true("lastEnqueuedAt" not in state["schedules"].get("sch-empty", {}), "missing-device schedule was marked enqueued")
 
 
+def test_ad_watch_template_runtime(paths: TestPaths, server_url: str) -> None:
+    templates = [
+        {
+            "id": "generic-ad-watch-reward",
+            "title": "广告等待",
+            "prompt": "OPENCLAW_AD_WATCH。最短等待 {{minWatchSeconds}} 秒，最长等待 {{maxWatchSeconds}} 秒。",
+            "mode": "safe",
+            "riskLevel": "medium",
+            "requiresManualConfirmation": False,
+            "variables": [
+                {"key": "minWatchSeconds", "value": "30"},
+                {"key": "maxWatchSeconds", "value": "90"},
+            ],
+        }
+    ]
+    schedules = [
+        {
+            "id": "sch-ad-watch",
+            "templateId": "generic-ad-watch-reward",
+            "deviceIds": ["phone-a"],
+            "cadence": "1m",
+            "timeWindow": "any",
+            "mode": "safe",
+            "enabled": True,
+            "allowUnattended": True,
+        }
+    ]
+    install_config(Path(paths.base_path), server_url, schedules, templates)
+    scheduler = NoAutoDrainScheduler(paths, [])
+    result = scheduler.tick()
+    assert_true(len(result["enqueued"]) == 1, f"ad watch schedule did not enqueue: {result}")
+    queue = read_json(Path(paths.launcher_dir) / "phone-agent-queue.json")
+    item = queue["items"][0]
+    assert_true(item["timeoutSec"] == 135, f"ad watch timeout should follow maxWatchSeconds + buffer: {item}")
+    assert_true(item["maxWaitSec"] == 150, f"ad watch maxWaitSec should track timeoutSec: {item}")
+    assert_true("最长等待 90 秒" in item["prompt"], f"ad watch variables were not rendered: {item['prompt']}")
+
+
 def test_drain_sends_command(paths: TestPaths, server: FakePhoneServer) -> None:
     install_config(Path(paths.base_path), server.url, [])
     scheduler = NoAutoDrainScheduler(paths, [])
@@ -512,6 +550,7 @@ def main() -> None:
             test_dry_run_never_enqueues,
             test_queue_trim_preserves_active,
             test_guardrails,
+            test_ad_watch_template_runtime,
         ):
             root, paths = make_root()
             roots.append(root)

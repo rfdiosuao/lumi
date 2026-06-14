@@ -291,6 +291,7 @@ class PhoneAutomationScheduler:
         return item
 
     def _queue_item(self, schedule: dict, template: dict, prompt: str, mode: str, device_id: str, device: dict | None, now: str) -> dict:
+        timeout_sec = int(schedule.get("timeoutSec") or self._template_timeout_sec(template) or 600)
         return {
             "id": f"phone-task-{int(time.time() * 1000):x}-{os.urandom(3).hex()}",
             "status": "pending",
@@ -303,9 +304,9 @@ class PhoneAutomationScheduler:
             "templateId": template.get("id"),
             "prompt": prompt,
             "mode": mode if mode in ("observe", "safe", "full") else "safe",
-            "timeoutSec": int(schedule.get("timeoutSec") or 600),
+            "timeoutSec": timeout_sec,
             "maxRounds": int(schedule.get("maxRounds") or self._template_max_rounds(template) or 60),
-            "maxWaitSec": int(schedule.get("maxWaitSec") or 615),
+            "maxWaitSec": int(schedule.get("maxWaitSec") or (timeout_sec + 15)),
             "pollMs": int(schedule.get("pollMs") or 1800),
             "maxAttempts": int(schedule.get("maxAttempts") or 2),
             "deviceId": device_id,
@@ -476,14 +477,28 @@ class PhoneAutomationScheduler:
         return prompt
 
     def _template_max_rounds(self, template: dict) -> int:
+        return self._template_int_variable(template, "maxRounds")
+
+    def _template_timeout_sec(self, template: dict) -> int:
+        prompt = str(template.get("prompt") or "")
+        template_id = str(template.get("id") or "")
+        is_ad_watch = template_id == "generic-ad-watch-reward" or "OPENCLAW_AD_WATCH" in prompt
+        if not is_ad_watch:
+            return 0
+        max_watch_seconds = self._template_int_variable(template, "maxWatchSeconds")
+        if max_watch_seconds <= 0:
+            return 0
+        return max(60, min(900, max_watch_seconds + 45))
+
+    def _template_int_variable(self, template: dict, key: str) -> int:
         variables = template.get("variables") if isinstance(template.get("variables"), list) else []
         for variable in variables:
             if not isinstance(variable, dict):
                 continue
-            if str(variable.get("key") or "") == "maxRounds":
+            if str(variable.get("key") or "") == key:
                 try:
                     return int(variable.get("value") or 0)
-                except ValueError:
+                except (TypeError, ValueError):
                     return 0
         return 0
 

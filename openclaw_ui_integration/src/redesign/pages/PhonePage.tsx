@@ -134,6 +134,15 @@ function readCachedPhoneInventory(): { selectedDeviceId: string | null; devices:
   }
 }
 
+function shouldSyncAutomationDefaults(saved: unknown): boolean {
+  if (!saved || typeof saved !== 'object') return true;
+  const rawTemplates = Array.isArray((saved as Partial<PhoneAutomationState>).templates)
+    ? (saved as Partial<PhoneAutomationState>).templates || []
+    : [];
+  const savedIds = new Set(rawTemplates.map((item) => (item as AutomationTemplate)?.id).filter(Boolean));
+  return createDefaultAutomationState().templates.some((template) => !savedIds.has(template.id));
+}
+
 function createEmptySnapshot(): PhoneSnapshot {
   return {
     status: null,
@@ -473,6 +482,9 @@ export function PhonePage() {
         automationStateRef.current = next;
         setAutomationState(next);
         writeCachedAutomationState(next);
+        if (shouldSyncAutomationDefaults(saved)) {
+          void writeConfigValue(settings, PHONE_AUTOMATION_CONFIG_PATH, next).catch(() => undefined);
+        }
       } finally {
         if (!cancelled) setAutomationLoaded(true);
       }
