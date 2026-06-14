@@ -1,9 +1,10 @@
 import React from 'react';
 import { Film, ImagePlus, RefreshCcw, Settings2, Upload, X } from 'lucide-react';
 import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, Select, Tabs, TextArea } from '../components/ui';
-import { generateImage, generateVideo, loadPromptTemplates, loadStudioSnapshot, requestPhoneData } from '../api/adapters';
+import { generateImage, generateVideo, loadPromptTemplates, loadStudioSnapshot, requestPhoneData, waitForVideoGenerationJob } from '../api/adapters';
 import { useAsync } from '../lib/useAsync';
 import type { ImageResult, PromptTemplate, VideoResult } from '../types';
+import type { BridgeJob, VideoGenerationPayload } from '../api/adapters';
 import { usePreviewStore } from '../store/appStore';
 
 type StudioTab = 'image' | 'video';
@@ -44,28 +45,54 @@ const IMAGE_LOADING_TIPS = [
 ];
 
 const VIDEO_LOADING_TIPS = [
-  '正在提交视频任务…',
-  '生成中，视频通常需要 1-3 分钟…',
-  '正在轮询任务进度…',
-  '即将完成，正在下载结果…',
+  '任务已提交，等待网关排队',
+  '生成中，通常需要 1-3 分钟',
+  '正在同步进度，切走也会保留',
+  '接近完成，等待视频文件返回',
 ];
 
-function StudioLoading({ kind, message = '' }: { kind: 'image' | 'video'; message?: string }) {
+const ACTIVE_VIDEO_JOB_STORAGE_KEY = 'openclaw.studio.activeVideoJob.v1';
+const VIDEO_JOB_TIMEOUT_MS = 20 * 60 * 1000;
+const VIDEO_JOB_STALE_MS = 25 * 60 * 1000;
+
+type BusyKind = 'image' | 'video' | null;
+
+interface ActiveVideoJob {
+  jobId: string;
+  payload: VideoGenerationPayload;
+  startedAt: number;
+  updatedAt: number;
+  message: string;
+}
+
+function StudioLoading({ kind, message = '', startedAt }: { kind: 'image' | 'video'; message?: string; startedAt?: number }) {
   const [secs, setSecs] = React.useState(0);
   React.useEffect(() => {
-    const timer = window.setInterval(() => setSecs((value) => value + 1), 1000);
+    const update = () => {
+      if (startedAt) {
+        setSecs(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+      } else {
+        setSecs((value) => value + 1);
+      }
+    };
+    update();
+    const timer = window.setInterval(update, 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [startedAt]);
   const tips = kind === 'image' ? IMAGE_LOADING_TIPS : VIDEO_LOADING_TIPS;
   const step = kind === 'image' ? 8 : 20; // 视频更慢，换一条提示的间隔更长
   const tip = message || tips[Math.min(tips.length - 1, Math.floor(secs / step))];
+  const mins = Math.floor(secs / 60);
+  const rest = String(secs % 60).padStart(2, '0');
   return (
     <div className="studio-loading" role="status" aria-live="polite">
-      <div className="studio-spinner" aria-hidden="true" />
+      <div className="studio-spinner-ring" aria-hidden="true">
+        <div className="studio-spinner" />
+      </div>
       <div className="studio-loading-title">{kind === 'image' ? '正在生成图像' : '正在生成视频'}</div>
       <div className="studio-loading-tip">{tip}</div>
       <div className="studio-loading-bar"><span /></div>
-      <div className="studio-loading-secs">已用时 {secs}s</div>
+      <div className="studio-loading-secs">已用时 {mins}:{rest}</div>
     </div>
   );
 }
@@ -100,6 +127,38 @@ function TemplateGallery({ templates, onApply, onCopy }: {
   );
 }
 
+function readActiveVideoJob(): ActiveVideoJob | null {
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_VIDEO_JOB_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ActiveVideoJob;
+    if (!parsed?.jobId || !parsed?.payload || !parsed.startedAt) return null;
+    if (Date.now() - Number(parsed.startedAt) > VIDEO_JOB_STALE_MS) {
+      window.localStorage.removeItem(ACTIVE_VIDEO_JOB_STORAGE_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeActiveVideoJob(job: ActiveVideoJob | null) {
+  try {
+    if (!job) {
+      window.localStorage.removeItem(ACTIVE_VIDEO_JOB_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(ACTIVE_VIDEO_JOB_STORAGE_KEY, JSON.stringify(job));
+  } catch {
+    // Best effort only. The live job still runs in the bridge.
+  }
+}
+
+function videoJobMessage(job: BridgeJob<any>): string {
+  return String(job.progress?.message || job.message || '').trim();
+}
+
 export function StudioPage() {
   const settings = usePreviewStore((state) => state.settings);
   const navigate = usePreviewStore((state) => state.navigate);
@@ -119,16 +178,25 @@ export function StudioPage() {
   const [videoImagePath, setVideoImagePath] = React.useState('');
   const [videoReferenceName, setVideoReferenceName] = React.useState('');
   const [videoProgress, setVideoProgress] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
+  const [busyKind, setBusyKind] = React.useState<BusyKind>(null);
+  const [activeVideoJob, setActiveVideoJob] = React.useState<ActiveVideoJob | null>(() => readActiveVideoJob());
   const [selectedImage, setSelectedImage] = React.useState<ImageResult | null>(null);
   const [selectedVideo, setSelectedVideo] = React.useState<VideoResult | null>(null);
   const [imageHistory, setImageHistory] = React.useState<ImageResult[]>([]);
   const [videoHistory, setVideoHistory] = React.useState<VideoResult[]>([]);
   const imageReferenceInputRef = React.useRef<HTMLInputElement>(null);
   const videoReferenceInputRef = React.useRef<HTMLInputElement>(null);
+  const resumedVideoJobRef = React.useRef('');
+  const activeVideoJobRef = React.useRef<ActiveVideoJob | null>(activeVideoJob);
+  const imageBusy = busyKind === 'image';
+  const videoBusy = busyKind === 'video';
 
   const { data: imageTemplates } = useAsync(() => loadPromptTemplates(settings, 'image'), [settings], { cacheKey: 'templates-image', ttlMs: 300000 });
   const { data: videoTemplates } = useAsync(() => loadPromptTemplates(settings, 'video'), [settings], { cacheKey: 'templates-video', ttlMs: 300000 });
+
+  React.useEffect(() => {
+    activeVideoJobRef.current = activeVideoJob;
+  }, [activeVideoJob]);
 
   const applyImageTemplate = React.useCallback((template: PromptTemplate) => {
     setImagePrompt(template.prompt);
@@ -209,6 +277,66 @@ export function StudioPage() {
     return true;
   }, [settings]);
 
+  const finishVideoResult = React.useCallback((result: VideoResult) => {
+    setSelectedVideo(result);
+    setVideoHistory((history) => [result, ...history].slice(0, 6));
+    setActiveVideoJob(null);
+    writeActiveVideoJob(null);
+    void importVideoToPhone(result)
+      .then((imported) => {
+        if (imported) {
+          pushToast({ tone: 'ok', title: '视频已导入手机', detail: 'Movies/OpenClaw · ' + (result.file?.filename || 'openclaw-video.mp4') });
+        }
+      })
+      .catch((err) => {
+        pushToast({ tone: 'warn', title: '手机视频导入失败', detail: String(err) });
+      });
+    pushToast({ tone: 'ok', title: '视频已生成', detail: result.file?.filename || '预览已就绪' });
+  }, [importVideoToPhone, pushToast]);
+
+  React.useEffect(() => {
+    const stored = activeVideoJob || readActiveVideoJob();
+    if (!stored?.jobId || resumedVideoJobRef.current === stored.jobId) return;
+    resumedVideoJobRef.current = stored.jobId;
+    setTab('video');
+    setActiveVideoJob(stored);
+    setBusyKind('video');
+    setVideoProgress(stored.message || '正在恢复视频任务');
+
+    let cancelled = false;
+    const elapsedMs = Math.max(0, Date.now() - stored.startedAt);
+    const remainingMs = Math.max(60_000, VIDEO_JOB_TIMEOUT_MS - elapsedMs);
+
+    void waitForVideoGenerationJob(settings, stored.jobId, stored.payload, (job) => {
+      if (cancelled) return;
+      const message = videoJobMessage(job);
+      if (!message) return;
+      setVideoProgress(message);
+      const next = { ...stored, message, updatedAt: Date.now() };
+      setActiveVideoJob(next);
+      writeActiveVideoJob(next);
+    }, remainingMs)
+      .then((result) => {
+        if (cancelled) return;
+        finishVideoResult(result.data);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setActiveVideoJob(null);
+        writeActiveVideoJob(null);
+        pushToast({ tone: 'danger', title: '视频生成失败', detail: String(err) });
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setBusyKind(null);
+        setVideoProgress('');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeVideoJob, finishVideoResult, pushToast, settings]);
+
   const handleGenerateImage = async () => {
     const baseUrl = data?.imageDefaults.baseUrl.trim() || '';
     const apiKey = data?.imageDefaults.apiKey.trim() || '';
@@ -216,7 +344,7 @@ export function StudioPage() {
       pushToast({ tone: 'danger', title: '缺少图像网关', detail: '请到统一设置里填写图像生成 API。' });
       return;
     }
-    setBusy(true);
+    setBusyKind('image');
     try {
       const result = await generateImage(settings, {
         baseUrl,
@@ -241,7 +369,7 @@ export function StudioPage() {
     } catch (err) {
       pushToast({ tone: 'danger', title: '图像生成失败', detail: String(err) });
     } finally {
-      setBusy(false);
+      setBusyKind(null);
     }
   };
 
@@ -254,40 +382,45 @@ export function StudioPage() {
       pushToast({ tone: 'danger', title: '缺少视频网关', detail: '请到统一设置里填写视频生成 API。' });
       return;
     }
-    setBusy(true);
+    const payload: VideoGenerationPayload = {
+      providerId,
+      apiBase,
+      model: model || (providerId === 'agnes' ? 'agnes-video-v2.0' : ''),
+      dashKey: apiKey,
+      prompt: videoPrompt.trim(),
+      mode: videoMode,
+      resolution: videoResolution,
+      duration: videoDuration,
+      ratio: videoRatio,
+      imagePath: videoImagePath.trim() || undefined,
+    };
+    setBusyKind('video');
     setVideoProgress('正在提交视频任务');
     try {
-      const result = await generateVideo(settings, {
-        providerId,
-        apiBase,
-        model: model || (providerId === 'agnes' ? 'agnes-video-v2.0' : ''),
-        dashKey: apiKey,
-        prompt: videoPrompt.trim(),
-        mode: videoMode,
-        resolution: videoResolution,
-        duration: videoDuration,
-        ratio: videoRatio,
-        imagePath: videoImagePath.trim() || undefined,
-      }, (job) => {
-        const message = String(job.progress?.message || job.message || '').trim();
+      const result = await generateVideo(settings, payload, (job) => {
+        const message = videoJobMessage(job);
         if (message) setVideoProgress(message);
+        const currentJob = activeVideoJobRef.current;
+        if (message && currentJob?.jobId) {
+          const next = { ...currentJob, message, updatedAt: Date.now() };
+          setActiveVideoJob(next);
+          writeActiveVideoJob(next);
+        }
+      }, ({ jobId, job }) => {
+        const message = videoJobMessage(job || {}) || '任务已提交，等待网关排队';
+        const next = { jobId, payload, startedAt: Date.now(), updatedAt: Date.now(), message };
+        resumedVideoJobRef.current = jobId;
+        setActiveVideoJob(next);
+        writeActiveVideoJob(next);
+        setVideoProgress(message);
       });
-      setSelectedVideo(result.data);
-      setVideoHistory((history) => [result.data, ...history].slice(0, 6));
-      void importVideoToPhone(result.data)
-        .then((imported) => {
-          if (imported) {
-            pushToast({ tone: 'ok', title: '视频已导入手机', detail: 'Movies/OpenClaw · ' + (result.data.file?.filename || 'openclaw-video.mp4') });
-          }
-        })
-        .catch((err) => {
-          pushToast({ tone: 'warn', title: '手机视频导入失败', detail: String(err) });
-        });
-      pushToast({ tone: 'ok', title: '视频已生成', detail: result.data.file?.filename || '预览已就绪' });
+      finishVideoResult(result.data);
     } catch (err) {
+      setActiveVideoJob(null);
+      writeActiveVideoJob(null);
       pushToast({ tone: 'danger', title: '视频生成失败', detail: String(err) });
     } finally {
-      setBusy(false);
+      setBusyKind(null);
       setVideoProgress('');
     }
   };
@@ -408,13 +541,13 @@ export function StudioPage() {
                   </div>
                 </Field>
                 <div className="button-row">
-                  <Button variant="primary" icon={ImagePlus} onClick={handleGenerateImage} disabled={busy}>生成图像</Button>
+                  <Button variant="primary" icon={ImagePlus} onClick={handleGenerateImage} disabled={Boolean(busyKind)}>生成图像</Button>
                 </div>
               </div>
 
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="图像结果" subtitle="最新结果在上方，历史结果在下方。" />
-                {busy ? (
+                {imageBusy ? (
                   <StudioLoading kind="image" />
                 ) : selectedImage ? (
                   <div className="result-grid">
@@ -485,14 +618,14 @@ export function StudioPage() {
                   </div>
                 </Field>
                 <div className="button-row">
-                  <Button variant="primary" icon={Film} onClick={handleGenerateVideo} disabled={busy}>生成视频</Button>
+                  <Button variant="primary" icon={Film} onClick={handleGenerateVideo} disabled={Boolean(busyKind)}>生成视频</Button>
                 </div>
               </div>
 
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="视频结果" subtitle="真实模式返回 mp4；Agnes 视频会自动按任务接口轮询。" />
-                {busy ? (
-                  <StudioLoading kind="video" message={videoProgress} />
+                {videoBusy ? (
+                  <StudioLoading kind="video" message={videoProgress} startedAt={activeVideoJob?.startedAt} />
                 ) : selectedVideo ? (
                   <div className="video-preview-shell">
                     {!selectedVideo.previewUrl ? (

@@ -44,6 +44,45 @@ def _api_error_message(data: dict, fallback: str) -> str:
 
 
 class DashScopeVideoClient:
+    TRANSIENT_HTTP_CODES = (429, 500, 502, 503, 504)
+
+    def _poll_attempts(self, default_seconds: int, interval_seconds: int) -> int:
+        try:
+            seconds = int(os.environ.get("OPENCLAW_VIDEO_POLL_TIMEOUT_SEC", str(default_seconds)) or default_seconds)
+        except Exception:
+            seconds = default_seconds
+        return max(1, seconds // max(1, interval_seconds))
+
+    def _post_json_with_retries(
+        self,
+        url: str,
+        body: dict,
+        headers: dict[str, str],
+        timeout: int,
+        label: str,
+        max_attempts: int = 3,
+    ) -> dict:
+        last_error: Exception | None = None
+        for attempt in range(max(1, max_attempts)):
+            request = urllib.request.Request(
+                url,
+                data=json.dumps(body).encode("utf-8"),
+                headers=headers,
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                if error.code not in self.TRANSIENT_HTTP_CODES:
+                    raise
+                last_error = error
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+                last_error = error
+            if attempt < max_attempts - 1:
+                time.sleep(2 * (attempt + 1))
+        reason = getattr(last_error, "reason", last_error)
+        raise VideoApiError(f"{label}提交连续失败：{reason}")
+
     def generate(
         self,
         dash_key: str,
@@ -134,17 +173,17 @@ class DashScopeVideoClient:
         return f"{root}{submit_suffix}", f"{root}/tasks/{{task_id}}"
 
     def _submit_dashscope_task(self, dash_key: str, body: dict, submit_url: str = DASHSCOPE_VIDEO_URL) -> str:
-        request = urllib.request.Request(
+        data = self._post_json_with_retries(
             submit_url,
-            data=json.dumps(body).encode("utf-8"),
-            headers={
+            body,
+            {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {dash_key}",
                 "X-DashScope-Async": "enable",
             },
+            timeout=60,
+            label="DashScope",
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            data = json.loads(response.read().decode("utf-8"))
         task_id = data.get("output", {}).get("task_id")
         if not task_id:
             raise VideoApiError(data.get("message", "任务提交失败"))
@@ -159,7 +198,7 @@ class DashScopeVideoClient:
     ) -> bytes:
         poll_url = task_url_template.format(task_id=task_id)
         transient_errors = 0
-        for attempt in range(120):
+        for attempt in range(self._poll_attempts(1200, 5)):
             time.sleep(5)
             request = urllib.request.Request(poll_url, headers={"Authorization": f"Bearer {dash_key}"})
             try:
@@ -284,25 +323,20 @@ class DashScopeVideoClient:
         return ((raw - 1) // 8) * 8 + 1
 
     def _submit_agnes_task(self, api_key: str, task_url: str, body: dict) -> str:
-        request = urllib.request.Request(
+        # Video submits can be slow to queue (some gateways hold the connection
+        # while they accept the task); 60s was too tight and surfaced as a raw
+        # "read operation timed out". Give it room and retry transient network
+        # failures such as SSL EOF or gateway resets.
+        data = self._post_json_with_retries(
             task_url,
-            data=json.dumps(body).encode("utf-8"),
-            headers={
+            body,
+            {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
             },
+            timeout=180,
+            label="Agnes",
         )
-        # Video submits can be slow to queue (some gateways hold the connection
-        # while they accept the task); 60s was too tight and surfaced as a raw
-        # "read operation timed out". Give it room and report timeouts clearly.
-        try:
-            with urllib.request.urlopen(request, timeout=180) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError) as error:
-            reason = getattr(error, "reason", error)
-            raise VideoApiError(
-                f"视频网关提交超时/失败：{reason}。可能是网关繁忙或视频较长，请稍后重试。"
-            ) from error
         task_id = data.get("id") or data.get("task_id") or data.get("output", {}).get("task_id")
         if not task_id:
             raise VideoApiError(_api_error_message(data, "Agnes 任务提交失败"))
@@ -317,7 +351,7 @@ class DashScopeVideoClient:
     ) -> bytes:
         poll_url = f"{task_url.rstrip('/')}/{task_id}"
         transient_errors = 0
-        for attempt in range(180):
+        for attempt in range(self._poll_attempts(1200, 4)):
             time.sleep(4)
             request = urllib.request.Request(poll_url, headers={"Authorization": f"Bearer {api_key}"})
             try:
@@ -447,16 +481,16 @@ class DashScopeVideoClient:
         return f"data:{mime};base64,{base64.b64encode(image_data).decode('utf-8')}"
 
     def _submit_seedance_task(self, api_key: str, task_url: str, body: dict) -> str:
-        request = urllib.request.Request(
+        data = self._post_json_with_retries(
             task_url,
-            data=json.dumps(body).encode("utf-8"),
-            headers={
+            body,
+            {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
             },
+            timeout=60,
+            label="Seedance",
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            data = json.loads(response.read().decode("utf-8"))
         task_id = data.get("id") or data.get("task_id") or data.get("output", {}).get("task_id")
         if not task_id:
             raise VideoApiError(_api_error_message(data, "Seedance 任务提交失败"))
@@ -471,7 +505,7 @@ class DashScopeVideoClient:
     ) -> bytes:
         poll_url = f"{task_url.rstrip('/')}/{task_id}"
         transient_errors = 0
-        for attempt in range(180):
+        for attempt in range(self._poll_attempts(1200, 4)):
             time.sleep(4)
             request = urllib.request.Request(poll_url, headers={"Authorization": f"Bearer {api_key}"})
             try:
