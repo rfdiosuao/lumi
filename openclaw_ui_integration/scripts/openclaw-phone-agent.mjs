@@ -200,9 +200,10 @@ function toolPolicy(mode) {
 
 function taskBody(config) {
   const policy = toolPolicy(config.mode);
+  const prompt = withTaskContracts(config.prompt);
   return {
     prompt: [
-      config.prompt,
+      prompt,
       '',
       'OpenClaw wrapper contract:',
       '- Run one bounded task only.',
@@ -219,6 +220,28 @@ function taskBody(config) {
     timeout_sec: config.timeoutSec,
     max_rounds: config.maxRounds,
   };
+}
+
+function withTaskContracts(prompt) {
+  const base = String(prompt || '').trim();
+  if (!shouldAttachAdWatchContract(base)) return base;
+  return [
+    base,
+    '',
+    'OpenClaw ad-watch contract:',
+    '- Treat ad waiting as a timed state machine, not a blind sleep.',
+    '- Record the start time, observe the screen at least every 1-2 seconds, and keep elapsed seconds in your reasoning.',
+    '- Before the minimum watch time is reached, do not click skip, close, reward, download, install, open-app, login, payment, or permission buttons.',
+    '- After the minimum watch time is reached, only click clearly safe completion controls such as close, x, skip, return, or claim reward.',
+    '- If chain prompts appear, follow the task policy for continue watching. When the policy is not explicit, reject extra chain ads.',
+    '- Never click download, install, open third-party app, payment, login, authorization, or app-store buttons.',
+    '- If the screen leaves the target app, becomes ambiguous, asks for sensitive permission, or shows an unknown overlay, stop and return the visible reason plus screenshot evidence.',
+    '- End with one of: completed, no_reward_button, chain_rejected, unsafe_prompt, app_escaped, stuck, or unknown_overlay.',
+  ].join('\n');
+}
+
+function shouldAttachAdWatchContract(prompt) {
+  return /OPENCLAW_AD_WATCH|ad-watch|watch ad|看.{0,8}广告|广告.{0,12}(等待|观看|播放|倒计时|领取奖励|跳过|关闭)|跳过广告|关闭广告|领取奖励|再看一个|继续观看/i.test(prompt);
 }
 
 async function submitTask(config) {

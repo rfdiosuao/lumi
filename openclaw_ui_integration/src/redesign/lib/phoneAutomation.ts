@@ -289,6 +289,27 @@ export function builtInAutomationTemplates(): AutomationTemplate[] {
       prompt:
         '打开 {{targetApp}}，只读取当前屏幕并截图。不要点击页面中的业务按钮，不要发送消息，不要授权，不要支付。返回当前页面、风险提示和截图路径。',
     }),
+    builtInTemplate({
+      id: 'generic-ad-watch-reward',
+      packId: 'generic',
+      title: '广告等待',
+      description: '等待指定时长后关闭广告或领取奖励。',
+      appName: '任意应用',
+      mode: 'safe',
+      riskLevel: 'medium',
+      enabled: true,
+      requiresManualConfirmation: false,
+      tags: ['通用', '广告', '等待'],
+      variables: [
+        { key: 'minWatchSeconds', label: '最短观看秒数', value: '30' },
+        { key: 'maxWatchSeconds', label: '最长等待秒数', value: '90' },
+        { key: 'allowChainAds', label: '允许链式广告', value: 'false' },
+        { key: 'maxChainCount', label: '最多链式次数', value: '0' },
+        { key: 'rewardKeywords', label: '奖励按钮', value: '领取奖励/获得奖励/领取/完成/返回' },
+      ],
+      prompt:
+        'OPENCLAW_AD_WATCH。处理当前广告或奖励等待页。最短等待 {{minWatchSeconds}} 秒，最长等待 {{maxWatchSeconds}} 秒；每 1-2 秒读取屏幕、节点树或截图，确认倒计时、跳过、关闭、领取奖励等状态。未达到最短等待前，不要点击「跳过/关闭/×/领取奖励」。达到最短等待后，只点击明确安全的「{{rewardKeywords}}」或关闭/返回按钮。链式广告策略：allowChainAds={{allowChainAds}}，maxChainCount={{maxChainCount}}；如果出现「再看一个/继续观看/双倍奖励」且未明确允许，选择不继续或关闭。禁止点击下载、安装、打开第三方应用、应用商店、支付、登录、授权、隐私协议。遇到未知弹窗、页面跳出目标应用、无倒计时且超过最长等待、黑屏或连续同屏无变化，立即停止并返回原因和截图路径。结果只写：completed、no_reward_button、chain_rejected、unsafe_prompt、app_escaped、stuck 或 unknown_overlay。',
+    }),
   ];
 }
 

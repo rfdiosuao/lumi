@@ -60,6 +60,7 @@ const requiredTemplateIds = [
   'xianyu-ad-exposure-dry-run',
   'generic-screen-check',
   'generic-open-app-snapshot',
+  'generic-ad-watch-reward',
 ];
 
 for (const id of requiredTemplateIds) {
@@ -109,6 +110,22 @@ assert(/不要进入曝光/.test(polishTemplate.prompt) && /发闲置/.test(poli
 const publishTemplate = templateById.get('xianyu-publish-dry-run');
 assert(/右上角「发布」/.test(publishTemplate.prompt), 'publish template must block final publish button');
 assert(/选择图片|上传素材|填写标题/.test(publishTemplate.prompt), 'publish template must block form mutation');
+
+const adWatchTemplate = templateById.get('generic-ad-watch-reward');
+assert(adWatchTemplate.title === '广告等待', 'ad watch template title must stay focused');
+assert(adWatchTemplate.mode === 'safe', 'ad watch template must run in safe mode');
+assert(adWatchTemplate.riskLevel === 'medium', 'ad watch template must be medium risk');
+assert(/OPENCLAW_AD_WATCH/.test(adWatchTemplate.prompt), 'ad watch template must trigger CLI contract');
+assert(/最短等待 \{\{minWatchSeconds\}\} 秒/.test(adWatchTemplate.prompt), 'ad watch template must include minimum watch time');
+assert(/最长等待 \{\{maxWatchSeconds\}\} 秒/.test(adWatchTemplate.prompt), 'ad watch template must include maximum watch time');
+assert(/allowChainAds=\{\{allowChainAds\}\}/.test(adWatchTemplate.prompt), 'ad watch template must expose chain policy');
+assert(/下载、安装、打开第三方应用、应用商店、支付、登录、授权/.test(adWatchTemplate.prompt), 'ad watch template must block unsafe branches');
+assert(/completed、no_reward_button、chain_rejected、unsafe_prompt、app_escaped、stuck 或 unknown_overlay/.test(adWatchTemplate.prompt), 'ad watch template must return bounded outcomes');
+const renderedAdWatch = mod.applyTemplateVariables(adWatchTemplate);
+assert(/最短等待 30 秒/.test(renderedAdWatch), 'ad watch rendered prompt must include default 30 seconds');
+assert(/最长等待 90 秒/.test(renderedAdWatch), 'ad watch rendered prompt must include default 90 seconds');
+assert(/allowChainAds=false/.test(renderedAdWatch), 'ad watch default chain policy must reject chain ads');
+assert(/maxChainCount=0/.test(renderedAdWatch), 'ad watch default max chain count must be zero');
 
 const now = new Date().toISOString();
 const xianyuTemplate = templateById.get('xianyu-polish');
