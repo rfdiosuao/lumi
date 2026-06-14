@@ -83,6 +83,19 @@ class DashScopeVideoClient:
         reason = getattr(last_error, "reason", last_error)
         raise VideoApiError(f"{label}提交连续失败：{reason}")
 
+    def _status_message(self, provider: str, status: str, elapsed_seconds: int, progress: object = None) -> str:
+        clean_status = str(status or "").strip().lower()
+        progress_text = ""
+        if isinstance(progress, (int, float)) and 0 < float(progress) < 100:
+            progress_text = f"进度 {int(progress)}%，"
+        if clean_status in ("queued", "pending"):
+            return f"{provider} 排队中，已等待 {elapsed_seconds}s"
+        if clean_status in ("running", "processing", "in_progress", "generating"):
+            return f"{provider} 生成中，{progress_text}已等待 {elapsed_seconds}s"
+        if clean_status:
+            return f"{provider} 状态：{clean_status}，已等待 {elapsed_seconds}s"
+        return f"{provider} 正在同步任务状态，已等待 {elapsed_seconds}s"
+
     def generate(
         self,
         dash_key: str,
@@ -233,7 +246,7 @@ class DashScopeVideoClient:
             if status == "FAILED":
                 raise VideoApiError(output.get("message", "生成失败"))
             if on_status:
-                on_status(f"状态：{status or 'RUNNING'}... ({(attempt + 1) * 5}s)", "accent")
+                on_status(self._status_message("DashScope", status or "running", (attempt + 1) * 5, output.get("progress")), "accent")
         raise VideoApiError("生成超时，请稍后重试")
 
     def _generate_agnes(
@@ -385,7 +398,7 @@ class DashScopeVideoClient:
             if status in ("failed", "error", "canceled", "cancelled"):
                 raise VideoApiError(_api_error_message(data, "Agnes 生成失败"))
             if on_status:
-                on_status(f"Agnes 状态：{status or 'running'}... ({(attempt + 1) * 4}s)", "accent")
+                on_status(self._status_message("Agnes", status or "running", (attempt + 1) * 4, data.get("progress")), "accent")
         raise VideoApiError("Agnes 生成超时，请稍后重试")
 
     def _extract_agnes_video_url(self, data: dict) -> str | None:
@@ -539,7 +552,7 @@ class DashScopeVideoClient:
             if status in ("failed", "error", "canceled", "cancelled"):
                 raise VideoApiError(_api_error_message(data, "Seedance 生成失败"))
             if on_status:
-                on_status(f"Seedance 状态：{status or 'running'}... ({(attempt + 1) * 4}s)", "accent")
+                on_status(self._status_message("Seedance", status or "running", (attempt + 1) * 4, data.get("progress")), "accent")
         raise VideoApiError("Seedance 生成超时，请稍后重试")
 
     def _extract_seedance_video_url(self, data: dict) -> str | None:
@@ -617,10 +630,25 @@ class DashScopeVideoClient:
 
     def _download_video(self, video_url: str) -> bytes:
         video_url = assert_public_http_url(video_url, "视频下载 URL")
-        request = urllib.request.Request(video_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=180) as response:
-            content_type = response.headers.get("Content-Type", "")
-            data = response.read()
+        last_error: Exception | None = None
+        for attempt in range(3):
+            request = urllib.request.Request(video_url, headers={"User-Agent": "Mozilla/5.0"})
+            try:
+                with urllib.request.urlopen(request, timeout=180) as response:
+                    content_type = response.headers.get("Content-Type", "")
+                    data = response.read()
+                break
+            except urllib.error.HTTPError as error:
+                if error.code not in self.TRANSIENT_HTTP_CODES:
+                    raise
+                last_error = error
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+                last_error = error
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+        else:
+            reason = getattr(last_error, "reason", last_error)
+            raise VideoApiError(f"视频下载连续失败：{reason}")
         if not data:
             raise VideoApiError("视频下载结果为空")
         if not self._looks_like_video(data, content_type):
