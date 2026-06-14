@@ -4,6 +4,17 @@
 
 <div class="copy-line">首次使用建议先完成三项基础检查：核心服务已启动、模型配置可用、目标设备已连接。</div>
 
+## 飞书云文档参考
+
+如果你需要对照团队内部说明，可以打开这份飞书云文档：
+
+<div class="route-grid">
+  <a class="route-card" href="https://my.feishu.cn/wiki/SZSPwCIR8i5uApk8tLNcXqnFn6e?from=from_copylink" target="_blank" rel="noreferrer">
+    <strong>打开飞书云文档</strong>
+    <span>作为新手快速开始的补充资料；安装、授权、模型和设备连通仍以本站文档为主。</span>
+  </a>
+</div>
+
 ## 你需要准备什么
 
 | 项目 | 说明 | 不满足时怎么做 |
