@@ -54,8 +54,7 @@ const VIDEO_LOADING_TIPS = [
 const ACTIVE_VIDEO_JOB_STORAGE_KEY = 'openclaw.studio.activeVideoJob.v1';
 const VIDEO_JOB_TIMEOUT_MS = 20 * 60 * 1000;
 const VIDEO_JOB_STALE_MS = 25 * 60 * 1000;
-
-type BusyKind = 'image' | 'video' | null;
+const VIDEO_JOB_POLLERS = new Set<string>();
 
 interface ActiveVideoJob {
   jobId: string;
@@ -163,30 +162,35 @@ export function StudioPage() {
   const settings = usePreviewStore((state) => state.settings);
   const navigate = usePreviewStore((state) => state.navigate);
   const pushToast = usePreviewStore((state) => state.pushToast);
+  const studio = usePreviewStore((state) => state.studio);
+  const updateStudio = usePreviewStore((state) => state.updateStudio);
   const { data, loading, error, refresh } = useAsync(() => loadStudioSnapshot(settings), [settings], { cacheKey: "studio" });
-  const [tab, setTab] = React.useState<StudioTab>('image');
-  const [imagePrompt, setImagePrompt] = React.useState('一个安静、克制、有玻璃质感的 OpenClaw 启动器界面，冷光、清晰排版、舒适的背景');
-  const [imageSize, setImageSize] = React.useState('1024x1024');
-  const [imageCount, setImageCount] = React.useState(1);
-  const [imageEditPath, setImageEditPath] = React.useState('');
-  const [imageReferenceName, setImageReferenceName] = React.useState('');
-  const [videoPrompt, setVideoPrompt] = React.useState('OpenClaw 启动器的轻微镜头运动，玻璃面板缓慢浮现，动效克制');
-  const [videoMode, setVideoMode] = React.useState('t2v');
-  const [videoResolution, setVideoResolution] = React.useState('720P');
-  const [videoDuration, setVideoDuration] = React.useState(5);
-  const [videoRatio, setVideoRatio] = React.useState('16:9');
-  const [videoImagePath, setVideoImagePath] = React.useState('');
-  const [videoReferenceName, setVideoReferenceName] = React.useState('');
-  const [videoProgress, setVideoProgress] = React.useState('');
-  const [busyKind, setBusyKind] = React.useState<BusyKind>(null);
-  const [activeVideoJob, setActiveVideoJob] = React.useState<ActiveVideoJob | null>(() => readActiveVideoJob());
-  const [selectedImage, setSelectedImage] = React.useState<ImageResult | null>(null);
-  const [selectedVideo, setSelectedVideo] = React.useState<VideoResult | null>(null);
-  const [imageHistory, setImageHistory] = React.useState<ImageResult[]>([]);
-  const [videoHistory, setVideoHistory] = React.useState<VideoResult[]>([]);
+  const {
+    tab,
+    imagePrompt,
+    imageSize,
+    imageCount,
+    imageEditPath,
+    imageReferenceName,
+    imageStartedAt,
+    videoPrompt,
+    videoMode,
+    videoResolution,
+    videoDuration,
+    videoRatio,
+    videoImagePath,
+    videoReferenceName,
+    videoProgress,
+    videoStartedAt,
+    busyKind,
+    activeVideoJob,
+    selectedImage,
+    selectedVideo,
+    imageHistory,
+    videoHistory,
+  } = studio;
   const imageReferenceInputRef = React.useRef<HTMLInputElement>(null);
   const videoReferenceInputRef = React.useRef<HTMLInputElement>(null);
-  const resumedVideoJobRef = React.useRef('');
   const activeVideoJobRef = React.useRef<ActiveVideoJob | null>(activeVideoJob);
   const imageBusy = busyKind === 'image';
   const videoBusy = busyKind === 'video';
@@ -199,21 +203,23 @@ export function StudioPage() {
   }, [activeVideoJob]);
 
   const applyImageTemplate = React.useCallback((template: PromptTemplate) => {
-    setImagePrompt(template.prompt);
+    updateStudio({ imagePrompt: template.prompt });
     const size = template.params?.size;
-    if (size) setImageSize(String(size));
+    if (size) updateStudio({ imageSize: String(size) });
     pushToast({ tone: 'ok', title: '已套用模板', detail: template.title });
-  }, [pushToast]);
+  }, [pushToast, updateStudio]);
 
   const applyVideoTemplate = React.useCallback((template: PromptTemplate) => {
-    setVideoPrompt(template.prompt);
+    updateStudio({ videoPrompt: template.prompt });
     const params = template.params || {};
-    if (params.mode) setVideoMode(String(params.mode));
-    if (params.resolution) setVideoResolution(String(params.resolution));
-    if (params.ratio) setVideoRatio(String(params.ratio));
-    if (params.duration) setVideoDuration(Number(params.duration) || 5);
+    const patch: Partial<typeof studio> = {};
+    if (params.mode) patch.videoMode = String(params.mode);
+    if (params.resolution) patch.videoResolution = String(params.resolution);
+    if (params.ratio) patch.videoRatio = String(params.ratio);
+    if (params.duration) patch.videoDuration = Number(params.duration) || 5;
+    if (Object.keys(patch).length) updateStudio(patch);
     pushToast({ tone: 'ok', title: '已套用模板', detail: template.title });
-  }, [pushToast]);
+  }, [pushToast, studio, updateStudio]);
 
   const copyTemplate = React.useCallback(async (template: PromptTemplate) => {
     try {
@@ -226,11 +232,13 @@ export function StudioPage() {
 
   React.useEffect(() => {
     if (!data) return;
-    if (!imageHistory.length && data.imageHistory.length) setImageHistory(data.imageHistory);
-    if (!videoHistory.length && data.videoHistory.length) setVideoHistory(data.videoHistory);
-    if (!selectedImage && data.imageHistory.length) setSelectedImage(data.imageHistory[0]);
-    if (!selectedVideo && data.videoHistory.length) setSelectedVideo(data.videoHistory[0]);
-  }, [data, imageHistory.length, videoHistory.length, selectedImage, selectedVideo]);
+    updateStudio((current) => ({
+      imageHistory: !current.imageHistory.length && data.imageHistory.length ? data.imageHistory : current.imageHistory,
+      videoHistory: !current.videoHistory.length && data.videoHistory.length ? data.videoHistory : current.videoHistory,
+      selectedImage: !current.selectedImage && data.imageHistory.length ? data.imageHistory[0] : current.selectedImage,
+      selectedVideo: !current.selectedVideo && data.videoHistory.length ? data.videoHistory[0] : current.selectedVideo,
+    }));
+  }, [data, updateStudio]);
 
   const importImagesToPhone = React.useCallback(async (result: ImageResult) => {
     const phoneBaseUrl = settings.phoneBaseUrl.trim();
@@ -278,9 +286,14 @@ export function StudioPage() {
   }, [settings]);
 
   const finishVideoResult = React.useCallback((result: VideoResult) => {
-    setSelectedVideo(result);
-    setVideoHistory((history) => [result, ...history].slice(0, 6));
-    setActiveVideoJob(null);
+    updateStudio((current) => ({
+      selectedVideo: result,
+      videoHistory: [result, ...current.videoHistory].slice(0, 6),
+      activeVideoJob: null,
+      videoStartedAt: 0,
+    }));
+    if (activeVideoJobRef.current?.jobId) VIDEO_JOB_POLLERS.delete(activeVideoJobRef.current.jobId);
+    activeVideoJobRef.current = null;
     writeActiveVideoJob(null);
     void importVideoToPhone(result)
       .then((imported) => {
@@ -290,18 +303,20 @@ export function StudioPage() {
       })
       .catch((err) => {
         pushToast({ tone: 'warn', title: '手机视频导入失败', detail: String(err) });
-      });
+    });
     pushToast({ tone: 'ok', title: '视频已生成', detail: result.file?.filename || '预览已就绪' });
-  }, [importVideoToPhone, pushToast]);
+  }, [importVideoToPhone, pushToast, updateStudio]);
 
   React.useEffect(() => {
     const stored = activeVideoJob || readActiveVideoJob();
-    if (!stored?.jobId || resumedVideoJobRef.current === stored.jobId) return;
-    resumedVideoJobRef.current = stored.jobId;
-    setTab('video');
-    setActiveVideoJob(stored);
-    setBusyKind('video');
-    setVideoProgress(stored.message || '正在恢复视频任务');
+    if (!stored?.jobId) return;
+    if (VIDEO_JOB_POLLERS.has(stored.jobId)) {
+      updateStudio({ tab: 'video', activeVideoJob: stored, busyKind: 'video', videoProgress: stored.message || '正在生成视频' });
+      return;
+    }
+    VIDEO_JOB_POLLERS.add(stored.jobId);
+    activeVideoJobRef.current = stored;
+    updateStudio({ tab: 'video', activeVideoJob: stored, busyKind: 'video', videoProgress: stored.message || '正在恢复视频任务' });
 
     let cancelled = false;
     const elapsedMs = Math.max(0, Date.now() - stored.startedAt);
@@ -311,9 +326,9 @@ export function StudioPage() {
       if (cancelled) return;
       const message = videoJobMessage(job);
       if (!message) return;
-      setVideoProgress(message);
       const next = { ...stored, message, updatedAt: Date.now() };
-      setActiveVideoJob(next);
+      activeVideoJobRef.current = next;
+      updateStudio({ videoProgress: message, activeVideoJob: next });
       writeActiveVideoJob(next);
     }, remainingMs)
       .then((result) => {
@@ -322,20 +337,22 @@ export function StudioPage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setActiveVideoJob(null);
+        VIDEO_JOB_POLLERS.delete(stored.jobId);
+        activeVideoJobRef.current = null;
+        updateStudio({ activeVideoJob: null, videoStartedAt: 0 });
         writeActiveVideoJob(null);
         pushToast({ tone: 'danger', title: '视频生成失败', detail: String(err) });
       })
       .finally(() => {
         if (cancelled) return;
-        setBusyKind(null);
-        setVideoProgress('');
+        VIDEO_JOB_POLLERS.delete(stored.jobId);
+        updateStudio({ busyKind: null, videoProgress: '', videoStartedAt: 0 });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [activeVideoJob, finishVideoResult, pushToast, settings]);
+  }, [activeVideoJob, finishVideoResult, pushToast, settings, updateStudio]);
 
   const handleGenerateImage = async () => {
     const baseUrl = data?.imageDefaults.baseUrl.trim() || '';
@@ -344,7 +361,7 @@ export function StudioPage() {
       pushToast({ tone: 'danger', title: '缺少图像网关', detail: '请到统一设置里填写图像生成 API。' });
       return;
     }
-    setBusyKind('image');
+    updateStudio({ busyKind: 'image', imageStartedAt: Date.now(), tab: 'image' });
     try {
       const result = await generateImage(settings, {
         baseUrl,
@@ -355,8 +372,10 @@ export function StudioPage() {
         editImagePath: imageEditPath.trim() || undefined,
         model: data?.imageDefaults.model,
       });
-      setSelectedImage(result.data);
-      setImageHistory((history) => [result.data, ...history].slice(0, 6));
+      updateStudio((current) => ({
+        selectedImage: result.data,
+        imageHistory: [result.data, ...current.imageHistory].slice(0, 6),
+      }));
       pushToast({ tone: 'ok', title: '图像已生成', detail: String(result.data.count) + ' 个结果' });
       try {
         const imported = await importImagesToPhone(result.data);
@@ -369,7 +388,7 @@ export function StudioPage() {
     } catch (err) {
       pushToast({ tone: 'danger', title: '图像生成失败', detail: String(err) });
     } finally {
-      setBusyKind(null);
+      updateStudio({ busyKind: null, imageStartedAt: 0 });
     }
   };
 
@@ -394,34 +413,37 @@ export function StudioPage() {
       ratio: videoRatio,
       imagePath: videoImagePath.trim() || undefined,
     };
-    setBusyKind('video');
-    setVideoProgress('正在提交视频任务');
+    const videoStart = Date.now();
+    updateStudio({ busyKind: 'video', videoStartedAt: videoStart, videoProgress: '正在提交视频任务', tab: 'video' });
     try {
       const result = await generateVideo(settings, payload, (job) => {
         const message = videoJobMessage(job);
-        if (message) setVideoProgress(message);
+        if (message) updateStudio({ videoProgress: message });
         const currentJob = activeVideoJobRef.current;
         if (message && currentJob?.jobId) {
           const next = { ...currentJob, message, updatedAt: Date.now() };
-          setActiveVideoJob(next);
+          activeVideoJobRef.current = next;
+          updateStudio({ activeVideoJob: next });
           writeActiveVideoJob(next);
         }
       }, ({ jobId, job }) => {
         const message = videoJobMessage(job || {}) || '任务已提交，等待网关排队';
-        const next = { jobId, payload, startedAt: Date.now(), updatedAt: Date.now(), message };
-        resumedVideoJobRef.current = jobId;
-        setActiveVideoJob(next);
+        const next = { jobId, payload, startedAt: videoStart, updatedAt: Date.now(), message };
+        VIDEO_JOB_POLLERS.add(jobId);
+        activeVideoJobRef.current = next;
+        updateStudio({ activeVideoJob: next, videoProgress: message });
         writeActiveVideoJob(next);
-        setVideoProgress(message);
       });
       finishVideoResult(result.data);
     } catch (err) {
-      setActiveVideoJob(null);
+      if (activeVideoJobRef.current?.jobId) VIDEO_JOB_POLLERS.delete(activeVideoJobRef.current.jobId);
+      activeVideoJobRef.current = null;
+      updateStudio({ activeVideoJob: null, videoStartedAt: 0 });
       writeActiveVideoJob(null);
       pushToast({ tone: 'danger', title: '视频生成失败', detail: String(err) });
     } finally {
-      setBusyKind(null);
-      setVideoProgress('');
+      if (activeVideoJobRef.current?.jobId) VIDEO_JOB_POLLERS.delete(activeVideoJobRef.current.jobId);
+      updateStudio({ busyKind: null, videoProgress: '', videoStartedAt: 0 });
     }
   };
 
@@ -432,12 +454,9 @@ export function StudioPage() {
     try {
       const dataUrl = await readFileAsDataUrl(file);
       if (kind === 'image') {
-        setImageEditPath(dataUrl);
-        setImageReferenceName(file.name);
+        updateStudio({ imageEditPath: dataUrl, imageReferenceName: file.name });
       } else {
-        setVideoImagePath(dataUrl);
-        setVideoReferenceName(file.name);
-        setVideoMode('i2v');
+        updateStudio({ videoImagePath: dataUrl, videoReferenceName: file.name, videoMode: 'i2v' });
       }
     } catch (err) {
       pushToast({ tone: 'danger', title: '参考图读取失败', detail: String(err) });
@@ -500,7 +519,7 @@ export function StudioPage() {
             action={
               <Tabs
                 value={tab}
-                onChange={(value) => setTab(value as StudioTab)}
+                onChange={(value) => updateStudio({ tab: value as StudioTab })}
                 items={[
                   { key: 'image', label: '图像' },
                   { key: 'video', label: '视频' },
@@ -514,16 +533,16 @@ export function StudioPage() {
               <div className="studio-form">
                 <TemplateGallery templates={imageTemplates || []} onApply={applyImageTemplate} onCopy={copyTemplate} />
                 <Field label="提示词" hint="映射到 /api/image/generate.prompt">
-                  <TextArea rows={7} value={imagePrompt} onChange={(event) => setImagePrompt(event.target.value)} />
+                  <TextArea rows={7} value={imagePrompt} onChange={(event) => updateStudio({ imagePrompt: event.target.value })} />
                 </Field>
                 <div className="form-grid">
                   <Field label="尺寸">
-                    <Select value={imageSize} onChange={(event) => setImageSize(event.target.value)}>
+                    <Select value={imageSize} onChange={(event) => updateStudio({ imageSize: event.target.value })}>
                       {IMAGE_SIZE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </Select>
                   </Field>
                   <Field label="数量">
-                    <Input type="number" min={1} max={4} value={imageCount} onChange={(event) => setImageCount(Number(event.target.value) || 1)} />
+                    <Input type="number" min={1} max={4} value={imageCount} onChange={(event) => updateStudio({ imageCount: Number(event.target.value) || 1 })} />
                   </Field>
                 </div>
                 <Field label="参考图" hint="可选，选择本地图片后自动转为 data URL">
@@ -537,7 +556,7 @@ export function StudioPage() {
                   <div className="upload-row">
                     <Button type="button" variant="secondary" icon={Upload} onClick={() => imageReferenceInputRef.current?.click()}>选择图片</Button>
                     {imageReferenceName ? <Chip tone="ok" className="upload-chip">{imageReferenceName}</Chip> : <span className="upload-hint">未选择参考图</span>}
-                    {imageEditPath ? <Button type="button" variant="quiet" icon={X} onClick={() => { setImageEditPath(''); setImageReferenceName(''); }}>清除</Button> : null}
+                    {imageEditPath ? <Button type="button" variant="quiet" icon={X} onClick={() => updateStudio({ imageEditPath: '', imageReferenceName: '' })}>清除</Button> : null}
                   </div>
                 </Field>
                 <div className="button-row">
@@ -548,11 +567,11 @@ export function StudioPage() {
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="图像结果" subtitle="最新结果在上方，历史结果在下方。" />
                 {imageBusy ? (
-                  <StudioLoading kind="image" />
+                  <StudioLoading kind="image" startedAt={imageStartedAt || undefined} />
                 ) : selectedImage ? (
                   <div className="result-grid">
                     {selectedImage.previewUrls.map((url, index) => (
-                      <button type="button" key={url + index} className="result-card" onClick={() => setSelectedImage(selectedImage)}>
+                      <button type="button" key={url + index} className="result-card" onClick={() => updateStudio({ selectedImage })}>
                         <img src={url} alt={'generated-' + index} />
                         <div className="result-meta">
                           <span>{selectedImage.size}</span>
@@ -567,7 +586,7 @@ export function StudioPage() {
                 {imageHistory.length ? (
                   <div className="history-strip">
                     {imageHistory.map((item, index) => (
-                      <button key={item.prompt + '-' + index} type="button" className="history-card" onClick={() => setSelectedImage(item)}>
+                      <button key={item.prompt + '-' + index} type="button" className="history-card" onClick={() => updateStudio({ selectedImage: item })}>
                         <img src={item.previewUrls[0]} alt={item.prompt} />
                         <span>{item.files[0]?.filename || '结果 ' + (index + 1)}</span>
                       </button>
@@ -581,24 +600,24 @@ export function StudioPage() {
               <div className="studio-form">
                 <TemplateGallery templates={videoTemplates || []} onApply={applyVideoTemplate} onCopy={copyTemplate} />
                 <Field label="提示词" hint="映射到 /api/video/generate.prompt">
-                  <TextArea rows={7} value={videoPrompt} onChange={(event) => setVideoPrompt(event.target.value)} />
+                  <TextArea rows={7} value={videoPrompt} onChange={(event) => updateStudio({ videoPrompt: event.target.value })} />
                 </Field>
                 <div className="form-grid">
                   <Field label="模式">
-                    <Select value={videoMode} onChange={(event) => setVideoMode(event.target.value)}>
+                    <Select value={videoMode} onChange={(event) => updateStudio({ videoMode: event.target.value })}>
                       {VIDEO_MODE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </Select>
                   </Field>
                   <Field label="分辨率">
-                    <Select value={videoResolution} onChange={(event) => setVideoResolution(event.target.value)}>
+                    <Select value={videoResolution} onChange={(event) => updateStudio({ videoResolution: event.target.value })}>
                       {VIDEO_RESOLUTION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </Select>
                   </Field>
                   <Field label="时长">
-                    <Input type="number" min={1} max={30} value={videoDuration} onChange={(event) => setVideoDuration(Number(event.target.value) || 5)} />
+                    <Input type="number" min={1} max={30} value={videoDuration} onChange={(event) => updateStudio({ videoDuration: Number(event.target.value) || 5 })} />
                   </Field>
                   <Field label="比例">
-                    <Select value={videoRatio} onChange={(event) => setVideoRatio(event.target.value)}>
+                    <Select value={videoRatio} onChange={(event) => updateStudio({ videoRatio: event.target.value })}>
                       {VIDEO_RATIO_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </Select>
                   </Field>
@@ -614,7 +633,7 @@ export function StudioPage() {
                   <div className="upload-row">
                     <Button type="button" variant="secondary" icon={Upload} onClick={() => videoReferenceInputRef.current?.click()}>选择图片</Button>
                     {videoReferenceName ? <Chip tone="ok" className="upload-chip">{videoReferenceName}</Chip> : <span className="upload-hint">未选择参考图</span>}
-                    {videoImagePath ? <Button type="button" variant="quiet" icon={X} onClick={() => { setVideoImagePath(''); setVideoReferenceName(''); }}>清除</Button> : null}
+                    {videoImagePath ? <Button type="button" variant="quiet" icon={X} onClick={() => updateStudio({ videoImagePath: '', videoReferenceName: '' })}>清除</Button> : null}
                   </div>
                 </Field>
                 <div className="button-row">
@@ -625,7 +644,7 @@ export function StudioPage() {
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="视频结果" subtitle="真实模式返回 mp4；Agnes 视频会自动按任务接口轮询。" />
                 {videoBusy ? (
-                  <StudioLoading kind="video" message={videoProgress} startedAt={activeVideoJob?.startedAt} />
+                  <StudioLoading kind="video" message={videoProgress} startedAt={activeVideoJob?.startedAt || videoStartedAt || undefined} />
                 ) : selectedVideo ? (
                   <div className="video-preview-shell">
                     {!selectedVideo.previewUrl ? (
@@ -650,7 +669,7 @@ export function StudioPage() {
                 {videoHistory.length ? (
                   <div className="history-strip">
                     {videoHistory.map((item, index) => (
-                      <button key={item.prompt + '-' + index} type="button" className="history-card" onClick={() => setSelectedVideo(item)}>
+                      <button key={item.prompt + '-' + index} type="button" className="history-card" onClick={() => updateStudio({ selectedVideo: item })}>
                         {item.mime.startsWith('video/') ? <video src={item.previewUrl} muted /> : <img src={item.previewUrl} alt={item.prompt} />}
                         <span>{item.file?.filename || '片段 ' + (index + 1)}</span>
                       </button>
