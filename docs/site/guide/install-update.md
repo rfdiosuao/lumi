@@ -6,12 +6,12 @@ OpenClaw 当前有两类交付方式：完整便携包和在线瘦包。完整�
 
 | 项 | 当前值 |
 | --- | --- |
-| 最新启动器 | `2.1.8` |
+| 最新启动器 | `2.1.9` |
 | OpenClaw runtime | `2026.6.5` |
-| 在线便携包 | `LumiClaw-Online-v2.1.8.zip` |
-| 完整离线包 | `OpenClaw-Portable-v2.1.8-2026.06.14-full-offline.zip` |
-| 更新安装器 | `LumiClaw-Setup-v2.1.8.exe` |
-| Release 地址 | [openclaw-runtime-layers v2.1.8](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.8) |
+| 在线便携包 | `LumiClaw-Online-v2.1.9.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.9-2026.06.16-full-offline.zip` |
+| 更新安装器 | `LumiClaw-Setup-v2.1.9.exe` |
+| Release 地址 | [openclaw-runtime-layers v2.1.9](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.9) |
 
 ## 交付形态
 
@@ -61,13 +61,13 @@ OpenClaw-Portable-*/
 当前线上 `launcher.json` 指向：
 
 ```text
-https://github.com/rfdiosuao/openclaw-runtime-layers/releases/download/v2.1.8/LumiClaw-Setup-v2.1.8.exe
+https://github.com/rfdiosuao/openclaw-runtime-layers/releases/download/v2.1.9/LumiClaw-Setup-v2.1.9.exe
 ```
 
 SHA256：
 
 ```text
-6B6DF7A7B77147A2F9692E01457233C86B2F99661AA4E1E3EB35B58B75540F95
+D4A74911AC0C5527E3DDE2EB2419A77104678A3F2A345334F425BCEE119F4B83
 ```
 
 ## 在线瘦包的稳定设计
