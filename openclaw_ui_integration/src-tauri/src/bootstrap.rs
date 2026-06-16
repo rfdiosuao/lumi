@@ -35,10 +35,10 @@ struct Layer {
     version: Option<String>,
     #[serde(default)]
     required: bool,
-    // Optional uncompressed/download size in bytes, when the manifest supplies
-    // it, so the overlay can show a total before any bytes arrive. Absent → 0.
+    // Download size in bytes from the manifest (`size`), so the overlay can show
+    // a total before any bytes arrive. Absent → 0.
     #[serde(default)]
-    bytes: Option<u64>,
+    size: Option<u64>,
 }
 
 // --- First-run download progress, emitted to the WebView as Tauri events ---
@@ -83,7 +83,7 @@ fn emit_start(app: &AppHandle, layers: &[&Layer]) {
         "dist://start",
         serde_json::json!({
             "count": layers.len(),
-            "layers": layers.iter().map(|l| LayerInfo { id: l.id.clone(), title: layer_title(l), size: l.bytes.unwrap_or(0) }).collect::<Vec<_>>(),
+            "layers": layers.iter().map(|l| LayerInfo { id: l.id.clone(), title: layer_title(l), size: l.size.unwrap_or(0) }).collect::<Vec<_>>(),
         }),
     );
 }
