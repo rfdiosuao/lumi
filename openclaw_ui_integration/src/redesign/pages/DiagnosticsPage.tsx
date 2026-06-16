@@ -1,6 +1,6 @@
 import React from 'react';
-import { Download, RefreshCcw, Wrench } from 'lucide-react';
-import { Button, Chip, EmptyState, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
+import { Download, RefreshCcw, Wrench, X } from 'lucide-react';
+import { Button, Chip, EmptyState, InlineState, Modal, Panel, SectionHeader, StatTile } from '../components/ui';
 import { exportDiagnostics, loadDiagnosticsSnapshot, repairDiagnostics } from '../api/adapters';
 import { useAsync } from '../lib/useAsync';
 import { shortenPaths } from '../lib/format';
@@ -12,8 +12,12 @@ export function DiagnosticsPage() {
   const pushToast = usePreviewStore((state) => state.pushToast);
   const { data, loading, error, refresh } = useAsync(() => loadDiagnosticsSnapshot(settings), [settings], { cacheKey: "diagnostics", ttlMs: 60000 });
   const [busy, setBusy] = React.useState(false);
+  const [confirmRepair, setConfirmRepair] = React.useState(false);
 
-  const handleRepair = async () => {
+  const repairableChecks = (data?.checks || []).filter((check) => check.status !== 'ok');
+
+  const runRepair = async () => {
+    setConfirmRepair(false);
     setBusy(true);
     try {
       const result = await repairDiagnostics(settings);
@@ -24,6 +28,10 @@ export function DiagnosticsPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleRepair = () => {
+    setConfirmRepair(true);
   };
 
   const handleExport = async () => {
@@ -43,8 +51,8 @@ export function DiagnosticsPage() {
       <section className="hero-band">
         <div className="hero-copy">
           <div className="eyebrow">环境检测</div>
-          <h1>环境检测要像报告，不像一堆报错弹窗。</h1>
-          <p>检测、修复和导出都放在同一页，方便邀请制内测时快速定位机器问题。</p>
+          <h1>检查启动器是否可以正常运行</h1>
+          <p>看看现在能不能正常使用，发现问题给你一键修复。</p>
         </div>
         <div className="hero-actions">
           <Button variant="primary" icon={RefreshCcw} onClick={refresh}>刷新</Button>
@@ -109,6 +117,33 @@ export function DiagnosticsPage() {
           </Panel>
         </section>
       ) : null}
+
+      <Modal
+        open={confirmRepair}
+        title="确认修复"
+        subtitle="修复会执行以下操作"
+        onClose={() => setConfirmRepair(false)}
+        actions={
+          <>
+            <Button variant="secondary" icon={X} onClick={() => setConfirmRepair(false)}>取消</Button>
+            <Button variant="primary" icon={Wrench} onClick={runRepair} disabled={busy}>确认修复</Button>
+          </>
+        }
+      >
+        {repairableChecks.length ? (
+          <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {repairableChecks.map((check) => (
+              <li key={check.id}>
+                <strong>{check.label}</strong>
+                <span style={{ marginLeft: 6, opacity: 0.8 }}>{shortenPaths(check.message)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>未发现需要修复的项目，仍会执行一次标准修复流程。</p>
+        )}
+        <p style={{ marginTop: 12, opacity: 0.75 }}>不会删除你的数据或已生成的文件。</p>
+      </Modal>
     </div>
   );
 }

@@ -6,6 +6,9 @@ import { useAsync } from '../lib/useAsync';
 import type { ImageResult, PromptTemplate, VideoResult } from '../types';
 import type { BridgeJob, VideoGenerationPayload } from '../api/adapters';
 import { usePreviewStore } from '../store/appStore';
+import { translateMediaError } from '../lib/errors';
+import type { FriendlyError } from '../lib/errors';
+import { copyText } from '../lib/clipboard';
 
 type StudioTab = 'image' | 'video';
 
@@ -92,6 +95,32 @@ function StudioLoading({ kind, message = '', startedAt }: { kind: 'image' | 'vid
       <div className="studio-loading-tip">{tip}</div>
       <div className="studio-loading-bar"><span /></div>
       <div className="studio-loading-secs">已用时 {mins}:{rest}</div>
+    </div>
+  );
+}
+
+function FailureCard({ failure, onRetry }: { failure: FriendlyError; onRetry?: () => void }) {
+  const [copied, setCopied] = React.useState(false);
+  return (
+    <div className="inline-state inline-state-danger">
+      <div>
+        <div className="inline-state-title">{failure.title}</div>
+        <div className="inline-state-desc">{failure.hint}</div>
+        <div className="button-row" style={{ marginTop: 8 }}>
+          <Button
+            type="button"
+            variant="quiet"
+            onClick={async () => {
+              const ok = await copyText(failure.diagnostic);
+              setCopied(ok);
+              window.setTimeout(() => setCopied(false), 1800);
+            }}
+          >
+            {copied ? '已复制' : '复制诊断'}
+          </Button>
+          {onRetry ? <Button type="button" variant="secondary" onClick={onRetry}>重试</Button> : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -194,6 +223,10 @@ export function StudioPage() {
   const activeVideoJobRef = React.useRef<ActiveVideoJob | null>(activeVideoJob);
   const imageBusy = busyKind === 'image';
   const videoBusy = busyKind === 'video';
+  const [imageFailure, setImageFailure] = React.useState<FriendlyError | null>(null);
+  const [videoFailure, setVideoFailure] = React.useState<FriendlyError | null>(null);
+  const [imageTaskState, setImageTaskState] = React.useState<'idle' | 'success' | 'failed'>('idle');
+  const [videoTaskState, setVideoTaskState] = React.useState<'idle' | 'success' | 'failed'>('idle');
 
   const { data: imageTemplates } = useAsync(() => loadPromptTemplates(settings, 'image'), [settings], { cacheKey: 'templates-image', ttlMs: 300000 });
   const { data: videoTemplates } = useAsync(() => loadPromptTemplates(settings, 'video'), [settings], { cacheKey: 'templates-video', ttlMs: 300000 });
@@ -292,6 +325,8 @@ export function StudioPage() {
       activeVideoJob: null,
       videoStartedAt: 0,
     }));
+    setVideoFailure(null);
+    setVideoTaskState('success');
     if (activeVideoJobRef.current?.jobId) VIDEO_JOB_POLLERS.delete(activeVideoJobRef.current.jobId);
     activeVideoJobRef.current = null;
     writeActiveVideoJob(null);
@@ -341,7 +376,10 @@ export function StudioPage() {
         activeVideoJobRef.current = null;
         updateStudio({ activeVideoJob: null, videoStartedAt: 0 });
         writeActiveVideoJob(null);
-        pushToast({ tone: 'danger', title: '视频生成失败', detail: String(err) });
+        const failure = translateMediaError(err, 'video');
+        setVideoFailure(failure);
+        setVideoTaskState('failed');
+        pushToast({ tone: 'danger', title: failure.title, detail: failure.hint, diagnostic: failure.diagnostic, logRoute: failure.logRoute });
       })
       .finally(() => {
         if (cancelled) return;
@@ -358,9 +396,16 @@ export function StudioPage() {
     const baseUrl = data?.imageDefaults.baseUrl.trim() || '';
     const apiKey = data?.imageDefaults.apiKey.trim() || '';
     if (!baseUrl || !apiKey) {
-      pushToast({ tone: 'danger', title: '缺少图像网关', detail: '请到统一设置里填写图像生成 API。' });
+      pushToast({
+        tone: 'danger',
+        title: '还没有配置图像接口',
+        detail: '请先在设置里填写图像生成 API 地址和密钥。',
+        logRoute: 'settings',
+      });
       return;
     }
+    setImageFailure(null);
+    setImageTaskState('idle');
     updateStudio({ busyKind: 'image', imageStartedAt: Date.now(), tab: 'image' });
     try {
       const result = await generateImage(settings, {
@@ -376,6 +421,7 @@ export function StudioPage() {
         selectedImage: result.data,
         imageHistory: [result.data, ...current.imageHistory].slice(0, 6),
       }));
+      setImageTaskState('success');
       pushToast({ tone: 'ok', title: '图像已生成', detail: String(result.data.count) + ' 个结果' });
       try {
         const imported = await importImagesToPhone(result.data);
@@ -386,7 +432,10 @@ export function StudioPage() {
         pushToast({ tone: 'warn', title: '手机相册导入失败', detail: String(err) });
       }
     } catch (err) {
-      pushToast({ tone: 'danger', title: '图像生成失败', detail: String(err) });
+      const failure = translateMediaError(err, 'image');
+      setImageFailure(failure);
+      setImageTaskState('failed');
+      pushToast({ tone: 'danger', title: failure.title, detail: failure.hint, diagnostic: failure.diagnostic, logRoute: failure.logRoute });
     } finally {
       updateStudio({ busyKind: null, imageStartedAt: 0 });
     }
@@ -398,9 +447,16 @@ export function StudioPage() {
     const model = data?.videoDefaults.model.trim() || '';
     const providerId = inferVideoProviderId(data?.videoDefaults.providerId || '', apiBase, model);
     if (!apiBase || !apiKey) {
-      pushToast({ tone: 'danger', title: '缺少视频网关', detail: '请到统一设置里填写视频生成 API。' });
+      pushToast({
+        tone: 'danger',
+        title: '还没有配置视频接口',
+        detail: '请先在设置里填写视频生成 API 地址和密钥。',
+        logRoute: 'settings',
+      });
       return;
     }
+    setVideoFailure(null);
+    setVideoTaskState('idle');
     const payload: VideoGenerationPayload = {
       providerId,
       apiBase,
@@ -440,7 +496,10 @@ export function StudioPage() {
       activeVideoJobRef.current = null;
       updateStudio({ activeVideoJob: null, videoStartedAt: 0 });
       writeActiveVideoJob(null);
-      pushToast({ tone: 'danger', title: '视频生成失败', detail: String(err) });
+      const failure = translateMediaError(err, 'video');
+      setVideoFailure(failure);
+      setVideoTaskState('failed');
+      pushToast({ tone: 'danger', title: failure.title, detail: failure.hint, diagnostic: failure.diagnostic, logRoute: failure.logRoute });
     } finally {
       if (activeVideoJobRef.current?.jobId) VIDEO_JOB_POLLERS.delete(activeVideoJobRef.current.jobId);
       updateStudio({ busyKind: null, videoProgress: '', videoStartedAt: 0 });
@@ -507,6 +566,24 @@ export function StudioPage() {
               )}
               <div className="detail-row"><span className="detail-label">服务商</span><span className="detail-value">{inferVideoProviderId(data.videoDefaults.providerId, data.videoDefaults.apiBase, data.videoDefaults.model)}</span></div>
               <div className="detail-row"><span className="detail-label">来源</span><span className="detail-value">{data.gateway.mode}</span></div>
+              {tab === 'image' && (!data.imageDefaults.baseUrl.trim() || !data.imageDefaults.apiKey.trim()) ? (
+                <InlineState
+                  tone="warn"
+                  title="还没有配置图像接口"
+                  description={
+                    <Button type="button" variant="secondary" icon={Settings2} onClick={() => navigate('settings')}>去填写图像接口</Button>
+                  }
+                />
+              ) : null}
+              {tab === 'video' && (!data.videoDefaults.apiBase.trim() || !data.videoDefaults.apiKey.trim()) ? (
+                <InlineState
+                  tone="warn"
+                  title="还没有配置视频接口"
+                  description={
+                    <Button type="button" variant="secondary" icon={Settings2} onClick={() => navigate('settings')}>去填写视频接口</Button>
+                  }
+                />
+              ) : null}
             </div>
           ) : null}
         </Panel>
@@ -562,12 +639,17 @@ export function StudioPage() {
                 <div className="button-row">
                   <Button variant="primary" icon={ImagePlus} onClick={handleGenerateImage} disabled={Boolean(busyKind)}>生成图像</Button>
                 </div>
+                <div className="upload-hint" role="status">
+                  生成任务状态：{imageBusy ? '生成中…' : imageTaskState === 'success' ? '成功' : imageTaskState === 'failed' ? '失败' : '空闲'}
+                </div>
               </div>
 
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="图像结果" subtitle="最新结果在上方，历史结果在下方。" />
                 {imageBusy ? (
                   <StudioLoading kind="image" startedAt={imageStartedAt || undefined} />
+                ) : imageFailure ? (
+                  <FailureCard failure={imageFailure} onRetry={handleGenerateImage} />
                 ) : selectedImage ? (
                   <div className="result-grid">
                     {selectedImage.previewUrls.map((url, index) => (
@@ -639,12 +721,17 @@ export function StudioPage() {
                 <div className="button-row">
                   <Button variant="primary" icon={Film} onClick={handleGenerateVideo} disabled={Boolean(busyKind)}>生成视频</Button>
                 </div>
+                <div className="upload-hint" role="status">
+                  生成任务状态：{videoBusy ? (videoProgress || '排队中…') : videoTaskState === 'success' ? '成功' : videoTaskState === 'failed' ? '失败' : '空闲'}
+                </div>
               </div>
 
               <div className="studio-preview">
                 <SectionHeader eyebrow="结果" title="视频结果" subtitle="真实模式返回 mp4；Agnes 视频会自动按任务接口轮询。" />
                 {videoBusy ? (
                   <StudioLoading kind="video" message={videoProgress} startedAt={activeVideoJob?.startedAt || videoStartedAt || undefined} />
+                ) : videoFailure ? (
+                  <FailureCard failure={videoFailure} onRetry={handleGenerateVideo} />
                 ) : selectedVideo ? (
                   <div className="video-preview-shell">
                     {!selectedVideo.previewUrl ? (

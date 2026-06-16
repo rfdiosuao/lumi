@@ -20,12 +20,39 @@ function fmtMB(n: number): string {
   return `${(n / 1048576).toFixed(1)}MB`;
 }
 
+function fmtSpeed(bytesPerSec: number): string {
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '';
+  if (bytesPerSec >= 1048576) return `${(bytesPerSec / 1048576).toFixed(1)}MB/s`;
+  return `${(bytesPerSec / 1024).toFixed(0)}KB/s`;
+}
+
 export function SetupGate() {
   const [active, setActive] = React.useState(false);
   const [layers, setLayers] = React.useState<LayerInfo[]>([]);
   const [prog, setProg] = React.useState<Progress | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [done, setDone] = React.useState(false);
+  const [speed, setSpeed] = React.useState(0);
+  const [source, setSource] = React.useState<{ host: string; mirror: number; mirrors: number } | null>(null);
+  const lastSampleRef = React.useRef<{ downloaded: number; time: number } | null>(null);
+
+  // Track downloaded-bytes delta between dist://progress events to derive a
+  // live download speed (not provided by the backend event payload).
+  const handleProgress = React.useCallback((next: Progress) => {
+    setProg(next);
+    const now = Date.now();
+    const last = lastSampleRef.current;
+    if (last && next.downloaded >= last.downloaded) {
+      const deltaBytes = next.downloaded - last.downloaded;
+      const deltaSec = (now - last.time) / 1000;
+      if (deltaSec > 0.05) {
+        setSpeed(deltaBytes / deltaSec);
+        lastSampleRef.current = { downloaded: next.downloaded, time: now };
+      }
+    } else {
+      lastSampleRef.current = { downloaded: next.downloaded, time: now };
+    }
+  }, []);
 
   React.useEffect(() => {
     if (typeof window === 'undefined' || !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
@@ -41,14 +68,26 @@ export function SetupGate() {
             setActive(true);
             setDone(false);
             setError(null);
+            setProg(null);
+            setSpeed(0);
+            setSource(null);
+            lastSampleRef.current = null;
             setLayers(((e.payload as { layers?: LayerInfo[] }).layers) || []);
           }),
-          listen('dist://progress', (e) => setProg(e.payload as Progress)),
+          listen('dist://source', (e) => {
+            const p = e.payload as { host?: string; mirror?: number; mirrors?: number };
+            setSource({ host: p.host || '', mirror: p.mirror || 1, mirrors: p.mirrors || 1 });
+          }),
+          listen('dist://progress', (e) => handleProgress(e.payload as Progress)),
           listen('dist://done', () => {
             setDone(true);
+            setSpeed(0);
             window.setTimeout(() => setActive(false), 900);
           }),
-          listen('dist://error', (e) => setError((e.payload as { message?: string }).message || 'download_failed')),
+          listen('dist://error', (e) => {
+            setSpeed(0);
+            setError((e.payload as { message?: string }).message || 'download_failed');
+          }),
         ]);
         if (cancelled) {
           subs.forEach((u) => u());
@@ -63,12 +102,14 @@ export function SetupGate() {
       cancelled = true;
       unlisteners.forEach((u) => u());
     };
-  }, []);
+  }, [handleProgress]);
 
   if (!active) return null;
 
   const pct = prog && prog.total > 0 ? Math.min(100, Math.round((prog.downloaded / prog.total) * 100)) : 0;
   const phaseLabel = prog?.phase === 'verify' ? '校验中' : prog?.phase === 'install' ? '安装中' : '下载中';
+  const totalSize = layers.reduce((sum, layer) => sum + (layer.size || 0), 0);
+  const speedLabel = fmtSpeed(speed);
 
   const overlay: React.CSSProperties = {
     position: 'fixed', inset: 0, zIndex: 99999,
@@ -90,11 +131,12 @@ export function SetupGate() {
         <div style={{ fontSize: 17, fontWeight: 800 }}>正在安装 OpenClaw 组件</div>
         <div style={{ marginTop: 6, fontSize: 13, color: '#8b949e' }}>
           正在下载并校验组件文件，请保持联网；已安装的组件不会重复下载。
+          {totalSize > 0 ? ` 共需下载约 ${fmtMB(totalSize)}。` : ''}
         </div>
         {error ? (
           <div style={{ marginTop: 18, fontSize: 13, color: '#ff7b72', lineHeight: 1.6 }}>
             下载失败：{error}
-            <br />请检查网络后重启启动器，或改用全量离线包。
+            <br />请检查网络连接后重试；如果反复失败，可改用全量离线包安装。
           </div>
         ) : done ? (
           <div style={{ marginTop: 18, fontSize: 14, color: '#3fb950', fontWeight: 700 }}>组件已就绪，正在启动…</div>
@@ -106,11 +148,23 @@ export function SetupGate() {
             <div style={bar}><div style={fill} /></div>
             <div style={{ marginTop: 8, fontSize: 12, color: '#8b949e' }}>
               {prog.total > 0 ? `${fmtMB(prog.downloaded)} / ${fmtMB(prog.total)}（${pct}%）` : phaseLabel}
+              {speedLabel && prog.phase === 'download' ? ` · ${speedLabel}` : ''}
             </div>
+            {source && source.host ? (
+              <div style={{ marginTop: 6, fontSize: 12, color: '#6e7681' }}>
+                下载源：{source.host}
+                {source.mirrors > 1 ? `（源 ${source.mirror}/${source.mirrors}${source.mirror > 1 ? '，已自动切换备用源' : ''}）` : ''}
+              </div>
+            ) : null}
           </>
         ) : (
-          <div style={{ marginTop: 18, fontSize: 13 }}>准备下载 {layers.length} 个组件…</div>
+          <div style={{ marginTop: 18, fontSize: 13 }}>
+            准备下载 {layers.length} 个组件{totalSize > 0 ? `（约 ${fmtMB(totalSize)}）` : ''}…
+          </div>
         )}
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: 12, color: '#6e7681' }}>
+          不会删除 OpenClawFiles 和你已有的配置。
+        </div>
       </div>
     </div>
   );

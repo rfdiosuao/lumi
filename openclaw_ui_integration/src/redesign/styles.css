@@ -1109,10 +1109,69 @@ a {
   font-weight: 650;
 }
 
+.toast-main {
+  flex: 1;
+  min-width: 0;
+}
+
 .toast-detail {
   margin-top: 4px;
   font-size: 13px;
   color: var(--muted);
+  word-break: break-word;
+}
+
+.toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.toast-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(7, 11, 16, 0.5);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.toast-action:hover {
+  color: var(--text);
+  border-color: var(--accent, #6ad2a4);
+}
+
+.toast-chevron {
+  transition: transform 0.15s ease;
+}
+
+.toast-chevron-open {
+  transform: rotate(180deg);
+}
+
+.toast-diagnostic {
+  margin-top: 8px;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(7, 11, 16, 0.72);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+}
+
+.topbar-task-badge {
+  color: var(--accent, #6ad2a4);
 }
 
 .search-row {

@@ -25,6 +25,7 @@ import {
   type PhoneAutomationState,
 } from '../lib/phoneAutomation';
 import { usePreviewStore } from '../store/appStore';
+import { translatePhoneError } from '../lib/errors';
 import QRCode from 'qrcode';
 
 // 手机端 App(APKClaw)下载地址。更新 apk 时只改这一行;
@@ -311,6 +312,30 @@ function authErrorHelp(message: string): string {
   return message;
 }
 
+// 任务执行模式（给新手看的中文措辞）。底层 payload 仍用原值，不改。
+// 只演练 → read_only=true（只读屏、不点击改状态）
+// 执行但需确认 → tool_policy 'safe_action'（默认，遇敏感动作停在确认前）
+// 自动执行 → force_agent=true（放手让 Agent 连续执行）
+type TaskRunMode = 'dryRun' | 'confirm' | 'auto';
+
+const TASK_RUN_MODE_OPTIONS: Array<{ value: TaskRunMode; label: string; hint: string }> = [
+  { value: 'dryRun', label: '只演练', hint: '只读屏、不点击，先看看会怎么做' },
+  { value: 'confirm', label: '执行但需确认', hint: '正常执行，遇到敏感动作停在确认前' },
+  { value: 'auto', label: '自动执行', hint: '放手连续执行，适合熟悉后的常规任务' },
+];
+
+function taskRunModePayload(mode: TaskRunMode): { use_template: boolean; force_agent: boolean; read_only: boolean; tool_policy: string } {
+  switch (mode) {
+    case 'dryRun':
+      return { use_template: true, force_agent: false, read_only: true, tool_policy: 'safe_action' };
+    case 'auto':
+      return { use_template: true, force_agent: true, read_only: false, tool_policy: 'safe_action' };
+    case 'confirm':
+    default:
+      return { use_template: true, force_agent: false, read_only: false, tool_policy: 'safe_action' };
+  }
+}
+
 function fleetStatusLabel(status: FleetRun['status']): string {
   switch (status) {
     case 'queued': return '排队中';
@@ -384,6 +409,24 @@ export function PhonePage() {
   const [authState, setAuthState] = React.useState<AuthState>({ tone: 'neutral', title: '等待授权检查' });
   const [apkModalOpen, setApkModalOpen] = React.useState(false);
   const [apkQrDataUrl, setApkQrDataUrl] = React.useState('');
+
+  // 任务执行模式（只演练/执行但需确认/自动执行）。底层值仍走 taskRunModePayload。
+  const [taskRunMode, setTaskRunMode] = React.useState<TaskRunMode>('confirm');
+  // 高级诊断折叠块（默认收起）。
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  // 一键修复连接的运行状态与最终结论。
+  const [repairRunning, setRepairRunning] = React.useState(false);
+  const [repairResult, setRepairResult] = React.useState<{ tone: 'ok' | 'warn' | 'danger'; title: string; detail?: string } | null>(null);
+  // 新增设备时高亮配置区。
+  const [addingDevice, setAddingDevice] = React.useState(false);
+  const configSectionRef = React.useRef<HTMLDivElement | null>(null);
+
+  // 统一的手机错误提示：友好标题 + 下一步，原始报错放进“复制诊断”。
+  const pushPhoneError = React.useCallback((err: unknown, fallbackTitle?: string) => {
+    const f = translatePhoneError(err);
+    pushToast({ tone: 'danger', title: fallbackTitle || f.title, detail: f.hint, diagnostic: f.diagnostic, logRoute: f.logRoute });
+    return f;
+  }, [pushToast]);
 
   React.useEffect(() => {
     if (!apkModalOpen) return;
@@ -780,9 +823,8 @@ export function PhonePage() {
       addTaskLog('ok', label, selectedDevice.name);
       return result.data;
     } catch (err) {
-      const message = authErrorHelp(errorText(err));
-      pushToast({ tone: 'danger', title: `${label}失败`, detail: message });
-      addTaskLog('danger', `${label}失败`, message);
+      const f = pushPhoneError(err, `${label}失败`);
+      addTaskLog('danger', `${label}失败`, `${f.title} · ${f.hint}`);
       return null;
     }
   };
@@ -801,9 +843,8 @@ export function PhonePage() {
       pushToast({ tone: 'ok', title: '截图已获取', detail: selectedDevice.name });
       addTaskLog('ok', '截图已获取', selectedDevice.name);
     } catch (err) {
-      const message = authErrorHelp(errorText(err));
-      pushToast({ tone: 'danger', title: '截图失败', detail: message });
-      addTaskLog('danger', '截图失败', message);
+      const f = pushPhoneError(err, '截图失败');
+      addTaskLog('danger', '截图失败', `${f.title} · ${f.hint}`);
     }
   };
 
@@ -837,10 +878,7 @@ export function PhonePage() {
         'POST',
         {
           prompt,
-          use_template: true,
-          force_agent: false,
-          read_only: false,
-          tool_policy: 'safe_action',
+          ...taskRunModePayload(taskRunMode),
           timeout_sec: PHONE_AGENT_TASK_TIMEOUT_SEC,
           max_rounds: PHONE_AGENT_TASK_MAX_ROUNDS,
         },
@@ -880,9 +918,8 @@ export function PhonePage() {
       }
       addTaskLog('warn', '任务轮询超时', taskId);
     } catch (err) {
-      const message = authErrorHelp(errorText(err));
-      pushToast({ tone: 'danger', title: '任务失败', detail: message });
-      addTaskLog('danger', '任务失败', message);
+      const f = pushPhoneError(err, '任务失败');
+      addTaskLog('danger', '任务失败', `${f.title} · ${f.hint}`);
     } finally {
       if (taskRunRef.current === runId) {
         setSending(false);
@@ -914,9 +951,8 @@ export function PhonePage() {
       pushToast({ tone: 'warn', title: '任务已停止', detail: taskId.slice(0, 12) });
       addTaskLog('warn', '任务已停止', taskId);
     } catch (err) {
-      const message = authErrorHelp(errorText(err));
-      pushToast({ tone: 'danger', title: '停止任务失败', detail: message });
-      addTaskLog('danger', '停止任务失败', message);
+      const f = pushPhoneError(err, '停止任务失败');
+      addTaskLog('danger', '停止任务失败', `${f.title} · ${f.hint}`);
     } finally {
       taskBusyRef.current = false;
     }
@@ -1087,7 +1123,66 @@ export function PhonePage() {
     const draft = createPhoneDeviceDraft(devices);
     setDeviceDraft(draft);
     setConfigOpen(true);
+    setAddingDevice(true);
     setAuthState({ tone: 'neutral', title: '新设备待验证', detail: '输入局域网 IP 会自动补全 http:// 和 9527 端口。' });
+    // 滚到配置区并短暂高亮，告诉新手“在这里填”。
+    window.setTimeout(() => {
+      configSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+    window.setTimeout(() => setAddingDevice(false), 1600);
+  };
+
+  // 一键修复连接：用页面已有的探针/校验，逐项检查，最后只给一个结论。
+  const runConnectionRepair = async () => {
+    if (repairRunning) return;
+    const device = selectedDevice;
+    if (!device) {
+      pushToast({ tone: 'warn', title: '请先选择一台设备' });
+      return;
+    }
+    setRepairRunning(true);
+    setRepairResult(null);
+    const context = { baseUrl: device.baseUrl, token: device.token };
+    const fail = (title: string, detail?: string) => {
+      setRepairResult({ tone: 'danger', title, detail });
+      addTaskLog('warn', '一键修复连接', `${title}${detail ? ' · ' + detail : ''}`);
+    };
+    try {
+      // 1. IP/可达性 + Token：device/status 是 token 鉴权，能同时验证“连得上”和“令牌有效”。
+      if (!normalizePhoneBaseUrl(device.baseUrl) || !device.token.trim()) {
+        fail('手机地址或 Token 未填写', '请到下方设备配置补全 APKClaw 地址和 Token。');
+        return;
+      }
+      try {
+        await requestPhoneData(settings, context, '/api/device/status', 'GET', undefined, { timeoutMs: 12_000 });
+      } catch (err) {
+        const f = translatePhoneError(err);
+        fail(f.title, f.hint);
+        return;
+      }
+      // 2. Lumi 安全配对：warm 会自愈一次；失败即配对/时间问题。
+      try {
+        await warmPhoneSecurePairing(device.baseUrl, device.token);
+      } catch (err) {
+        const f = translatePhoneError(err);
+        fail(f.title, f.hint);
+        return;
+      }
+      // 3. APK 版本 / 签名通道：profile 走 Lumi 签名，能确认版本与安全通道都正常。
+      try {
+        await requestPhoneData(settings, context, '/api/lumi/device/profile?includeApps=false&appLimit=1', 'GET', undefined, { timeoutMs: 12_000 });
+      } catch (err) {
+        const f = translatePhoneError(err);
+        fail(f.title, f.hint);
+        return;
+      }
+      const now = nowIso();
+      updateDeviceRuntime(device.id, { online: true, lastSeenAt: now, lastAuthorizedAt: now });
+      setRepairResult({ tone: 'ok', title: '连接正常', detail: '地址、Token、安全配对和 APP 版本都已通过。' });
+      addTaskLog('ok', '一键修复连接', '连接正常');
+    } finally {
+      setRepairRunning(false);
+    }
   };
 
   const handleApplyPairCode = () => {
@@ -1154,9 +1249,8 @@ export function PhonePage() {
       pushToast({ tone: 'ok', title: '模型已同步到手机', detail: `${cfg.model || '默认模型'} · ${selectedDevice.name}` });
       addTaskLog('ok', '模型已同步到手机', `${cfg.baseUrl} / ${cfg.model}`);
     } catch (err) {
-      const message = authErrorHelp(errorText(err));
-      pushToast({ tone: 'danger', title: '同步模型失败', detail: message });
-      addTaskLog('danger', '同步模型失败', message);
+      const f = pushPhoneError(err, '同步模型失败');
+      addTaskLog('danger', '同步模型失败', `${f.title} · ${f.hint}`);
     } finally {
       setSyncingModel(false);
     }
@@ -1218,10 +1312,9 @@ export function PhonePage() {
       addTaskLog('ok', mode === 'test' ? '设备验证通过' : '设备已保存', `${next.name} · ${next.baseUrl}`);
       setConfigOpen(false);
     } catch (err) {
-      const message = authErrorHelp(errorText(err));
-      setAuthState({ tone: 'danger', title: '设备验证失败', detail: message });
-      pushToast({ tone: 'danger', title: '设备验证失败', detail: message });
-      addTaskLog('danger', '设备验证失败', message);
+      const f = pushPhoneError(err, '设备验证失败');
+      setAuthState({ tone: 'danger', title: f.title, detail: f.hint });
+      addTaskLog('danger', '设备验证失败', `${f.title} · ${f.hint}`);
     } finally {
       setSaving(false);
       setCheckingDevice(false);
@@ -1242,9 +1335,9 @@ export function PhonePage() {
       pushToast({ tone: 'ok', title: '安全通道已重新配对', detail: repaired.name });
       addTaskLog('ok', '安全通道已重新配对', repaired.baseUrl);
     } catch (err) {
-      const message = authErrorHelp(errorText(err));
-      setAuthState({ tone: 'danger', title: '重新配对失败', detail: message });
-      addTaskLog('danger', '重新配对失败', message);
+      const f = pushPhoneError(err, '重新配对失败');
+      setAuthState({ tone: 'danger', title: f.title, detail: f.hint });
+      addTaskLog('danger', '重新配对失败', `${f.title} · ${f.hint}`);
     } finally {
       setCheckingDevice(false);
     }
@@ -1296,6 +1389,24 @@ export function PhonePage() {
     setScheduleDraft((state) => ({ ...state, templateId: template.id, mode: template.mode }));
     pushToast({ tone: 'ok', title: '模板已填入任务说明', detail: template.title });
   };
+
+  // 常用自动化快捷卡：找到内置模板就套用，找不到就把说明文字预填到任务输入框（不报错）。
+  const handleQuickAutomation = (templateId: string, label: string, fallbackPrompt: string) => {
+    const template = automationTemplates.find((item) => item.id === templateId);
+    if (template) {
+      handleApplyAutomationTemplate(template);
+      return;
+    }
+    setActionPrompt(fallbackPrompt);
+    pushToast({ tone: 'warn', title: '未找到内置模板', detail: `已预填「${label}」说明，可手动调整后执行。` });
+  };
+
+  const QUICK_AUTOMATIONS: Array<{ id: string; label: string; fallback: string }> = [
+    { id: 'xianyu-polish', label: '闲鱼擦亮', fallback: '打开闲鱼，进入「我的」→「我发布的」，仅当出现「一键擦亮」时点击一次，然后读取截图结束。' },
+    { id: 'xianyu-checkin', label: '签到', fallback: '打开闲鱼签到入口，只点击明确的「签到/领取奖励」按钮，不要点抽奖、支付或发布。' },
+    { id: 'xianyu-listing-inspection', label: '读取发布状态', fallback: '打开闲鱼「我的」→「我发布的」，只读取商品标题、状态和异常提示，不要点击改价、删除或发布。' },
+    { id: 'generic-ad-watch-reward', label: '广告等待', fallback: '处理当前广告或奖励等待页，等待到最短时长后只点击安全的「领取奖励/关闭/返回」，不要下载或安装任何应用。' },
+  ];
 
   const handleToggleAutomationTemplate = (templateId: string, enabled: boolean) => {
     commitAutomationState((current) => ({
@@ -1617,6 +1728,24 @@ export function PhonePage() {
         </div>
       </section>
 
+      <Panel className="surface-panel">
+        <SectionHeader
+          eyebrow="第一步"
+          title="连接手机"
+          subtitle="先选好/添加手机，验证 Token 与安全配对。遇到连不上，点「一键修复连接」自动排查。"
+          action={
+            <Button variant="primary" icon={ShieldCheck} onClick={() => void runConnectionRepair()} disabled={!selectedDevice || repairRunning}>
+              {repairRunning ? '检查中…' : '一键修复连接'}
+            </Button>
+          }
+        />
+        {repairRunning ? (
+          <InlineState tone="neutral" title="正在检查连接" description="依次检查 地址可达性 → Token → 安全配对 → APP 版本…" />
+        ) : repairResult ? (
+          <InlineState tone={repairResult.tone} title={repairResult.title} description={repairResult.detail} />
+        ) : null}
+      </Panel>
+
       <section className="content-grid content-grid-phone">
         <Panel className="surface-panel surface-panel-narrow">
           <SectionHeader
@@ -1698,6 +1827,22 @@ export function PhonePage() {
                   </div>
                   {loading ? <InlineState tone="neutral" title="正在刷新快照" description="截图和状态会先显示，视频/录屏等附加能力稍后更新。" /> : null}
                   <InlineState tone={authState.tone} title={authState.title} description={authState.detail} icon={authState.tone === 'ok' ? ShieldCheck : KeyRound} />
+
+                  <div className="eyebrow" style={{ marginTop: 4 }}>第二步 · 执行任务</div>
+                  <div className="quick-automation-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {QUICK_AUTOMATIONS.map((item) => (
+                      <Button key={item.id} variant="quiet" icon={PlayCircle} onClick={() => handleQuickAutomation(item.id, item.label, item.fallback)}>
+                        {item.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <Field label="执行方式" hint={TASK_RUN_MODE_OPTIONS.find((item) => item.value === taskRunMode)?.hint}>
+                    <Select value={taskRunMode} onChange={(event) => setTaskRunMode(event.target.value as TaskRunMode)}>
+                      {TASK_RUN_MODE_OPTIONS.map((item) => (
+                        <option key={item.value} value={item.value}>{item.label}</option>
+                      ))}
+                    </Select>
+                  </Field>
                   <div className="button-row">
                     <Button variant="secondary" icon={Camera} onClick={handleCapture}>截图</Button>
                     <Button variant="success" icon={PlayCircle} onClick={handleTask} disabled={sending}>{sending ? '执行中...' : '执行任务'}</Button>
@@ -1788,16 +1933,27 @@ export function PhonePage() {
 
           <Panel className="surface-panel phone-automation-panel">
             <SectionHeader
-              eyebrow="自动化任务库"
-              title="任务模板、计划与执行日志"
+              eyebrow="第三步 · 定时任务"
+              title="任务模板、定时计划与执行日志"
+              subtitle="打开下面的「定时任务总开关」后，已启用的计划会按时自动执行。"
               action={
                 <div className="section-action-row">
-                  <Button variant="primary" icon={Plus} onClick={handleCreateTemplateDraft}>新建模板</Button>
+                  <Button variant="quiet" icon={Plus} onClick={handleCreateTemplateDraft}>新建模板</Button>
                   <Button variant="quiet" icon={RefreshCcw} onClick={handleResetAutomationLibrary}>恢复内置模板</Button>
-                  <Button variant="secondary" icon={PlayCircle} onClick={handleGenerateAutomationFixture}>生成状态样例</Button>
+                  <Button variant="quiet" icon={PlayCircle} onClick={handleGenerateAutomationFixture}>生成演示数据</Button>
                 </div>
               }
             />
+            <div className="detail-row" style={{ alignItems: 'center', gap: 12 }}>
+              <Toggle
+                checked={Boolean(schedulerStatus?.running)}
+                onChange={(checked) => void runSchedulerCommand(checked ? 'start' : 'stop')}
+                label="定时任务总开关"
+                hint={schedulerBusy ? '处理中…' : schedulerStatus?.running ? `运行中${schedulerStatus.pollSeconds ? ` · 每 ${schedulerStatus.pollSeconds}s 检查` : ''}` : '关闭时所有计划都不会自动执行'}
+              />
+              <Button variant="quiet" icon={RefreshCcw} onClick={() => void refreshSchedulerStatus()} disabled={schedulerBusy}>刷新状态</Button>
+              <Button variant="quiet" icon={PlayCircle} onClick={() => void runSchedulerCommand('tick')} disabled={schedulerBusy}>立即检查一次</Button>
+            </div>
             <Tabs
               value={automationTab}
               onChange={(value) => setAutomationTab(value as AutomationTab)}
@@ -1824,7 +1980,7 @@ export function PhonePage() {
                             <span className="chip-row">
                               <Chip tone={template.enabled ? 'ok' : 'neutral'}>{template.enabled ? '已启用' : '已停用'}</Chip>
                               <Chip tone={automationRiskTone(template.riskLevel)}>{automationRiskLabel(template.riskLevel)}</Chip>
-                              <Chip tone={template.mode === 'safe' ? 'warn' : 'neutral'}>{template.mode === 'safe' ? 'safe' : 'dry-run'}</Chip>
+                              <Chip tone={template.mode === 'safe' ? 'warn' : 'neutral'}>{template.mode === 'safe' ? '安全执行' : '只演练'}</Chip>
                               {template.requiresManualConfirmation ? <Chip tone="warn">确认前停止</Chip> : null}
                             </span>
                           </div>
@@ -1849,7 +2005,7 @@ export function PhonePage() {
                             <span className="chip-row">
                               <Chip tone={template.enabled ? 'ok' : 'neutral'}>{template.enabled ? '已启用' : '已停用'}</Chip>
                               <Chip tone={automationRiskTone(template.riskLevel)}>{automationRiskLabel(template.riskLevel)}</Chip>
-                              <Chip tone={template.mode === 'safe' ? 'warn' : 'neutral'}>{template.mode === 'safe' ? '安全执行' : 'dry-run'}</Chip>
+                              <Chip tone={template.mode === 'safe' ? 'warn' : 'neutral'}>{template.mode === 'safe' ? '安全执行' : '只演练'}</Chip>
                             </span>
                           </div>
                           <div className="automation-tags">{template.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
@@ -1874,8 +2030,8 @@ export function PhonePage() {
                         </Field>
                         <Field label="执行模式">
                           <Select value={templateDraft.mode} onChange={(event) => setTemplateDraft((state) => state ? { ...state, mode: event.target.value as AutomationRunMode } : state)}>
-                            <option value="dry-run">dry-run</option>
-                            <option value="safe">safe</option>
+                            <option value="dry-run">只演练（只生成计划、不实际操作）</option>
+                            <option value="safe">安全执行（遇敏感动作前停下确认）</option>
                           </Select>
                         </Field>
                         <Field label="风险">
@@ -1933,28 +2089,11 @@ export function PhonePage() {
 
             {automationTab === 'schedules' ? (
               <div className="automation-layout">
-                <div className="automation-schedule-form">
-                  <div className="automation-template-row">
-                    <div className="automation-template-main">
-                      <div className="automation-template-head">
-                        <strong>后台调度器</strong>
-                        <span className="chip-row">
-                          <Chip tone={schedulerStatus?.running ? 'ok' : 'warn'}>{schedulerStatus?.running ? '运行中' : '未运行'}</Chip>
-                          <Chip tone="neutral">{schedulerStatus?.pollSeconds ? `${schedulerStatus.pollSeconds}s` : '待同步'}</Chip>
-                        </span>
-                      </div>
-                      <p>{schedulerStatus?.lastTick?.checkedAt ? `最近检查 ${formatDateTime(schedulerStatus.lastTick.checkedAt)}` : '等待检查'}</p>
-                    </div>
-                    <div className="automation-template-actions">
-                      <Button variant="secondary" icon={RefreshCcw} onClick={() => void runSchedulerCommand('tick')} disabled={schedulerBusy}>检查</Button>
-                      {schedulerStatus?.running ? (
-                        <Button variant="danger" icon={StopCircle} onClick={() => void runSchedulerCommand('stop')} disabled={schedulerBusy}>停止</Button>
-                      ) : (
-                        <Button variant="success" icon={PlayCircle} onClick={() => void runSchedulerCommand('start')} disabled={schedulerBusy}>启动</Button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="automation-group-title">新建计划</div>
+                <details className="settings-details automation-schedule-form">
+                  <summary>新建定时计划（高级）</summary>
+                  <p style={{ fontSize: 12, opacity: 0.7, margin: '6px 0' }}>
+                    日常只需在右侧已保存计划里开关「启用」。需要新建或试运行时再展开这里。
+                  </p>
                   <div className="form-grid">
                     <Field label="计划名称">
                       <Input value={scheduleDraft.label} onChange={(event) => setScheduleDraft((state) => ({ ...state, label: event.target.value }))} />
@@ -1970,10 +2109,10 @@ export function PhonePage() {
                     <Field label="执行窗口">
                       <Input value={scheduleDraft.timeWindow} onChange={(event) => setScheduleDraft((state) => ({ ...state, timeWindow: event.target.value }))} placeholder="09:00-10:30" />
                     </Field>
-                    <Field label="模式">
+                    <Field label="执行方式">
                       <Select value={scheduleDraft.mode} onChange={(event) => setScheduleDraft((state) => ({ ...state, mode: event.target.value as AutomationRunMode }))}>
-                        <option value="dry-run">dry-run：只生成计划并留痕</option>
-                        <option value="safe">safe：可交给 APKClaw 安全执行</option>
+                        <option value="dry-run">只演练：只生成计划并留痕</option>
+                        <option value="safe">自动执行：交给手机安全执行</option>
                       </Select>
                     </Field>
                     <Toggle checked={scheduleDraft.enabled} onChange={(checked) => setScheduleDraft((state) => ({ ...state, enabled: checked }))} label="启用计划" />
@@ -2009,7 +2148,7 @@ export function PhonePage() {
                       试运行当前配置
                     </Button>
                   </div>
-                </div>
+                </details>
 
                 <div className="automation-schedule-list">
                   <div className="automation-group-title">已保存计划</div>
@@ -2084,13 +2223,17 @@ export function PhonePage() {
             ) : null}
           </Panel>
 
+          <div
+            ref={configSectionRef}
+            style={addingDevice ? { outline: '2px solid var(--accent, #4f8cff)', borderRadius: 12, transition: 'outline 0.3s ease', boxShadow: '0 0 0 4px rgba(79,140,255,0.18)' } : { transition: 'outline 0.3s ease' }}
+          >
           <Panel className="surface-panel">
             <details
               className="settings-details"
               open={configOpen}
               onToggle={(event) => setConfigOpen(event.currentTarget.open)}
             >
-              <summary>设备配置</summary>
+              <summary>{addingDevice ? '正在添加新手机' : '设备配置'}</summary>
               <div className="phone-paircode">
                 <Field label="扫码配对 · 配对码" hint="手机 APKClaw「电脑配对」里显示配对码/二维码，粘贴到这里自动填好地址和 Token">
                   <div className="phone-paircode-row">
@@ -2131,10 +2274,22 @@ export function PhonePage() {
               </div>
             </details>
           </Panel>
+          </div>
 
           <Panel className="surface-panel">
-            <details className="settings-details">
-              <summary>诊断、节点树和录屏</summary>
+            <details
+              className="settings-details"
+              open={advancedOpen}
+              onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+            >
+              <summary>高级诊断（一般无需打开）</summary>
+              <div className="automation-group-title">原始状态</div>
+              <div className="detail-stack">
+                <div className="detail-row"><span className="detail-label">在线</span><span className="detail-value">{snapshot.status?.online ? '是' : snapshot.status ? '否' : '未确认'}</span></div>
+                <div className="detail-row"><span className="detail-label">无障碍服务</span><span className="detail-value">{snapshot.status ? (snapshot.status.accessibilityRunning ? '运行中' : '未开启') : '未确认'}</span></div>
+                <div className="detail-row"><span className="detail-label">锁屏</span><span className="detail-value">{snapshot.status?.keyguardLocked || snapshot.status?.deviceLocked ? '是' : '否'}</span></div>
+              </div>
+              <div className="automation-group-title">采集与可靠性</div>
               <div className="detail-stack">
                 <div className="detail-row"><span className="detail-label">采集时间</span><span className="detail-value">{formatDateTime(snapshot.profile?.capturedAt)}</span></div>
                 <div className="detail-row"><span className="detail-label">应用数量</span><span className="detail-value">{Array.isArray(snapshot.profile?.apps) ? snapshot.profile.apps.length : 0}</span></div>
@@ -2159,25 +2314,21 @@ export function PhonePage() {
                   </div>
                 )) : <EmptyState title="暂无录屏" description="需要留证时使用录屏按钮。" />}
               </div>
-            </details>
-          </Panel>
 
-          <Panel className="surface-panel phone-task-log-panel">
-            <SectionHeader
-              eyebrow="任务日志"
-              title="手机执行日志"
-              subtitle="设备验证、任务提交、Agent 事件和停止动作都会在这里留痕。"
-              action={<Button variant="quiet" icon={Trash2} onClick={() => setTaskLogs([])}>清空</Button>}
-            />
-            <div className="phone-task-log">
-              {taskLogs.length ? taskLogs.map((item) => (
-                <div key={item.id} className={`phone-task-log-row phone-task-log-row-${item.tone}`}>
-                  <span>{formatDateTime(item.at)}</span>
-                  <strong>{item.title}</strong>
-                  {item.detail ? <p>{item.detail}</p> : null}
-                </div>
-              )) : <EmptyState title="暂无任务日志" description="执行手机任务后，步骤和结果会显示在这里。" />}
-            </div>
+              <div className="automation-log-toolbar">
+                <div className="automation-group-title">手机执行日志</div>
+                <Button variant="quiet" icon={Trash2} onClick={() => setTaskLogs([])}>清空</Button>
+              </div>
+              <div className="phone-task-log">
+                {taskLogs.length ? taskLogs.map((item) => (
+                  <div key={item.id} className={`phone-task-log-row phone-task-log-row-${item.tone}`}>
+                    <span>{formatDateTime(item.at)}</span>
+                    <strong>{item.title}</strong>
+                    {item.detail ? <p>{item.detail}</p> : null}
+                  </div>
+                )) : <EmptyState title="暂无任务日志" description="执行手机任务后，步骤和结果会显示在这里。" />}
+              </div>
+            </details>
           </Panel>
         </div>
       </section>

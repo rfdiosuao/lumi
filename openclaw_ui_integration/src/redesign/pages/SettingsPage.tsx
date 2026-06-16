@@ -1,7 +1,7 @@
 import React from 'react';
 import { Command } from '@tauri-apps/plugin-shell';
 import { RefreshCcw, Save, SquareTerminal, Terminal } from 'lucide-react';
-import { Button, Chip, Field, Input, Panel, SectionHeader, Select, TextArea } from '../components/ui';
+import { Button, Chip, Field, Input, InlineState, Panel, SectionHeader, Select, Tabs, TextArea } from '../components/ui';
 import { loadSettingsSnapshot, readConfigValue, saveAuthProfiles, saveDesktopAgentConfig, writeConfigValue } from '../api/adapters';
 import { applyLauncherUpdate, checkLauncherUpdate, type LauncherUpdateInfo } from '../api/client';
 import { makeCommandOptions, resolvePortableBasePath } from '../api/runtimeCommand';
@@ -72,6 +72,23 @@ export function SettingsPage() {
   const updateSettings = usePreviewStore((state) => state.updateSettings);
   const pushToast = usePreviewStore((state) => state.pushToast);
   const openAiProxy = normalizeOpenAiProxy(storeSettings.openaiProxy || '');
+  const [mode, setMode] = React.useState<'basic' | 'advanced'>('basic');
+  const [proxyCheck, setProxyCheck] = React.useState<{ state: 'idle' | 'checking' | 'reachable' | 'unreachable' }>({ state: 'idle' });
+  const handleCheckOpenAiProxy = React.useCallback(async () => {
+    setProxyCheck({ state: 'checking' });
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        await fetch('https://auth.openai.com', { method: 'HEAD', mode: 'no-cors', signal: controller.signal });
+        setProxyCheck({ state: 'reachable' });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      setProxyCheck({ state: 'unreachable' });
+    }
+  }, []);
   const { data, loading, error, refresh } = useAsync(() => loadSettingsSnapshot(storeSettings), [storeSettings], { cacheKey: "settings" });
   const [launcherUpdate, setLauncherUpdate] = React.useState<LauncherUpdateInfo | null>(null);
   const [launcherUpdateBusy, setLauncherUpdateBusy] = React.useState(false);
@@ -303,38 +320,26 @@ export function SettingsPage() {
         </div>
       </section>
 
+      <Panel className="surface-panel surface-panel-wide">
+        <Tabs
+          value={mode}
+          onChange={(value) => setMode(value as 'basic' | 'advanced')}
+          items={[
+            { key: 'basic', label: '普通模式' },
+            { key: 'advanced', label: '高级模式' },
+          ]}
+        />
+        <p className="settings-hint">普通模式只显示主模型接口和一键同步；图像/视频独立接口、OAuth 代理、桌面 RPA、配置文件和原始 JSON 在高级模式里。</p>
+      </Panel>
+
       <section className="content-grid content-grid-settings">
         <Panel className="surface-panel surface-panel-wide">
           <SectionHeader
             eyebrow="统一密钥"
-            title="模型、图像、视频密钥"
+            title={mode === 'basic' ? '主模型密钥' : '模型、图像、视频密钥'}
             action={<Chip tone={gatewayForm.apiKey || imageForm.apiKey || videoForm.apiKey ? 'ok' : 'warn'}>{gatewayForm.apiKey || imageForm.apiKey || videoForm.apiKey ? '已配置' : '缺少密钥'}</Chip>}
           />
           <div className="settings-card-grid">
-            <section className="settings-card">
-              <div className="settings-card-title">OpenClaw 引导终端</div>
-              <p className="settings-card-copy">点击后会打开 PowerShell 终端并自动运行 openclaw onboard。模型、OAuth、Provider 和运行时配置都可以在原生 OpenClaw 引导流程里完成。</p>
-              <Field label="OpenAI OAuth 代理" hint="用于 auth.openai.com 登录；留空则继承系统代理环境。">
-                <Input
-                  value={storeSettings.openaiProxy || ''}
-                  onChange={(event) => updateSettings({ openaiProxy: event.target.value })}
-                  onBlur={(event) => updateSettings({ openaiProxy: normalizeOpenAiProxy(event.target.value) })}
-                  placeholder="http://127.0.0.1:7890"
-                />
-              </Field>
-              <div className="settings-card-actions">
-                <Button
-                  variant="primary"
-                  icon={Terminal}
-                  onClick={handleOpenClawOnboard}
-                  disabled={onboardRunning}
-                  className="settings-card-action"
-                >
-                  {onboardRunning ? '正在打开...' : '运行 openclaw onboard'}
-                </Button>
-              </div>
-            </section>
-
             <section className="settings-card">
               <div className="settings-card-title">主模型网关</div>
               <Field label="模型地址">
@@ -353,58 +358,108 @@ export function SettingsPage() {
                   onClick={handleSyncDesktopRpa}
                   disabled={syncingDesktopRpa || !gatewayForm.baseUrl.trim() || !gatewayForm.apiKey.trim()}
                 >
-                  {syncingDesktopRpa ? '同步中...' : '同步到桌面 RPA'}
+                  {syncingDesktopRpa ? '同步中...' : '同步授权配置'}
                 </Button>
               </div>
             </section>
 
-            <section className="settings-card">
-              <div className="settings-card-title">图像生成</div>
-              <Field label="图像地址">
-                <Input value={imageForm.baseUrl} onChange={(event) => setImageForm((state) => ({ ...state, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" />
-              </Field>
-              <Field label="图像密钥" hint={maskSecret(imageForm.apiKey)}>
-                <Input type="password" value={imageForm.apiKey} onChange={(event) => setImageForm((state) => ({ ...state, apiKey: event.target.value }))} placeholder="示例：图像密钥" />
-              </Field>
-              <Field label="图像模型">
-                <Input value={imageForm.model} onChange={(event) => setImageForm((state) => ({ ...state, model: event.target.value }))} placeholder="gpt-image-2" />
-              </Field>
-            </section>
-
-            <section className="settings-card">
-              <div className="settings-card-title">视频生成</div>
-              <div className="form-grid form-grid-tight">
-                <Field label="服务商">
-                  <Select
-                    value={videoForm.providerId}
-                    onChange={(event) => {
-                      const providerId = event.target.value;
-                      const defaults = videoProviderDefaults(providerId);
-                      setVideoForm((state) => ({
-                        ...state,
-                        providerId,
-                        apiBase: state.apiBase.trim() && state.providerId === providerId ? state.apiBase : defaults.apiBase,
-                        model: defaults.model || state.model,
-                      }));
-                    }}
+            {mode === 'advanced' ? (
+              <section className="settings-card">
+                <div className="settings-card-title">OpenClaw 引导终端</div>
+                <p className="settings-card-copy">点击后会打开 PowerShell 终端并自动运行 openclaw onboard。模型、OAuth、Provider 和运行时配置都可以在原生 OpenClaw 引导流程里完成。</p>
+                <Field label="OpenAI OAuth 代理" hint="用于 auth.openai.com 登录；留空则继承系统代理环境。">
+                  <Input
+                    value={storeSettings.openaiProxy || ''}
+                    onChange={(event) => updateSettings({ openaiProxy: event.target.value })}
+                    onBlur={(event) => updateSettings({ openaiProxy: normalizeOpenAiProxy(event.target.value) })}
+                    placeholder="http://127.0.0.1:7890"
+                  />
+                </Field>
+                <div className="settings-card-actions">
+                  <Button
+                    variant="secondary"
+                    onClick={handleCheckOpenAiProxy}
+                    disabled={proxyCheck.state === 'checking'}
                   >
-                    <option value="agnes">Agnes Video V2.0</option>
-                    <option value="dashscope">DashScope / 快乐马</option>
-                    <option value="seedance">火山引擎 Seedance</option>
-                    <option value="custom">自定义兼容服务</option>
-                  </Select>
+                    {proxyCheck.state === 'checking' ? '检测中...' : '检测代理'}
+                  </Button>
+                </div>
+                {proxyCheck.state === 'reachable' ? (
+                  <InlineState tone="ok" title="无需代理" description="当前网络可以直接访问 auth.openai.com。" />
+                ) : null}
+                {proxyCheck.state === 'unreachable' ? (
+                  <InlineState
+                    tone="warn"
+                    title="需要填写代理"
+                    description={`当前网络无法访问 auth.openai.com，需要填写代理，例如：http://127.0.0.1:7890`}
+                  />
+                ) : null}
+                <div className="settings-card-actions">
+                  <Button
+                    variant="primary"
+                    icon={Terminal}
+                    onClick={handleOpenClawOnboard}
+                    disabled={onboardRunning}
+                    className="settings-card-action"
+                  >
+                    {onboardRunning ? '正在打开...' : '打开 OpenClaw 配置向导'}
+                  </Button>
+                </div>
+                <p className="settings-hint">将运行 openclaw onboard。</p>
+              </section>
+            ) : null}
+
+            {mode === 'advanced' ? (
+              <section className="settings-card">
+                <div className="settings-card-title">图像生成</div>
+                <Field label="图像地址">
+                  <Input value={imageForm.baseUrl} onChange={(event) => setImageForm((state) => ({ ...state, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" />
                 </Field>
-                <Field label="模型">
-                  <Input value={videoForm.model} onChange={(event) => setVideoForm((state) => ({ ...state, model: event.target.value }))} placeholder="happyhorse-1.0-t2v" />
+                <Field label="图像密钥" hint={maskSecret(imageForm.apiKey)}>
+                  <Input type="password" value={imageForm.apiKey} onChange={(event) => setImageForm((state) => ({ ...state, apiKey: event.target.value }))} placeholder="示例：图像密钥" />
                 </Field>
-              </div>
-              <Field label="视频地址">
-                <Input value={videoForm.apiBase} onChange={(event) => setVideoForm((state) => ({ ...state, apiBase: event.target.value }))} placeholder="https://apihub.agnes-ai.com/v1" />
-              </Field>
-              <Field label="视频密钥" hint={maskSecret(videoForm.apiKey)}>
-                <Input type="password" value={videoForm.apiKey} onChange={(event) => setVideoForm((state) => ({ ...state, apiKey: event.target.value }))} placeholder="示例：视频密钥" />
-              </Field>
-            </section>
+                <Field label="图像模型">
+                  <Input value={imageForm.model} onChange={(event) => setImageForm((state) => ({ ...state, model: event.target.value }))} placeholder="gpt-image-2" />
+                </Field>
+              </section>
+            ) : null}
+
+            {mode === 'advanced' ? (
+              <section className="settings-card">
+                <div className="settings-card-title">视频生成</div>
+                <div className="form-grid form-grid-tight">
+                  <Field label="服务商">
+                    <Select
+                      value={videoForm.providerId}
+                      onChange={(event) => {
+                        const providerId = event.target.value;
+                        const defaults = videoProviderDefaults(providerId);
+                        setVideoForm((state) => ({
+                          ...state,
+                          providerId,
+                          apiBase: state.apiBase.trim() && state.providerId === providerId ? state.apiBase : defaults.apiBase,
+                          model: defaults.model || state.model,
+                        }));
+                      }}
+                    >
+                      <option value="agnes">Agnes Video V2.0</option>
+                      <option value="dashscope">DashScope / 快乐马</option>
+                      <option value="seedance">火山引擎 Seedance</option>
+                      <option value="custom">自定义兼容服务</option>
+                    </Select>
+                  </Field>
+                  <Field label="模型">
+                    <Input value={videoForm.model} onChange={(event) => setVideoForm((state) => ({ ...state, model: event.target.value }))} placeholder="happyhorse-1.0-t2v" />
+                  </Field>
+                </div>
+                <Field label="视频地址">
+                  <Input value={videoForm.apiBase} onChange={(event) => setVideoForm((state) => ({ ...state, apiBase: event.target.value }))} placeholder="https://apihub.agnes-ai.com/v1" />
+                </Field>
+                <Field label="视频密钥" hint={maskSecret(videoForm.apiKey)}>
+                  <Input type="password" value={videoForm.apiKey} onChange={(event) => setVideoForm((state) => ({ ...state, apiKey: event.target.value }))} placeholder="示例：视频密钥" />
+                </Field>
+              </section>
+            ) : null}
           </div>
         </Panel>
 
@@ -413,7 +468,7 @@ export function SettingsPage() {
             eyebrow="启动器更新"
             title="启动器自更新"
             subtitle="检查并安装新版启动器；更新只替换启动器本体，已下载的运行时层保留。"
-            action={<Button variant="secondary" icon={RefreshCcw} onClick={handleCheckLauncherUpdate} disabled={launcherUpdateBusy}>检查更新</Button>}
+            action={<Button variant="secondary" icon={RefreshCcw} onClick={handleCheckLauncherUpdate} disabled={launcherUpdateBusy}>检查启动器更新</Button>}
           />
           {launcherUpdate ? (
             <div className="detail-stack">
@@ -427,86 +482,83 @@ export function SettingsPage() {
               ) : null}
             </div>
           ) : (
-            <p className="settings-hint">点击右上角「检查更新」获取最新启动器版本（仅桌面安装版支持）。</p>
+            <p className="settings-hint">点击右上角「检查启动器更新」获取最新启动器版本（仅桌面安装版支持）。</p>
           )}
         </Panel>
 
-        <Panel className="surface-panel">
-          <SectionHeader eyebrow="配置文件" title="本页会写入的配置文件" subtitle="只写现有配置文件，不改后端路径、字段名和鉴权逻辑。" />
-          <div className="path-list">
-            {data?.configPaths.map((item) => (
-              <div key={item.key} className="path-card">
-                <strong>{item.key}</strong>
-                <span>{item.path}</span>
-                <Chip tone={item.writable ? 'ok' : 'warn'}>{item.writable ? '可写' : '只读'}</Chip>
+        {mode === 'advanced' ? (
+          <Panel className="surface-panel surface-panel-wide">
+            <SectionHeader eyebrow="高级排障" title="配置文件 / 环境变量 / 原始 JSON" subtitle="日常不需要展开；排查和迁移时再查看。" />
+            <details className="settings-details">
+              <summary>展开高级排障</summary>
+
+              <div className="settings-card-title">本页会写入的配置文件</div>
+              <div className="path-list">
+                {data?.configPaths.map((item) => (
+                  <div key={item.key} className="path-card">
+                    <strong>{item.key}</strong>
+                    <span>{item.path}</span>
+                    <Chip tone={item.writable ? 'ok' : 'warn'}>{item.writable ? '可写' : '只读'}</Chip>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </Panel>
 
-        <Panel className="surface-panel">
-          <SectionHeader eyebrow="环境变量" title="相关环境变量" subtitle="用于核对配置来源，密钥仍然脱敏显示。" />
-          <details className="settings-details">
-            <summary>展开环境变量</summary>
-            <div className="env-list">
-              {data?.env.map((item) => (
-                <div key={item.key} className="env-row">
-                  <strong>{item.key}</strong>
-                  <span>{item.value}</span>
-                  <Chip tone={item.value === '未设置' || item.value.includes('未') ? 'warn' : 'ok'}>{item.note}</Chip>
-                </div>
-              ))}
-            </div>
-          </details>
-        </Panel>
+              <div className="settings-card-title">相关环境变量</div>
+              <div className="env-list">
+                {data?.env.map((item) => (
+                  <div key={item.key} className="env-row">
+                    <strong>{item.key}</strong>
+                    <span>{item.value}</span>
+                    <Chip tone={item.value === '未设置' || item.value.includes('未') ? 'warn' : 'ok'}>{item.note}</Chip>
+                  </div>
+                ))}
+              </div>
 
-        <Panel className="surface-panel surface-panel-wide">
-          <SectionHeader eyebrow="高级" title="原始 JSON 快照" subtitle="日常只改上面的结构化表单；JSON 保留给排查和迁移时查看。" />
-          <details className="settings-details">
-            <summary>展开 JSON 编辑器</summary>
-            <div className="form-grid">
-              <Field label="模型配置">
-                <TextArea rows={9} value={jsonDrafts.authProfiles} onChange={(event) => {
-                  setJsonDrafts((state) => ({ ...state, authProfiles: event.target.value }));
-                  const parsed = parseJson(event.target.value, authProfiles);
-                  setAuthProfiles(parsed);
-                  setGatewayForm(formFromAuthProfiles(parsed));
-                }} />
-              </Field>
-              <Field label="图像配置">
-                <TextArea rows={9} value={jsonDrafts.imageConfig} onChange={(event) => {
-                  setJsonDrafts((state) => ({ ...state, imageConfig: event.target.value }));
-                  const parsed = parseJson(event.target.value, imageConfig);
-                  setImageConfig(parsed);
-                  setImageForm({
-                    baseUrl: stringValue(parsed.baseUrl),
-                    apiKey: stringValue(parsed.apiKey),
-                    model: stringValue(parsed.model) || 'gpt-image-2',
-                  });
-                }} />
-              </Field>
-              <Field label="视频配置">
-                <TextArea rows={9} value={jsonDrafts.videoConfig} onChange={(event) => {
-                  setJsonDrafts((state) => ({ ...state, videoConfig: event.target.value }));
-                  const parsed = parseJson(event.target.value, videoConfig);
-                  setVideoConfig(parsed);
-                  setVideoForm({
-                    providerId: inferVideoProviderId(parsed.providerId, parsed.apiBase || parsed.baseUrl, parsed.model),
-                    apiBase: stringValue(parsed.apiBase) || stringValue(parsed.baseUrl),
-                    apiKey: stringValue(parsed.apiKey) || stringValue(parsed.dashKey),
-                    model: stringValue(parsed.model) || videoProviderDefaults(parsed.providerId).model,
-                  });
-                }} />
-              </Field>
-              <Field label="OpenClaw 配置">
-                <TextArea rows={9} value={jsonDrafts.openclawConfig} onChange={(event) => {
-                  setJsonDrafts((state) => ({ ...state, openclawConfig: event.target.value }));
-                  setOpenclawConfig(parseJson(event.target.value, openclawConfig));
-                }} />
-              </Field>
-            </div>
-          </details>
-        </Panel>
+              <div className="settings-card-title">原始 JSON 快照</div>
+              <div className="form-grid">
+                <Field label="模型配置">
+                  <TextArea rows={9} value={jsonDrafts.authProfiles} onChange={(event) => {
+                    setJsonDrafts((state) => ({ ...state, authProfiles: event.target.value }));
+                    const parsed = parseJson(event.target.value, authProfiles);
+                    setAuthProfiles(parsed);
+                    setGatewayForm(formFromAuthProfiles(parsed));
+                  }} />
+                </Field>
+                <Field label="图像配置">
+                  <TextArea rows={9} value={jsonDrafts.imageConfig} onChange={(event) => {
+                    setJsonDrafts((state) => ({ ...state, imageConfig: event.target.value }));
+                    const parsed = parseJson(event.target.value, imageConfig);
+                    setImageConfig(parsed);
+                    setImageForm({
+                      baseUrl: stringValue(parsed.baseUrl),
+                      apiKey: stringValue(parsed.apiKey),
+                      model: stringValue(parsed.model) || 'gpt-image-2',
+                    });
+                  }} />
+                </Field>
+                <Field label="视频配置">
+                  <TextArea rows={9} value={jsonDrafts.videoConfig} onChange={(event) => {
+                    setJsonDrafts((state) => ({ ...state, videoConfig: event.target.value }));
+                    const parsed = parseJson(event.target.value, videoConfig);
+                    setVideoConfig(parsed);
+                    setVideoForm({
+                      providerId: inferVideoProviderId(parsed.providerId, parsed.apiBase || parsed.baseUrl, parsed.model),
+                      apiBase: stringValue(parsed.apiBase) || stringValue(parsed.baseUrl),
+                      apiKey: stringValue(parsed.apiKey) || stringValue(parsed.dashKey),
+                      model: stringValue(parsed.model) || videoProviderDefaults(parsed.providerId).model,
+                    });
+                  }} />
+                </Field>
+                <Field label="OpenClaw 配置">
+                  <TextArea rows={9} value={jsonDrafts.openclawConfig} onChange={(event) => {
+                    setJsonDrafts((state) => ({ ...state, openclawConfig: event.target.value }));
+                    setOpenclawConfig(parseJson(event.target.value, openclawConfig));
+                  }} />
+                </Field>
+              </div>
+            </details>
+          </Panel>
+        ) : null}
       </section>
 
       {loading ? <Panel className="panel-loading">正在读取设置快照...</Panel> : null}

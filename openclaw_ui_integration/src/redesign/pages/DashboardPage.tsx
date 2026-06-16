@@ -1,5 +1,7 @@
 import {
   ArrowRight,
+  CheckCircle2,
+  Circle,
   Cpu,
   ExternalLink,
   Gauge,
@@ -16,8 +18,17 @@ import type { LucideIcon } from 'lucide-react';
 import { Button, Chip, EmptyState, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
 import { formatDateTime } from '../lib/format';
 import { loadDashboardSnapshot, startProcess, stopProcess } from '../api/adapters';
+import { translateError } from '../lib/errors';
 import { useAsync } from '../lib/useAsync';
 import { usePreviewStore } from '../store/appStore';
+
+const nextStepCardStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 16,
+  flexWrap: 'wrap',
+} as const;
 
 export function DashboardPage() {
   const settings = usePreviewStore((state) => state.settings);
@@ -109,13 +120,54 @@ export function DashboardPage() {
     },
   ] as const;
 
+  const hasPhoneLink = Boolean(settings.phoneBaseUrl);
+
+  const setupSteps = [
+    { key: 'core', label: '启动核心', done: Boolean(service?.running) },
+    { key: 'gateway', label: '配置模型接口', done: Boolean(gateway?.hasGateway) },
+    { key: 'link', label: '连接手机（可选）', done: hasPhoneLink },
+  ] as const;
+
+  const nextStep = !service?.running
+    ? {
+        title: '先启动核心服务',
+        desc: '核心服务是其它功能运行的前提，先把它启动起来。',
+        actionLabel: '启动核心',
+        icon: Server,
+        onAction: () => handleStart(),
+      }
+    : !gateway?.hasGateway
+      ? {
+          title: '配置模型接口',
+          desc: '核心已运行，接下来去统一设置里填上模型接口参数。',
+          actionLabel: '前往设置',
+          icon: Settings2,
+          onAction: () => navigate('settings'),
+        }
+      : !license?.authorized
+        ? {
+            title: '完成授权',
+            desc: '核心与接口都已就绪，完成授权后即可解锁全部能力。',
+            actionLabel: '前往授权',
+            icon: ShieldCheck,
+            onAction: () => navigate('license'),
+          }
+        : {
+            title: '一切就绪，去图像/视频或手机工作区',
+            desc: '核心、接口与授权都已准备好，可以开始生成或连接手机了。',
+            actionLabel: '进入工作区',
+            icon: Sparkles,
+            onAction: () => navigate('studio'),
+          };
+
   const handleStart = async () => {
     try {
       await startProcess(settings);
       pushToast({ tone: 'ok', title: '核心服务已启动', detail: '桥接端已接收启动指令。' });
       refresh();
     } catch (err) {
-      pushToast({ tone: 'danger', title: '启动失败', detail: String(err) });
+      const f = translateError(err);
+      pushToast({ tone: 'danger', title: '启动失败', detail: f.hint, diagnostic: f.diagnostic, logRoute: f.logRoute });
     }
   };
 
@@ -138,9 +190,12 @@ export function DashboardPage() {
       pushToast({ tone: 'warn', title: '核心服务已停止', detail: '启动器回到待启动状态。' });
       refresh();
     } catch (err) {
-      pushToast({ tone: 'danger', title: '停止失败', detail: String(err) });
+      const f = translateError(err);
+      pushToast({ tone: 'danger', title: '停止失败', detail: f.hint, diagnostic: f.diagnostic, logRoute: f.logRoute });
     }
   };
+
+  const NextStepIcon = nextStep.icon;
 
   return (
     <div className="page-grid page-grid-dashboard">
@@ -184,6 +239,34 @@ export function DashboardPage() {
         </div>
       </section>
 
+      {!loading && !error && data ? (
+        <section className="surface-panel" style={nextStepCardStyle}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flex: '1 1 320px', minWidth: 0 }}>
+            <span className="launcher-tile-icon" style={{ flexShrink: 0 }}>
+              <NextStepIcon size={18} />
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div className="eyebrow">推荐下一步</div>
+              <div style={{ fontSize: 16, fontWeight: 600, marginTop: 2 }}>{nextStep.title}</div>
+              <p style={{ margin: '4px 0 0', opacity: 0.75 }}>{nextStep.desc}</p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {setupSteps.map((step, index) => (
+                <span key={step.key} className={`chip chip-${step.done ? 'ok' : 'neutral'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  {step.done ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+                  {index + 1}. {step.label}{step.done ? '' : '（未完成）'}
+                </span>
+              ))}
+            </div>
+            <Button variant="primary" icon={nextStep.icon} onClick={nextStep.onAction}>
+              {nextStep.actionLabel}
+            </Button>
+          </div>
+        </section>
+      ) : null}
+
       {loading ? (
         <Panel className="panel-loading">正在读取启动器状态...</Panel>
       ) : error ? (
@@ -206,7 +289,7 @@ export function DashboardPage() {
               tone={license?.authorized ? 'ok' : 'warn'}
             />
             <StatTile
-              label="接口网关"
+              label="模型接口"
               value={gateway?.hasGateway ? '已配置' : '未配置'}
               hint={gateway?.baseUrl || '进入统一设置'}
               tone={gateway?.hasGateway ? 'ok' : 'warn'}
@@ -283,7 +366,7 @@ export function DashboardPage() {
             <Panel className="surface-panel">
               <SectionHeader eyebrow="信号" title="状态摘要" subtitle="只保留判断启动与生成是否可用的关键信号。" />
               <div className="detail-stack">
-                <div className="detail-row"><span className="detail-label">桥接来源</span><span className="detail-value">{toCnState(service?.source || 'mock')}</span></div>
+                <div className="detail-row"><span className="detail-label">连接方式</span><span className="detail-value">{toCnState(service?.source || 'mock')}</span></div>
                 <div className="detail-row"><span className="detail-label">主题</span><span className="detail-value">{data.themeName}</span></div>
                 <div className="detail-row"><span className="detail-label">图像密钥</span><span className="detail-value">{gateway?.imageApiKeyMasked || '暂无'}</span></div>
                 <div className="detail-row"><span className="detail-label">视频密钥</span><span className="detail-value">{gateway?.videoApiKeyMasked || '暂无'}</span></div>
@@ -337,7 +420,7 @@ function toCnState(value: string) {
     running: '运行中',
     stopped: '已停止',
     mock: '预览',
-    live: '真实接口',
+    live: '已连接',
   };
   return map[lower] || value;
 }

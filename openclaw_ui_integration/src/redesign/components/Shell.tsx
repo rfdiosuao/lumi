@@ -2,15 +2,18 @@ import React from 'react';
 import {
   Activity,
   BellOff,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Cpu,
-  FileText,
   Gauge,
   Layers3,
+  Loader2,
   Maximize2,
   Minus,
   Phone,
+  ScrollText,
   Settings2,
   ShieldCheck,
   Sparkles,
@@ -21,8 +24,9 @@ import {
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Button, cx } from './ui';
 import { usePreviewStore, type PreviewSettings } from '../store/appStore';
-import type { RouteKey } from '../types';
+import type { RouteKey, ToastMessage } from '../types';
 import { isTauriRuntime, resolveBridgeBaseUrl } from '../api/client';
+import { copyText } from '../lib/clipboard';
 
 const NAV_ITEMS: Array<{ key: RouteKey; label: string; desc: string; icon: typeof Gauge }> = [
   { key: 'dashboard', label: '启动器', desc: '开机总览', icon: Gauge },
@@ -52,11 +56,24 @@ const ROUTE_COPY: Record<RouteKey, { eyebrow: string; title: string }> = {
 
 function getBridgeLabel(settings: PreviewSettings): string {
   const bridgeBaseUrl = resolveBridgeBaseUrl(settings.bridgeBaseUrl);
-  if (bridgeBaseUrl) return '真实桥接已配置';
-  if (settings.transportMode === 'mock') return '预览星图';
-  if (isTauriRuntime()) return '星河内置航道';
-  return '待接入星桥';
+  if (bridgeBaseUrl) return '已连接';
+  if (settings.transportMode === 'mock') return '预览模式';
+  if (isTauriRuntime()) return '已就绪';
+  return '未连接';
 }
+
+const ROUTE_LABELS: Record<RouteKey, string> = {
+  dashboard: '启动器',
+  service: '服务 / CLI',
+  license: '授权内测',
+  integrations: '平台对接',
+  studio: '图像 / 视频',
+  phone: '手机控制台',
+  desktop: '桌面 RPA',
+  skills: 'Skills 工作区',
+  diagnostics: '环境检测',
+  settings: '统一设置',
+};
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const route = usePreviewStore((state) => state.route);
@@ -67,6 +84,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const toasts = usePreviewStore((state) => state.toasts);
   const dismissToast = usePreviewStore((state) => state.dismissToast);
   const clearToasts = usePreviewStore((state) => state.clearToasts);
+  const studioBusy = usePreviewStore((state) => state.studio.busyKind);
 
   const handleWindowAction = React.useCallback(async (action: 'minimize' | 'toggleMaximize' | 'close') => {
     if (!isTauriRuntime()) return;
@@ -78,11 +96,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     if (!toasts.length) return;
-    const timers = toasts.map((toast) =>
-      window.setTimeout(() => {
-        dismissToast(toast.id);
-      }, 4000)
-    );
+    // Errors (and anything explicitly marked sticky) stay until dismissed so the
+    // user has time to read, expand and copy the diagnostic. The rest fade out.
+    const timers = toasts
+      .filter((toast) => !(toast.sticky ?? toast.tone === 'danger'))
+      .map((toast) =>
+        window.setTimeout(() => {
+          dismissToast(toast.id);
+        }, 4600)
+      );
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [toasts, dismissToast]);
 
@@ -131,11 +153,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="sidebar-foot">
-          <div className="sidebar-foot-title">星河航标</div>
-          <div className="sidebar-foot-value">/{route}</div>
+          <div className="sidebar-foot-title">当前位置</div>
+          <div className="sidebar-foot-value">{ROUTE_LABELS[route] || route}</div>
           <div className="sidebar-foot-note">
-            桥接 {getBridgeLabel(settings)}<br />
-            手机 {settings.phoneBaseUrl ? '控制星桥已绑定' : '只作控制星桥'}
+            服务连接 {getBridgeLabel(settings)}<br />
+            手机 {settings.phoneBaseUrl ? '已绑定' : '未绑定'}
           </div>
         </div>
       </aside>
@@ -147,6 +169,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <div className="topbar-title" data-tauri-drag-region>{ROUTE_COPY[route]?.title || 'OpenClaw preview'}</div>
           </div>
           <div className="topbar-right">
+            {studioBusy ? (
+              <Button
+                type="button"
+                variant="quiet"
+                icon={Loader2}
+                className="topbar-task-badge"
+                onClick={() => navigate('studio')}
+                title="正在生成，点此查看进度"
+              >
+                {studioBusy === 'video' ? '视频生成中' : '图像生成中'}
+              </Button>
+            ) : null}
             <Button type="button" variant="quiet" icon={BellOff} onClick={clearToasts}>
               清除提示
             </Button>
@@ -187,17 +221,77 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
       <div className="toast-stack" aria-live="polite">
         {toasts.map((toast) => (
-          <div key={toast.id} className={cx('toast', `toast-${toast.tone}`)}>
-            <div>
-              <div className="toast-title">{toast.title}</div>
-              {toast.detail ? <div className="toast-detail">{toast.detail}</div> : null}
-            </div>
-            <button type="button" className="icon-button" onClick={() => dismissToast(toast.id)} aria-label="关闭提示">
-              <FileText size={14} />
-            </button>
-          </div>
+          <ToastCard
+            key={toast.id}
+            toast={toast}
+            onDismiss={() => dismissToast(toast.id)}
+            onOpenLog={(logRoute) => {
+              navigate(logRoute);
+              dismissToast(toast.id);
+            }}
+          />
         ))}
       </div>
+    </div>
+  );
+}
+
+function ToastCard({
+  toast,
+  onDismiss,
+  onOpenLog,
+}: {
+  toast: ToastMessage;
+  onDismiss: () => void;
+  onOpenLog: (route: RouteKey) => void;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const diagnostic = (toast.diagnostic || toast.detail || '').trim();
+  // Only errors (or anything carrying a long diagnostic) get the action row.
+  const hasActions = toast.tone === 'danger' || Boolean(toast.diagnostic);
+  const logRoute = toast.logRoute || 'service';
+
+  return (
+    <div className={cx('toast', `toast-${toast.tone}`)}>
+      <div className="toast-main">
+        <div className="toast-title">{toast.title}</div>
+        {toast.detail ? <div className="toast-detail">{toast.detail}</div> : null}
+        {hasActions ? (
+          <div className="toast-actions">
+            {diagnostic ? (
+              <button type="button" className="toast-action" onClick={() => setExpanded((value) => !value)}>
+                <ChevronDown size={13} className={cx('toast-chevron', expanded && 'toast-chevron-open')} />
+                展开详情
+              </button>
+            ) : null}
+            {diagnostic ? (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={async () => {
+                  const ok = await copyText(diagnostic);
+                  setCopied(ok);
+                  window.setTimeout(() => setCopied(false), 1800);
+                }}
+              >
+                <Copy size={13} />
+                {copied ? '已复制' : '复制诊断'}
+              </button>
+            ) : null}
+            <button type="button" className="toast-action" onClick={() => onOpenLog(logRoute)}>
+              <ScrollText size={13} />
+              打开日志
+            </button>
+          </div>
+        ) : null}
+        {hasActions && expanded && diagnostic ? (
+          <pre className="toast-diagnostic">{diagnostic}</pre>
+        ) : null}
+      </div>
+      <button type="button" className="icon-button" onClick={onDismiss} aria-label="关闭提示">
+        <X size={14} />
+      </button>
     </div>
   );
 }
