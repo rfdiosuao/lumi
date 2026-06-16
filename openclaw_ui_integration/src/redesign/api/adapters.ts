@@ -36,11 +36,31 @@ interface RequestResult<T> {
   source: DataSource;
 }
 
-interface BridgeJob<T = any> {
+export interface BridgeJob<T = any> {
   id?: string;
   status?: string;
   result?: T;
   error?: string;
+  message?: string;
+  progress?: {
+    message?: string;
+    tone?: string;
+    updatedAt?: number;
+    history?: Array<{ message?: string; tone?: string; updatedAt?: number }>;
+  };
+}
+
+export interface VideoGenerationPayload {
+  providerId?: string;
+  apiBase?: string;
+  model?: string;
+  dashKey: string;
+  prompt: string;
+  mode: string;
+  resolution: string;
+  duration: number;
+  ratio: string;
+  imagePath?: string;
 }
 
 const DASHBOARD_CACHE_TTL_MS = 2500;
@@ -119,12 +139,16 @@ async function waitForBridgeJob<T>(
   settings: PreviewSettings,
   jobId: string,
   timeoutMs: number,
+  onProgress?: (job: BridgeJob<T>) => void,
 ): Promise<RequestResult<T>> {
   const startedAt = Date.now();
   let attempt = 0;
+  let lastJob: BridgeJob<T> = {};
   while (Date.now() - startedAt < timeoutMs) {
     const response = await requestBridgeData<{ job?: BridgeJob<T> }>(settings, `/api/jobs/${encodeURIComponent(jobId)}`);
     const job = response.data?.job || {};
+    lastJob = job;
+    onProgress?.(job);
     const status = String(job.status || '').toLowerCase();
     if (isJobDone(status)) {
       return { data: job.result as T, source: response.source };
@@ -135,7 +159,8 @@ async function waitForBridgeJob<T>(
     attempt += 1;
     await delay(Math.min(2500, 900 + attempt * 200));
   }
-  throw new Error(`job_timeout:${jobId}`);
+  const lastMessage = pickText(lastJob.progress?.message, lastJob.message);
+  throw new Error(lastMessage ? `job_timeout:${jobId} · ${lastMessage}` : `job_timeout:${jobId}`);
 }
 
 export async function requestBridgeData<T = any>(
@@ -697,30 +722,8 @@ export async function generateImage(settings: PreviewSettings, payload: {
   };
 }
 
-export async function generateVideo(settings: PreviewSettings, payload: {
-  providerId?: string;
-  apiBase?: string;
-  model?: string;
-  dashKey: string;
-  prompt: string;
-  mode: string;
-  resolution: string;
-  duration: number;
-  ratio: string;
-  imagePath?: string;
-}): Promise<RequestResult<VideoResult>> {
-  const mode = effectiveMode(settings);
-  const submitResponse = await requestBridgeData<any>(
-    settings,
-    mode === 'mock' ? '/api/video/generate' : '/api/video/generate_job',
-    'POST',
-    payload,
-  );
-  const jobId = pickText(submitResponse.data?.jobId, submitResponse.data?.job?.id);
-  const resultResponse = jobId
-    ? await waitForBridgeJob<any>(settings, jobId, 20 * 60 * 1000)
-    : submitResponse;
-  const source = mergeSource(submitResponse.source, resultResponse.source);
+function mapVideoResult(payload: VideoGenerationPayload, resultResponse: RequestResult<any>): RequestResult<VideoResult> {
+  const source = resultResponse.source;
   const video = pickText(resultResponse.data?.video, '');
   const mime = pickText(resultResponse.data?.mime, 'video/mp4');
   const previewUrl = video ? (video.startsWith('data:') ? video : `data:${mime};base64,${video}`) : '';
@@ -745,6 +748,44 @@ export async function generateVideo(settings: PreviewSettings, payload: {
       source,
     },
   };
+}
+
+export async function submitVideoGenerationJob(
+  settings: PreviewSettings,
+  payload: VideoGenerationPayload,
+): Promise<RequestResult<any>> {
+  const mode = effectiveMode(settings);
+  return requestBridgeData<any>(
+    settings,
+    mode === 'mock' ? '/api/video/generate' : '/api/video/generate_job',
+    'POST',
+    payload as unknown as Record<string, unknown>,
+  );
+}
+
+export async function waitForVideoGenerationJob(
+  settings: PreviewSettings,
+  jobId: string,
+  payload: VideoGenerationPayload,
+  onProgress?: (job: BridgeJob<any>) => void,
+  timeoutMs = 20 * 60 * 1000,
+): Promise<RequestResult<VideoResult>> {
+  const resultResponse = await waitForBridgeJob<any>(settings, jobId, timeoutMs, onProgress);
+  return mapVideoResult(payload, resultResponse);
+}
+
+export async function generateVideo(
+  settings: PreviewSettings,
+  payload: VideoGenerationPayload,
+  onProgress?: (job: BridgeJob<any>) => void,
+  onJob?: (job: { jobId: string; job?: BridgeJob<any>; source: DataSource }) => void,
+): Promise<RequestResult<VideoResult>> {
+  const submitResponse = await submitVideoGenerationJob(settings, payload);
+  const jobId = pickText(submitResponse.data?.jobId, submitResponse.data?.job?.id);
+  if (!jobId) return mapVideoResult(payload, submitResponse);
+  onJob?.({ jobId, job: submitResponse.data?.job, source: submitResponse.source });
+  const resultResponse = await waitForBridgeJob<any>(settings, jobId, 20 * 60 * 1000, onProgress);
+  return mapVideoResult(payload, { ...resultResponse, source: mergeSource(submitResponse.source, resultResponse.source) });
 }
 
 export async function loadSkillsSnapshot(settings: PreviewSettings): Promise<SkillSnapshot> {

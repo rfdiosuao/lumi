@@ -23,12 +23,14 @@ apkclaw/
 # Data directory contents (keep directory but not state files)
 data/install_id.txt
 data/license.json
+data/license-meta.json
 data/.openclaw/
 data/storyboards/
 data/storyboards_temp/
 data/diagnostics/
 **/data/install_id.txt
 **/data/license.json
+**/data/license-meta.json
 **/data/.openclaw/
 **/data/storyboards/
 **/data/storyboards_temp/
@@ -48,6 +50,11 @@ release/
 
 # Local scratch / downloaded runtimes
 /scratch/
+/.understand-anything/
+/_research/
+/ui-redesign-preview/
+/card*.json
+/create-workboard-cards.js
 /electron*.zip
 /electron-extract*/
 /tmp_license_admin_*/
@@ -102,6 +109,8 @@ release/
 # Local logs / runtime state
 *.log
 *.bak
+/docs/.gstack/
+/docs/site/legacy-html/
 /license_server/*.bak-*
 /license_server.zip
 /openclaw_new_launcher/docs/*.bak-*
@@ -109,6 +118,10 @@ release/
 /openclaw_new_launcher/data/phone-frames/
 /openclaw_new_launcher/data/phone-videos/
 /openclaw_new_launcher/releases/
+/openclaw_ui_integration/data/logs/
+/openclaw_ui_integration/data/phone-frames/
+/openclaw_ui_integration/data/phone-videos/
+/openclaw_ui_integration/releases/
 
 # IDE
 .vscode/

@@ -5,6 +5,7 @@ param(
     [switch]$SkipLicenseServer,
     [switch]$SkipSourceText,
     [switch]$SkipWorkspaceHygiene,
+    [switch]$SkipDistSelftest,
     [switch]$SkipAdminConsole,
     [switch]$SkipLicenseFlowTests
 )
@@ -12,7 +13,22 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$LauncherDir = Join-Path $Root "openclaw_new_launcher"
+
+function Resolve-LauncherDir {
+    $candidates = @("openclaw_ui_integration", "openclaw_new_launcher")
+    foreach ($candidate in $candidates) {
+        $path = Join-Path $Root $candidate
+        if (
+            (Test-Path -LiteralPath (Join-Path $path "package.json")) -and
+            (Test-Path -LiteralPath (Join-Path $path "src-tauri"))
+        ) {
+            return $path
+        }
+    }
+    throw "No launcher project found. Expected openclaw_ui_integration or openclaw_new_launcher."
+}
+
+$LauncherDir = Resolve-LauncherDir
 $TauriDir = Join-Path $LauncherDir "src-tauri"
 $LicenseServerDir = Join-Path $Root "license_server"
 $VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
@@ -87,6 +103,15 @@ if (-not $SkipPython) {
             python -m py_compile @files
         } finally {
             Pop-Location
+        }
+    }
+}
+
+if (-not $SkipDistSelftest) {
+    $distSelftest = Join-Path $LauncherDir "scripts\dist\dist-selftest.mjs"
+    if (Test-Path -LiteralPath $distSelftest) {
+        Invoke-Step "Distribution layer self-test" {
+            & node $distSelftest
         }
     }
 }

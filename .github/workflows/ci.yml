@@ -40,7 +40,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: openclaw_new_launcher/package-lock.json
+          cache-dependency-path: openclaw_ui_integration/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -58,14 +58,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            openclaw_new_launcher/src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('openclaw_new_launcher/src-tauri/Cargo.lock') }}
+            openclaw_ui_integration/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('openclaw_ui_integration/src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
       - name: Guard tracked artifacts
         run: |
-          $tracked = git ls-files release openclaw_new_launcher/node_modules openclaw_new_launcher/src-tauri/target license_server/private_key.b64 license_server/license.db license_server/admin_token.txt
+          $tracked = git ls-files release openclaw_new_launcher/node_modules openclaw_new_launcher/src-tauri/target openclaw_ui_integration/node_modules openclaw_ui_integration/src-tauri/target license_server/private_key.b64 license_server/license.db license_server/admin_token.txt
           if ($tracked) {
             Write-Host "Forbidden tracked artifacts:"
             $tracked | ForEach-Object { Write-Host "  - $_" }

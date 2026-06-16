@@ -14,6 +14,7 @@ from api.routes_member import register_member_routes
 from api.routes_jobs import register_job_routes
 from api.routes_log import register_log_routes
 from api.routes_media import register_media_routes
+from api.routes_phone_automation import register_phone_automation_routes
 from api.routes_process import register_process_routes
 from api.routes_skills import register_skills_routes
 from api.routes_system import register_system_routes
@@ -36,6 +37,7 @@ def register_fastapi_routes(app, ctx) -> None:
     register_member_routes(app, ctx)
     register_job_routes(app, ctx)
     register_media_routes(app, ctx)
+    register_phone_automation_routes(app, ctx)
     register_theme_routes(app, ctx)
     register_config_routes(app, ctx)
     register_desktop_agent_routes(app, ctx)

@@ -35,6 +35,10 @@ struct Layer {
     version: Option<String>,
     #[serde(default)]
     required: bool,
+    // Download size in bytes from the manifest (`size`), so the overlay can show
+    // a total before any bytes arrive. Absent → 0.
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 // --- First-run download progress, emitted to the WebView as Tauri events ---
@@ -79,7 +83,7 @@ fn emit_start(app: &AppHandle, layers: &[&Layer]) {
         "dist://start",
         serde_json::json!({
             "count": layers.len(),
-            "layers": layers.iter().map(|l| LayerInfo { id: l.id.clone(), title: layer_title(l), size: 0 }).collect::<Vec<_>>(),
+            "layers": layers.iter().map(|l| LayerInfo { id: l.id.clone(), title: layer_title(l), size: l.size.unwrap_or(0) }).collect::<Vec<_>>(),
         }),
     );
 }
@@ -281,6 +285,21 @@ async fn download_verify(app: &AppHandle, meta: &ProgressMeta, url: &str, dest: 
     Ok(hex(&hasher.finalize()))
 }
 
+// Extract a human-friendly host label from a mirror base URL for the overlay,
+// e.g. "https://cdn.example.com/dist/" -> "cdn.example.com".
+fn source_host(base: &str) -> String {
+    let no_scheme = base
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    no_scheme
+        .split('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(no_scheme)
+        .to_string()
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -328,7 +347,21 @@ async fn install_layer(
 
     let mut verified = false;
     let mut last_err = String::new();
-    for base in mirrors {
+    for (mirror_index, base) in mirrors.iter().enumerate() {
+        // Tell the overlay which source we're pulling from and whether we have
+        // fallen through to an alternate mirror, so a slow/failed source reads
+        // as "trying another source" rather than a frozen download.
+        let _ = app.emit(
+            "dist://source",
+            serde_json::json!({
+                "id": layer.id,
+                "index": meta.index,
+                "count": meta.count,
+                "host": source_host(base),
+                "mirror": mirror_index + 1,
+                "mirrors": mirrors.len(),
+            }),
+        );
         let url = format!("{}{}", base.trim_end_matches('/'), format!("/{}", layer.file));
         match download_verify(app, meta, &url, &archive).await {
             Ok(sha) if sha == layer.sha256 => {

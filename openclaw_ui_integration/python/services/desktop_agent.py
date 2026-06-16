@@ -53,6 +53,26 @@ class DesktopAgentService:
             "port": self.DEFAULT_PORT,
             "token": secrets.token_urlsafe(24),
             "appType": "weixin",
+            "provider": {
+                "apiKey": "",
+                "baseUrl": "",
+                "baseURL": "",
+                "model": "",
+            },
+            "llm": {
+                "apiKey": "",
+                "baseUrl": "",
+                "baseURL": "",
+                "model": "",
+            },
+            "chatProvider": {
+                "config": {
+                    "apiKey": "",
+                    "baseUrl": "",
+                    "baseURL": "",
+                    "model": "",
+                },
+            },
             "autoStartHttpApi": True,
             "policy": {
                 "allowScreenshot": True,
@@ -126,6 +146,7 @@ class DesktopAgentService:
             "tokenPreview": f"****{token[-4:]}" if token else "",
             "appType": str(config.get("appType") or "weixin"),
             "autoStartHttpApi": bool(config.get("autoStartHttpApi", True)),
+            "provider": self._public_provider(config),
             "policy": self._public_policy(config),
             "capture": self._public_capture(config),
             "action": self._public_action(config),
@@ -150,10 +171,33 @@ class DesktopAgentService:
             "config": self.public_config(config),
         }
 
+    def _quick_status(self, config: dict, message: str, running: bool | None = None) -> dict:
+        agent_dir = self.resolve_agent_dir(config)
+        command = self.resolve_command(agent_dir) if agent_dir else []
+        process_alive = self.process is not None and self.process.poll() is None
+        if running is not None:
+            process_alive = running
+        health = {
+            "ok": False,
+            "success": False,
+            "message": message,
+            "port": int(config.get("port") or self.DEFAULT_PORT),
+        }
+        return {
+            "configured": bool(agent_dir),
+            "present": bool(agent_dir and os.path.isdir(agent_dir)),
+            "running": bool(process_alive),
+            "pid": self.process.pid if process_alive and self.process else None,
+            "apiReady": False,
+            "health": health,
+            "command": command,
+            "config": self.public_config(config),
+        }
+
     def start(self) -> dict:
         config = self.read_config()
         if self.process and self.process.poll() is None:
-            return self.status()
+            return self._quick_status(config, "already running", running=True)
 
         agent_dir = self.resolve_agent_dir(config)
         if not agent_dir:
@@ -180,7 +224,7 @@ class DesktopAgentService:
         # 视觉模型:从统一配置(auth-profiles 主 provider)读出 网关地址+模型+key 一起传给 agent。
         # 否则 agent 的视觉客户端会回退默认火山地址,拿网关 token 直连 → 401「key 格式不对」,
         # 布局测量失败导致引擎无法启动。
-        sidecar_provider = self._primary_provider()
+        sidecar_provider = self._primary_provider(config)
         if sidecar_provider.get("apiKey"):
             command += ["--api-key", sidecar_provider["apiKey"]]
         if sidecar_provider.get("baseUrl"):
@@ -200,7 +244,7 @@ class DesktopAgentService:
             "SIGHTFLOW_AGENT_TOKEN": sidecar_token,
             "SIGHTFLOW_APP_TYPE": sidecar_app_type,
         })
-        api_key = self._primary_api_key()
+        api_key = sidecar_provider.get("apiKey") or self._primary_api_key()
         if api_key:
             env["LUMINODE_API_KEY"] = api_key
         if sidecar_provider.get("apiKey"):
@@ -226,7 +270,7 @@ class DesktopAgentService:
         self.append_log(f"[DesktopAgent] PID: {self.process.pid}\n")
         self._output_thread = threading.Thread(target=self._read_output, args=(self.process,), daemon=True)
         self._output_thread.start()
-        return self.status()
+        return self._quick_status(config, "starting", running=True)
 
     def stop(self) -> dict:
         config = self.read_config()
@@ -236,7 +280,7 @@ class DesktopAgentService:
             self.append_log(f"[DesktopAgent] Stopping PID {pid}\n")
             self._terminate_process_tree(pid)
             try:
-                self.process.wait(timeout=5)
+                self.process.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 self._kill_process_tree(pid)
                 pass
@@ -244,7 +288,7 @@ class DesktopAgentService:
         if not stopped:
             stopped = self._stop_process_on_port(int(config.get("port") or self.DEFAULT_PORT))
         self.process = None
-        return self.status()
+        return self._quick_status(config, "stopped" if stopped else "not running", running=False)
 
     def health(self, config: dict | None = None, quiet: bool = False) -> dict:
         config = config or self.read_config()
@@ -268,7 +312,7 @@ class DesktopAgentService:
         payload = json.dumps(self._augment_body(path, body, config), ensure_ascii=False).encode("utf-8")
         # 按路径分级超时:健康检查要快返回;动作/微信操作要扫 UI、点按、抓未读,耗时长,
         # 对齐 agent 自身 ~30s 动作超时,避免启动器这边 8s 就误判"动作失败"(agent 还在干)。
-        timeout = 8 if path == "/health" else 35
+        timeout = 2 if path == "/health" else 35
         request = urllib.request.Request(
             url,
             data=None if method.upper() == "GET" else payload,
@@ -503,6 +547,17 @@ class DesktopAgentService:
             "timeoutMs": int(action.get("timeoutMs") or 30000),
         }
 
+    def _public_provider(self, config: dict) -> dict:
+        provider = self._primary_provider(config)
+        api_key = str(provider.get("apiKey") or "")
+        return {
+            "baseUrl": str(provider.get("baseUrl") or ""),
+            "baseURL": str(provider.get("baseUrl") or ""),
+            "model": str(provider.get("model") or ""),
+            "apiKeyAvailable": bool(api_key),
+            "apiKeyPreview": f"****{api_key[-4:]}" if api_key else "",
+        }
+
     def _public_wechat(self, config: dict) -> dict:
         wechat = self._deep_merge(self.default_config()["wechat"], config.get("wechat") or {})
         return {
@@ -553,13 +608,19 @@ class DesktopAgentService:
             enriched.setdefault("action", self._public_action(config))
         return enriched
 
-    def _primary_provider(self) -> dict:
+    def _primary_provider(self, config: dict | None = None) -> dict:
         """返回统一配置主 provider 的 {apiKey, baseUrl, model},供桌面 agent 的视觉客户端使用。
 
         agent 的 VLM(布局测量/识别)默认直连火山地址,只换 key 会 401;必须把网关
         baseUrl + model 一起带过去,让 agent 走网关。
         """
         result = {"apiKey": "", "baseUrl": "", "model": ""}
+        config = config or {}
+        self._merge_provider_candidate(result, config.get("provider"))
+        self._merge_provider_candidate(result, config.get("llm"))
+        chat_provider = config.get("chatProvider")
+        if isinstance(chat_provider, dict):
+            self._merge_provider_candidate(result, chat_provider.get("config"))
         try:
             with open(self.paths.auth_profiles, "r", encoding="utf-8") as handle:
                 profiles = json.load(handle)
@@ -570,18 +631,33 @@ class DesktopAgentService:
             if not isinstance(provider, dict) and isinstance(providers, dict):
                 provider = next((item for item in providers.values() if isinstance(item, dict)), None)
             provider = provider if isinstance(provider, dict) else {}
-            result["apiKey"] = str(provider.get("apiKey") or "").strip()
-            result["baseUrl"] = str(provider.get("baseUrl") or "").strip()
+            if not result["apiKey"]:
+                result["apiKey"] = str(provider.get("apiKey") or "").strip()
+            if not result["baseUrl"]:
+                result["baseUrl"] = str(provider.get("baseUrl") or provider.get("baseURL") or provider.get("url") or "").strip()
             model_list = provider.get("models")
-            if isinstance(model_list, list) and model_list:
+            if not result["model"] and isinstance(model_list, list) and model_list:
                 result["model"] = str(model_list[0] or "").strip()
-            elif isinstance(provider.get("model"), str):
+            elif not result["model"] and isinstance(provider.get("model"), str):
                 result["model"] = str(provider.get("model")).strip()
         except Exception:
             pass
         if not result["apiKey"]:
             result["apiKey"] = self._primary_api_key()
         return result
+
+    def _merge_provider_candidate(self, result: dict, candidate: object) -> None:
+        if not isinstance(candidate, dict):
+            return
+        api_key = str(candidate.get("apiKey") or candidate.get("apikey") or candidate.get("key") or "").strip()
+        base_url = str(candidate.get("baseUrl") or candidate.get("baseURL") or candidate.get("url") or "").strip()
+        model = str(candidate.get("model") or "").strip()
+        if api_key:
+            result["apiKey"] = api_key
+        if base_url:
+            result["baseUrl"] = base_url
+        if model:
+            result["model"] = model
 
     def _primary_api_key(self) -> str:
         try:

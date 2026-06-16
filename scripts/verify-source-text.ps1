@@ -6,13 +6,30 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
 
+function Resolve-LauncherRootName {
+    $candidates = @("openclaw_ui_integration", "openclaw_new_launcher")
+    foreach ($candidate in $candidates) {
+        $path = Join-Path $Root $candidate
+        if (
+            (Test-Path -LiteralPath (Join-Path $path "package.json")) -and
+            (Test-Path -LiteralPath (Join-Path $path "src-tauri"))
+        ) {
+            return $candidate
+        }
+    }
+    return "openclaw_ui_integration"
+}
+
+$LauncherRootName = Resolve-LauncherRootName
+
 $sourceRoots = @(
-    "openclaw_new_launcher/src",
-    "openclaw_new_launcher/python",
-    "openclaw_new_launcher/scripts",
-    "openclaw_new_launcher/docs",
-    "openclaw_new_launcher/src-tauri/src",
-    "openclaw_new_launcher/src-tauri/capabilities",
+    "$LauncherRootName/src",
+    "$LauncherRootName/python",
+    "$LauncherRootName/scripts",
+    "$LauncherRootName/docs",
+    "$LauncherRootName/openclaw-workspace",
+    "$LauncherRootName/src-tauri/src",
+    "$LauncherRootName/src-tauri/capabilities",
     "scripts",
     "docs",
     "license_server"

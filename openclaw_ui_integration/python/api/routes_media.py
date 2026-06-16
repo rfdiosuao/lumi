@@ -8,6 +8,7 @@ import datetime
 import json
 import os
 import urllib.request
+from collections.abc import Callable
 
 from fastapi import Request
 
@@ -97,7 +98,10 @@ def _generate_image_payload(ctx, body: dict) -> dict:
                 pass
 
 
-def _generate_video_payload(ctx, body: dict) -> dict:
+StatusCallback = Callable[[str, str], None]
+
+
+def _generate_video_payload(ctx, body: dict, on_status: StatusCallback | None = None) -> dict:
     client = ctx.get_video_client()
     provider_id = body.get("providerId", "dashscope")
     gateway_profile = ctx.get_license_mgr().current_gateway_profile()
@@ -136,6 +140,8 @@ def _generate_video_payload(ctx, body: dict) -> dict:
         image_path, temp_file = ctx.data_url_to_temp_file(image_path)
 
     try:
+        if on_status:
+            on_status("正在提交视频任务", "accent")
         video_bytes = client.generate(
             dash_key,
             prompt,
@@ -147,20 +153,26 @@ def _generate_video_payload(ctx, body: dict) -> dict:
             provider_id=provider_id,
             api_base=api_base,
             model=model,
+            on_status=on_status,
         )
+        if on_status:
+            on_status("正在保存视频文件", "accent")
         video_dir = os.path.join(ctx.paths.data_dir, "videos")
         os.makedirs(video_dir, exist_ok=True)
         filename = f"lumi-video-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
         save_path = os.path.join(video_dir, filename)
         with open(save_path, "wb") as file:
             file.write(video_bytes)
+        inline_limit = int(body.get("inlineLimitBytes") or 24 * 1024 * 1024)
+        inline_video = len(video_bytes) <= inline_limit
         return {
-            "video": base64.b64encode(video_bytes).decode(),
+            "video": base64.b64encode(video_bytes).decode() if inline_video else "",
             "mime": "video/mp4",
             "size": len(video_bytes),
             "path": save_path,
             "directory": video_dir,
             "filename": filename,
+            "inlinePreview": inline_video,
         }
     finally:
         if temp_file and os.path.exists(temp_file):
@@ -170,7 +182,20 @@ def _generate_video_payload(ctx, body: dict) -> dict:
                 pass
 
 
-def _job_response(ctx, kind: str, label: str, body: dict, target) -> object:
+def _job_response(ctx, kind: str, label: str, body: dict, target, supports_status: bool = False) -> object:
+    if supports_status:
+        job_mgr = ctx.get_job_mgr()
+
+        def run(job_id: str) -> dict:
+            def on_status(message: str, tone: str = "neutral") -> None:
+                job_mgr.progress(job_id, message, tone)
+                ctx.append_log(f"[Job] {job_id} progress: {message}\n")
+
+            return target(ctx, body, on_status)
+
+        job = job_mgr.submit_progress(kind, label, run)
+        return ctx.fastapi_json({"jobId": job.get("id"), "job": job}, 202)
+
     job = ctx.get_job_mgr().submit(kind, label, lambda: target(ctx, body))
     return ctx.fastapi_json({"jobId": job.get("id"), "job": job}, 202)
 
@@ -245,6 +270,6 @@ def register_media_routes(app, ctx) -> None:
         try:
             if not str(body.get("prompt", "") or "").strip():
                 return ctx.fastapi_json({"error": "video prompt is required"}, 400)
-            return _job_response(ctx, "video.generate", "Generate video", body, _generate_video_payload)
+            return _job_response(ctx, "video.generate", "Generate video", body, _generate_video_payload, supports_status=True)
         except ValueError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)

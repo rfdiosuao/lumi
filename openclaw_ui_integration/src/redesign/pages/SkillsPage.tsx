@@ -1,5 +1,5 @@
 import React from 'react';
-import { FolderOpen, RefreshCcw, Search, Upload, X } from 'lucide-react';
+import { ChevronDown, FolderOpen, RefreshCcw, Search, Upload, X } from 'lucide-react';
 import { Button, Chip, EmptyState, InlineState, Modal, Panel, SectionHeader } from '../components/ui';
 import { installSkillZip, loadSkillsSnapshot, readSkillReadme, toggleSkill, uninstallSkill } from '../api/adapters';
 import { useAsync } from '../lib/useAsync';
@@ -49,6 +49,18 @@ export function SkillsPage() {
     const text = `${skill.name} ${skill.description} ${skill.category} ${skill.runtime}`.toLowerCase();
     return text.includes(query.toLowerCase());
   });
+
+  // Open an official skill library site in the system browser. Uses the shell
+  // plugin in the desktop app (so it opens the real browser, not the app
+  // webview) and falls back to window.open in the web preview.
+  const handleOpenSite = async (url: string) => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(url);
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
 
   const handleUpload = () => {
     const input = document.createElement('input');
@@ -119,7 +131,16 @@ export function SkillsPage() {
           <p>安装、启用、查看说明或移除本地模块；每个操作都靠近对应 Skill。</p>
         </div>
         <div className="hero-actions">
-          <Button variant="primary" icon={Upload} onClick={handleUpload} disabled={busyId === 'upload'}>安装 ZIP</Button>
+          {data?.sites?.length === 1 ? (
+            <Button variant="primary" icon={FolderOpen} onClick={() => handleOpenSite(data.sites[0].url)}>
+              从官方库安装
+            </Button>
+          ) : (
+            <Button variant="primary" icon={FolderOpen} onClick={() => document.getElementById('skill-sites-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+              从官方库安装
+            </Button>
+          )}
+          <Button variant="quiet" icon={Upload} onClick={handleUpload} disabled={busyId === 'upload'}>安装 ZIP</Button>
           <Button variant="quiet" icon={RefreshCcw} onClick={refresh}>刷新</Button>
         </div>
       </section>
@@ -164,8 +185,14 @@ export function SkillsPage() {
                       <Chip tone={skill.enabled ? 'ok' : 'warn'}>{skill.enabled ? '已启用' : '已停用'}</Chip>
                     </div>
                     <div className="skill-meta">{skillDisplay(skill).desc}</div>
-                    <div className="skill-meta">{skill.category} · {runtimeLabel(skill.runtime)} · v{skill.version}</div>
-                    <div className="skill-meta" style={{ opacity: 0.55 }} title={`${skill.name}\n${skill.path}`}>{skill.name} · {shortenPaths(skill.path)}</div>
+                    <details className="skill-details">
+                      <summary>
+                        <ChevronDown size={14} />
+                        <span>详情</span>
+                      </summary>
+                      <div className="skill-meta">{skill.category} · {runtimeLabel(skill.runtime)} · v{skill.version}</div>
+                      <div className="skill-meta" style={{ opacity: 0.55 }} title={`${skill.name}\n${skill.path}`}>{skill.name} · {shortenPaths(skill.path)}</div>
+                    </details>
                   </div>
                   <div className="skill-actions">
                     <Button variant={skill.enabled ? 'danger' : 'success'} onClick={() => handleToggle(skill.id, !skill.enabled)} disabled={busyId === skill.id}>
@@ -183,14 +210,14 @@ export function SkillsPage() {
         </Panel>
       </section>
 
-      <Panel className="surface-panel">
-        <SectionHeader eyebrow="外部地址" title="Skill 站点" subtitle="外部地址直接展示，避免藏在弹窗里。" />
+      <Panel className="surface-panel" id="skill-sites-panel">
+        <SectionHeader eyebrow="官方库" title="Skill 站点" subtitle="点击「打开」前往官方库浏览并下载更多 Skill。" />
         <div className="site-grid">
           {data?.sites.map((site) => (
             <div key={site.url} className="site-card">
               <strong>{site.name}</strong>
               <span>{site.url}</span>
-              <Button variant="quiet" icon={FolderOpen} onClick={() => window.open(site.url, '_blank', 'noopener,noreferrer')}>打开</Button>
+              <Button variant="primary" icon={FolderOpen} onClick={() => handleOpenSite(site.url)}>打开</Button>
             </div>
           ))}
         </div>

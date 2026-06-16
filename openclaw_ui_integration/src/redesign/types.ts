@@ -19,6 +19,12 @@ export interface ToastMessage {
   tone: Exclude<StatusTone, 'idle' | 'busy'>;
   title: string;
   detail?: string;
+  // Full machine error text shown under “展开详情” and copied by “复制诊断”.
+  diagnostic?: string;
+  // When true the toast stays until dismissed (defaults to true for danger).
+  sticky?: boolean;
+  // Where “打开日志” jumps to (defaults to the service page).
+  logRoute?: RouteKey;
 }
 
 export interface ServiceSnapshot {

@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Measure OpenClaw cold start time")
     parser.add_argument("--root", default=str(Path.cwd()), help="Launcher root directory")
     parser.add_argument("--timeout-sec", type=int, default=600, help="Startup timeout in seconds")
+    parser.add_argument("--poll-ms", type=int, default=500, help="Startup status poll interval in milliseconds")
     parser.add_argument("--stop-after-measure", action="store_true", help="Stop process after measurement")
     parser.add_argument("--output-path", default="", help="Where to write JSON output")
     parser.add_argument("--budget-ms", type=int, default=30000, help="Expected cold-start budget in milliseconds")
@@ -121,21 +122,40 @@ def main() -> int:
         service.start()
     except Exception as exc:
         error = str(exc)
-    elapsed_ms = int((time.perf_counter() - start) * 1000)
+        service.startup_state = "failed"
+        service.startup_error = error
 
     status = service.status()
+    deadline = start + max(args.timeout_sec, 1)
+    poll_interval = max(args.poll_ms, 50) / 1000
+    while not error and time.perf_counter() < deadline:
+        if status.get("portReady") or status.get("startupState") == "failed" or status.get("startupError"):
+            break
+        time.sleep(poll_interval)
+        status = service.status()
+
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+
     snapshot = read_json_if_exists(snapshot_path)
+    port_ready = bool(status.get("portReady"))
+    startup_error = error or status.get("startupError") or snapshot.get("error", "")
+    if port_ready and elapsed_ms <= args.budget_ms:
+        verdict = "pass"
+    elif port_ready:
+        verdict = "warn"
+    else:
+        verdict = "fail"
     result = {
         "root": str(root),
         "pythonRoot": str(discover_python_root(root)),
         "snapshotPath": str(snapshot_path),
         "budgetMs": args.budget_ms,
         "measuredColdStartMs": elapsed_ms,
-        "coldStartVerdict": "pass" if elapsed_ms <= args.budget_ms else "warn",
+        "coldStartVerdict": verdict,
         "startupState": status.get("startupState"),
         "startupElapsedSec": status.get("startupElapsedSec"),
         "startupTimeoutSec": status.get("startupTimeoutSec"),
-        "startupError": error or status.get("startupError") or snapshot.get("error", ""),
+        "startupError": startup_error,
         "startupStage": status.get("startupStage") or (snapshot.get("startupTimeline") or [{}])[-1].get("stage"),
         "pid": status.get("pid"),
         "portReady": status.get("portReady"),

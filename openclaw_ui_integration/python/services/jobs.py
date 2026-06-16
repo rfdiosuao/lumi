@@ -19,6 +19,9 @@ class JobManager:
         self._jobs: dict[str, dict] = {}
 
     def submit(self, kind: str, label: str, target: Callable[[], dict]) -> dict:
+        return self.submit_progress(kind, label, lambda _job_id: target())
+
+    def submit_progress(self, kind: str, label: str, target: Callable[[str], dict]) -> dict:
         job_id = f"job_{uuid.uuid4().hex}"
         now = time.time()
         job = {
@@ -34,6 +37,13 @@ class JobManager:
             "error": None,
             "failure": None,
             "attempt": 1,
+            "message": "queued",
+            "progress": {
+                "message": "queued",
+                "tone": "neutral",
+                "history": [],
+                "updatedAt": now,
+            },
         }
         with self._lock:
             self._jobs[job_id] = job
@@ -53,11 +63,30 @@ class JobManager:
             jobs = sorted(self._jobs.values(), key=lambda item: float(item.get("createdAt") or 0), reverse=True)
             return [dict(item) for item in jobs[: max(1, min(limit, self.max_jobs))]]
 
-    def _run(self, job_id: str, target: Callable[[], dict]) -> None:
-        self._patch(job_id, status="running", startedAt=time.time(), updatedAt=time.time())
+    def progress(self, job_id: str, message: str, tone: str = "neutral", **extra) -> None:
+        now = time.time()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return
+            current = job.get("progress") if isinstance(job.get("progress"), dict) else {}
+            history = current.get("history") if isinstance(current.get("history"), list) else []
+            entry = {"message": str(message or ""), "tone": str(tone or "neutral"), "updatedAt": now}
+            history = [*history, entry][-30:]
+            job["message"] = entry["message"]
+            job["progress"] = {
+                **current,
+                **extra,
+                **entry,
+                "history": history,
+            }
+            job["updatedAt"] = now
+
+    def _run(self, job_id: str, target: Callable[[str], dict]) -> None:
+        self._patch(job_id, status="running", startedAt=time.time(), updatedAt=time.time(), message="running")
         self.append_log(f"[Job] {job_id} started\n")
         try:
-            result = target()
+            result = target(job_id)
             if isinstance(result, dict) and result.get("success") is False:
                 failure = classify_failure(result)
                 error_text = str(result.get("error") or result.get("message") or failure.get("evidence") or "job_result_failed")
