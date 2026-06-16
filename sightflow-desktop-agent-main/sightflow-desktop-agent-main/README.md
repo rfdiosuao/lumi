@@ -1,7 +1,7 @@
-# SightFlow.dev
+# Luminode
 <img width="1201" height="495" alt="image" src="https://github.com/user-attachments/assets/99a7cfec-eb22-4f65-8a76-a6974e46bcf0" />
 
-Official website： [https://sightflow.dev](https://sightflow.dev/)
+Repository： [https://github.com/rfdiosuao/lumi](https://github.com/rfdiosuao/lumi)
 
 
 # 招募共建开发者
@@ -31,7 +31,7 @@ Official website： [https://sightflow.dev](https://sightflow.dev/)
 
 | 主界面 | 基础配置 | 智能体配置 |
 | --- | --- | --- |
-| <img width="240" alt="SightFlow 主界面" src="./docs/images/main.png" /> | <img width="360" alt="SightFlow 基础配置" src="./docs/images/settings-base.png" /> | <img width="360" alt="SightFlow 智能体配置" src="./docs/images/settings-provider.png" /> |
+| <img width="240" alt="Luminode 主界面" src="./docs/images/main.png" /> | <img width="360" alt="Luminode 基础配置" src="./docs/images/settings-base.png" /> | <img width="360" alt="Luminode 智能体配置" src="./docs/images/settings-provider.png" /> |
 
 ## 目标应用与框选模式
 
@@ -46,11 +46,11 @@ VLM 和框选模式只影响“如何测量布局”。运行时截图、内容�
 
 ## 智能体 / Provider Hub
 
-SightFlow 桌面端把“截图分析并生成回复”的聊天能力抽象为独立 Provider。Provider 通过 `manifest.json` 声明配置结构，通过 bundle 入口接收聊天截图并返回 `reply_text`、`skip`、`error` 等事件。
+Luminode 桌面端把“截图分析并生成回复”的聊天能力抽象为独立 Provider。Provider 通过 `manifest.json` 声明配置结构，通过 bundle 入口接收聊天截图并返回 `reply_text`、`skip`、`error` 等事件。
 
 当前应用内置一个简单的 Provider Hub：
 
-- 默认从 `https://sightflow.dev/provider-hub.json` 拉取候选 Provider 列表。
+- 默认不预置远端 Provider Hub；如需使用远端列表，可通过 `LUMINODE_PROVIDER_HUB_URL` 配置。
 - Hub 只维护 Provider 的 `manifestUrl`，UI 展示字段来自各 Provider 的 manifest。
 - 首次加载后会缓存到本地；除非手动点击智能体标题旁的刷新按钮，否则优先使用本地缓存。
 - 本地始终保留内置**豆包 Seed**作为默认 Provider，避免远端列表不可用时没有可选项。

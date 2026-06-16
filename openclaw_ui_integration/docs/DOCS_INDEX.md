@@ -71,7 +71,7 @@
 | `LICENSE_SERVER_PRODUCTION_DEBT.md` | 授权后台生产级技术债台账 |
 | `LICENSE_ADMIN_SITE_AUDIT_2026-05-21.md` | 线上授权后台站点问题记录和后续修复建议 |
 
-## 桌面 Agent / SightFlow
+## 桌面 Agent / Luminode
 
 | 文档 | 状态 |
 | --- | --- |

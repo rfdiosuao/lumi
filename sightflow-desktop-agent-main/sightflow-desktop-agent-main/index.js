@@ -1366,7 +1366,7 @@ function resolveArkRuntimeConfig(settings, overrides = {}) {
     baseURL: normalizeArkBaseURL(merged.baseURL)
   };
 }
-const DEFAULT_PROVIDER_HUB_URL = process.env.SIGHTFLOW_PROVIDER_HUB_URL || "https://sightflow.dev/provider-hub.json";
+const DEFAULT_PROVIDER_HUB_URL = process.env.LUMINODE_PROVIDER_HUB_URL || process.env.SIGHTFLOW_PROVIDER_HUB_URL || "";
 const PROVIDER_HUB_CACHE_KEY = "providerHubCache";
 const settingsStore = new StoreClass({
   name: "settings",
@@ -1406,15 +1406,16 @@ function normalizeLauncherAppType(raw) {
 }
 function maybeStartLauncherSidecar() {
   if (httpApiServer) return;
-  if (process.env.SIGHTFLOW_HTTP_API_AUTOSTART !== "1" && !hasArg("--luminode-sidecar")) return;
-  const apiPort = Number(getArgValue("--port") || process.env.SIGHTFLOW_HTTP_API_PORT || "21900") || 21900;
-  const token = getArgValue("--token") || process.env.SIGHTFLOW_AGENT_TOKEN || "";
+  const autostart = process.env.LUMINODE_HTTP_API_AUTOSTART || process.env.SIGHTFLOW_HTTP_API_AUTOSTART || "";
+  if (autostart !== "1" && !hasArg("--luminode-sidecar")) return;
+  const apiPort = Number(getArgValue("--port") || process.env.LUMINODE_HTTP_API_PORT || process.env.SIGHTFLOW_HTTP_API_PORT || "21900") || 21900;
+  const token = getArgValue("--token") || process.env.LUMINODE_AGENT_TOKEN || process.env.SIGHTFLOW_AGENT_TOKEN || "";
   const appType = normalizeLauncherAppType(
-    getArgValue("--app-type") || process.env.SIGHTFLOW_APP_TYPE || ""
+    getArgValue("--app-type") || process.env.LUMINODE_APP_TYPE || process.env.SIGHTFLOW_APP_TYPE || ""
   );
-  const apiKey = getArgValue("--api-key") || process.env.SIGHTFLOW_API_KEY || "";
-  const baseURL = getArgValue("--base-url") || process.env.SIGHTFLOW_BASE_URL || "";
-  const model = getArgValue("--model") || process.env.SIGHTFLOW_MODEL || "";
+  const apiKey = getArgValue("--api-key") || process.env.LUMINODE_API_KEY || process.env.SIGHTFLOW_API_KEY || "";
+  const baseURL = getArgValue("--base-url") || process.env.LUMINODE_BASE_URL || process.env.SIGHTFLOW_BASE_URL || "";
+  const model = getArgValue("--model") || process.env.LUMINODE_MODEL || process.env.SIGHTFLOW_MODEL || "";
   httpApiServer = new HttpApiServer({ port: apiPort, host: "127.0.0.1", token });
   standaloneHttpApiDevice = new permission.RPADevice();
   standaloneHttpApiDevice.setAppType(appType);
@@ -1568,6 +1569,9 @@ function getCachedProviderHub() {
   return cached;
 }
 async function fetchProviderHub(url = DEFAULT_PROVIDER_HUB_URL) {
+  if (!url) {
+    return { sourceUrl: "", fetchedAt: (/* @__PURE__ */ new Date()).toISOString(), providers: [] };
+  }
   const hub = await fetchJson(url);
   if (!isRecord(hub) || !Array.isArray(hub.providers)) {
     throw new Error("Provider hub JSON must contain a providers array");

@@ -346,7 +346,7 @@ async function buildContext(args) {
         agentCli: 'npm run desktop:agent',
         replyCli: 'npm run desktop:reply',
         replyPolicy: 'observe first; send only with explicit --confirmed user approval',
-        tokenPolicy: 'never expose token or SightFlow port; call through launcher Bridge /api/desktop-agent/*',
+        tokenPolicy: 'never expose token or Luminode port; call through launcher Bridge /api/desktop-agent/*',
         tools: [
           'desktop.status',
           'desktop.health',
@@ -434,4 +434,3 @@ main().catch((error) => {
   console.error(error?.message || error);
   process.exit(1);
 });
-

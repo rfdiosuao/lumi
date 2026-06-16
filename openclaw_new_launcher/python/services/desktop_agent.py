@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import signal
 import secrets
 import subprocess
 import threading
@@ -19,7 +20,7 @@ LogCall = Callable[[str], None]
 
 
 class DesktopAgentService:
-    """Manage SightFlow as an optional local desktop execution sidecar."""
+    """Manage Luminode as an optional local desktop execution sidecar."""
 
     DEFAULT_PORT = 21900
     ALLOWED_PROXY_PATHS = {
@@ -156,14 +157,16 @@ class DesktopAgentService:
 
         agent_dir = self.resolve_agent_dir(config)
         if not agent_dir:
-            raise FileNotFoundError("未找到 SightFlow Desktop Agent 目录，请在桌面控制页设置 agentDir")
+            raise FileNotFoundError("未找到 Luminode Desktop Agent 目录，请在桌面控制页设置 agentDir")
 
         command = self.resolve_command(agent_dir)
         if not command:
-            raise FileNotFoundError(f"未找到 SightFlow 可启动入口：{agent_dir}")
+            raise FileNotFoundError(f"未找到 Luminode 可启动入口：{agent_dir}")
 
-        # Start the agent explicitly in sidecar mode so the local HTTP API is
-        # always opened with the launcher-owned port/token.
+        # 显式以 sidecar 模式启动并传参,让 agent 自动开启 token 保护的本地 HTTP API。
+        # agent 读 --luminode-sidecar / --port / --token / --app-type / --api-key(arg 优先于 env)。
+        # 此前启动器只设 LUMINODE_* env,而 agent 读 SIGHTFLOW_* env,前缀对不上 → API 起不来、
+        # 桌面控制无法自主启动。用显式 arg 绕开前缀问题,最可靠。
         sidecar_port = int(config.get("port") or self.DEFAULT_PORT)
         sidecar_token = str(config.get("token") or "")
         sidecar_app_type = str(config.get("appType") or "weixin")
@@ -174,6 +177,9 @@ class DesktopAgentService:
             "--token", sidecar_token,
             "--app-type", sidecar_app_type,
         ]
+        # 视觉模型:从统一配置(auth-profiles 主 provider)读出 网关地址+模型+key 一起传给 agent。
+        # 否则 agent 的视觉客户端会回退默认火山地址,拿网关 token 直连 → 401「key 格式不对」,
+        # 布局测量失败导致引擎无法启动。
         sidecar_provider = self._primary_provider()
         if sidecar_provider.get("apiKey"):
             command += ["--api-key", sidecar_provider["apiKey"]]
@@ -205,7 +211,7 @@ class DesktopAgentService:
             env["SIGHTFLOW_MODEL"] = sidecar_provider["model"]
 
         self.append_log(f"[DesktopAgent] Starting Luminode: {' '.join(self._redact_command(command))}\n")
-        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        popen_kwargs = self._popen_platform_kwargs()
         self.process = subprocess.Popen(
             command,
             cwd=agent_dir,
@@ -215,7 +221,7 @@ class DesktopAgentService:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            creationflags=creation_flags,
+            **popen_kwargs,
         )
         self.append_log(f"[DesktopAgent] PID: {self.process.pid}\n")
         self._output_thread = threading.Thread(target=self._read_output, args=(self.process,), daemon=True)
@@ -228,15 +234,11 @@ class DesktopAgentService:
         if self.process and self.process.poll() is None:
             pid = self.process.pid
             self.append_log(f"[DesktopAgent] Stopping PID {pid}\n")
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True,
-                text=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            self._terminate_process_tree(pid)
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                self._kill_process_tree(pid)
                 pass
             stopped = True
         if not stopped:
@@ -264,6 +266,8 @@ class DesktopAgentService:
         port = int(config.get("port") or self.DEFAULT_PORT)
         url = f"http://127.0.0.1:{port}{path}"
         payload = json.dumps(self._augment_body(path, body, config), ensure_ascii=False).encode("utf-8")
+        # 按路径分级超时:健康检查要快返回;动作/微信操作要扫 UI、点按、抓未读,耗时长,
+        # 对齐 agent 自身 ~30s 动作超时,避免启动器这边 8s 就误判"动作失败"(agent 还在干)。
         timeout = 8 if path == "/health" else 35
         request = urllib.request.Request(
             url,
@@ -294,6 +298,8 @@ class DesktopAgentService:
             str(config.get("agentDir") or "").strip(),
             os.environ.get("OPENCLAW_DESKTOP_AGENT_DIR", ""),
             os.path.join(self.paths.base_path, "agents", "luminode-desktop"),
+            os.path.join(self.paths.base_path, "agents", "luminode-desktop", "Luminode.app"),
+            os.path.join(self.paths.base_path, "agents", "luminode-desktop", "LumiNode.app"),
             os.path.join(self.paths.base_path, "agents", "sightflow-desktop"),
             os.path.join(self.paths.base_path, "sightflow-desktop-agent"),
             os.path.join(
@@ -311,6 +317,10 @@ class DesktopAgentService:
     def resolve_command(self, agent_dir: str) -> list[str]:
         if not agent_dir:
             return []
+        app_command = self._mac_app_command(agent_dir)
+        if app_command:
+            return app_command
+
         electron = os.path.join(agent_dir, "electron-dist", "electron.exe")
         package_json = os.path.join(agent_dir, "package.json")
         out_main = os.path.join(agent_dir, "out", "main", "index.js")
@@ -327,10 +337,73 @@ class DesktopAgentService:
             if os.path.exists(exe):
                 return [exe]
 
+        app_candidates = [
+            os.path.join(agent_dir, "Luminode.app"),
+            os.path.join(agent_dir, "LumiNode.app"),
+            os.path.join(agent_dir, "SightFlow.app"),
+        ]
+        app_candidates.extend(glob.glob(os.path.join(agent_dir, "dist", "mac*", "*.app")))
+        for app_path in app_candidates:
+            app_command = self._mac_app_command(app_path)
+            if app_command:
+                return app_command
+
         dev_launch = os.path.join(agent_dir, "scripts", "dev-launch.mjs")
         if os.path.exists(dev_launch) and os.path.exists(self.paths.node_exe):
             return [self.paths.node_exe, dev_launch]
         return []
+
+    def _mac_app_command(self, app_path: str) -> list[str]:
+        if not app_path.endswith(".app") or not os.path.isdir(app_path):
+            return []
+        macos_dir = os.path.join(app_path, "Contents", "MacOS")
+        executable_names = ["Luminode", "LumiNode", "SightFlow", "sightflow-desktop-agent"]
+        executable_names.extend(os.path.basename(path) for path in glob.glob(os.path.join(macos_dir, "*")))
+        for name in executable_names:
+            executable = os.path.join(macos_dir, name)
+            if os.path.isfile(executable) and os.access(executable, os.X_OK):
+                return [executable]
+        return []
+
+    def _popen_platform_kwargs(self) -> dict:
+        if os.name == "nt":
+            return {
+                "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            }
+        return {"start_new_session": True}
+
+    def _terminate_process_tree(self, pid: int) -> None:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+
+    def _kill_process_tree(self, pid: int) -> None:
+        if os.name == "nt":
+            return
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
 
     def _redact_command(self, command: list[str]) -> list[str]:
         redacted: list[str] = []
@@ -481,6 +554,11 @@ class DesktopAgentService:
         return enriched
 
     def _primary_provider(self) -> dict:
+        """返回统一配置主 provider 的 {apiKey, baseUrl, model},供桌面 agent 的视觉客户端使用。
+
+        agent 的 VLM(布局测量/识别)默认直连火山地址,只换 key 会 401;必须把网关
+        baseUrl + model 一起带过去,让 agent 走网关。
+        """
         result = {"apiKey": "", "baseUrl": "", "model": ""}
         try:
             with open(self.paths.auth_profiles, "r", encoding="utf-8") as handle:

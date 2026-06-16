@@ -10,6 +10,7 @@ use std::time::Duration;
 use tauri::path::BaseDirectory;
 use tauri::{Manager, WindowEvent};
 
+mod bootstrap;
 mod license;
 
 static BRIDGE_PORT: AtomicU16 = AtomicU16::new(0);
@@ -169,20 +170,12 @@ fn protected_feature(path: &str) -> Option<&'static str> {
 }
 
 fn portable_base_dir() -> Result<std::path::PathBuf, String> {
-    if cfg!(debug_assertions) {
-        return std::env::current_dir().map_err(|e| format!("get current directory failed: {}", e));
-    }
-
-    let exe_path =
-        std::env::current_exe().map_err(|e| format!("get executable path failed: {}", e))?;
-    let exe_dir = exe_path
-        .parent()
-        .ok_or_else(|| "executable directory not found".to_string())?;
-    let payload_dir = exe_dir.join(PORTABLE_PAYLOAD_DIR);
+    let install_root = bootstrap::install_root()?;
+    let payload_dir = install_root.join(PORTABLE_PAYLOAD_DIR);
     if payload_dir.exists() {
         return Ok(payload_dir);
     }
-    Ok(exe_dir.to_path_buf())
+    Ok(install_root)
 }
 
 fn python_binary_names() -> &'static [&'static str] {
@@ -205,6 +198,20 @@ fn bridge_python_exe(py_path: &std::path::Path) -> std::path::PathBuf {
         if let Some(resource_dir) = bridge_dir.parent() {
             for binary_name in python_binary_names() {
                 let runtime_python = resource_dir.join("python-runtime").join(binary_name);
+                if runtime_python.exists() {
+                    return runtime_python;
+                }
+            }
+        }
+    }
+
+    if let Ok(base_dir) = portable_base_dir() {
+        for runtime_dir in [
+            base_dir.join("_up_").join("python-runtime"),
+            base_dir.join("python-runtime"),
+        ] {
+            for binary_name in python_binary_names() {
+                let runtime_python = runtime_dir.join(binary_name);
                 if runtime_python.exists() {
                     return runtime_python;
                 }
@@ -447,6 +454,18 @@ async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
         return Ok(format!("Bridge already started on port {}", existing_port));
     }
 
+    // Prefer the external payload root. Mac full/online packages keep
+    // OpenClawFiles next to OpenClaw.app so runtime layers can be downloaded
+    // without mutating the signed .app bundle.
+    if let Ok(base_dir) = portable_base_dir() {
+        for rel_path in ["_up_/python/bridge.py", "python/bridge.py"] {
+            let py_path = base_dir.join(rel_path);
+            if py_path.exists() {
+                return spawn_bridge(&py_path);
+            }
+        }
+    }
+
     // Production bundles may place resources under either `python/` or `_up_/python/`
     // depending on how paths outside src-tauri are mapped by the bundler.
     for rel_path in ["python/bridge.py", "_up_/python/bridge.py"] {
@@ -480,6 +499,16 @@ async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
         .join("bridge.py");
 
     spawn_bridge(&py_path)
+}
+
+#[tauri::command]
+async fn install_distribution_layer(app: tauri::AppHandle, layer_id: String) -> Result<(), String> {
+    let layer_id = layer_id.trim().to_string();
+    if layer_id.is_empty() {
+        return Err("distribution layer id is empty".to_string());
+    }
+    let root = bootstrap::install_root()?;
+    bootstrap::install_layer_by_id(app, root, layer_id).await
 }
 
 #[tauri::command]
@@ -709,9 +738,19 @@ pub fn run() {
                 )?;
             }
             app.handle().plugin(tauri_plugin_shell::init())?;
-            // Start bridge on app launch
+            // Start bridge on app launch after online-package runtime layers
+            // have been downloaded and verified.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                match bootstrap::install_root() {
+                    Ok(root) => {
+                        if let Err(e) = bootstrap::ensure_layers(app_handle.clone(), root).await {
+                            eprintln!("[Bootstrap error] {}", e);
+                            set_bridge_startup_error(format!("运行时组件下载失败：{}", e));
+                        }
+                    }
+                    Err(e) => eprintln!("[Bootstrap] install root unresolved: {}", e),
+                }
                 if let Err(e) = start_bridge(app_handle).await {
                     eprintln!("[Bridge startup error] {}", e);
                 }
@@ -738,6 +777,7 @@ pub fn run() {
             bridge_startup_report,
             verify_license,
             start_bridge,
+            install_distribution_layer,
             proxy_request,
             phone_proxy_request,
             export_log,

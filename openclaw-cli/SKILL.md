@@ -6,7 +6,7 @@ description: >
   所有命令位于 openclaw_new_launcher/,经 `npm run phone:* -- <args>`、
   `npm run desktop:* -- <args>` 或 `node scripts/openclaw-*.mjs` 调用。
   触发词:手机控制、APKClaw、手机 Agent、生图、出图、录屏、截图、屏幕识别、视觉、
-  平台发布、小红书、抖音发布、编队、fleet、桌面控制、SightFlow、微信发送、微信未读、
+  平台发布、小红书、抖音发布、编队、fleet、桌面控制、Luminode、微信发送、微信未读、
   openclaw cli、phone agent、phone control、desktop control、publish、screenshot、vision。
 ---
 
@@ -150,7 +150,7 @@ npm run phone:demo:game -- --goal "安全地查看当前画面" --json
 ## 5. 桌面控制与显式回复(`desktop:agent` / `desktop:reply`)
 
 桌面控制现在有 npm CLI。CLI 会自己启动一个临时 Python Bridge,读取运行时
-`BRIDGE_TOKEN`,再通过 `/api/desktop-agent/*` 调用 SightFlow/Luminode;不要手写端口、
+`BRIDGE_TOKEN`,再通过 `/api/desktop-agent/*` 调用 Luminode;不要手写端口、
 token 或直连 Luminode。
 
 ```bash

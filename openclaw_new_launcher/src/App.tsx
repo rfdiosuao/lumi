@@ -14,6 +14,7 @@ import { getFeatureDefinition } from './features/registry';
 import { renderFeaturePage } from './features/pages';
 import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
 import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
+import { SetupGate } from './components/SetupGate';
 
 function formatError(error: unknown): string {
   if (typeof error === 'string') return error;
@@ -266,6 +267,7 @@ export default function App() {
         </div>
 
         <ToastContainer />
+        <SetupGate />
         {activeDialog === 'api' && <ModernApiConfigDialog onClose={() => setActiveDialog(null)} onSaved={refreshApiConfigured} />}
         {activeDialog === 'feishu' && <FeishuConfigDialog onClose={() => setActiveDialog(null)} />}
         {activeDialog === 'weixin' && <WeixinConfigDialog onClose={() => setActiveDialog(null)} />}

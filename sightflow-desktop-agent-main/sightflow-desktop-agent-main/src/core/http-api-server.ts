@@ -2,7 +2,7 @@
 // OpenClaw HTTP API 桥接层
 //
 // 在 Electron 主进程内启动一个轻量 HTTP 服务器，
-// 让 OpenClaw Agent 通过 exec + curl 调用 SightFlow 的桌面 RPA 能力。
+// 让 OpenClaw Agent 通过 exec + curl 调用 Luminode 的桌面 RPA 能力。
 
 import http from 'http'
 import { DesktopDevice } from './device'

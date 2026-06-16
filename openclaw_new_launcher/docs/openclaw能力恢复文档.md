@@ -36,7 +36,7 @@
 - 手机任务默认通过 launcher CLI 执行；OpenClaw 负责规划，APKClaw 负责执行。
 - 长任务必须分批，APKClaw 单任务最多 60 轮。
 - 视觉/列表任务优先用合适工具，不要机械重复截图。
-- 桌面 Agent 只走 launcher Bridge 和 `/api/desktop-agent/*`，不要直连 SightFlow。
+- 桌面 Agent 只走 launcher Bridge 和 `/api/desktop-agent/*`，不要直连 Luminode。
 - 如果上下文写着 `wrapper-only`、`launcher-cli-wrapper`、`configured=false`，就按那个状态执行，不要靠猜。
 
 当前应当记住的能力：

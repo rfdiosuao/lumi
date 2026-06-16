@@ -63,7 +63,7 @@
 ## P2 桌面 Agent / Luminode
 
 - [x] 打包脚本支持携带 Luminode 桌面控制 sidecar
-- [x] 打包前清理重复的历史 SightFlow 目录
+- [x] 打包前清理重复的历史 Luminode/SightFlow 目录
 - [ ] 桌面控制功能与 UI 仍按独立方向继续验收
 - [ ] 微信 / QQ / 拼多多客服场景需要单独做真实窗口识别和发送策略验收
 

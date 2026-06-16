@@ -139,7 +139,7 @@ type ProviderHubManifest = {
 }
 
 const DEFAULT_PROVIDER_HUB_URL =
-  process.env.SIGHTFLOW_PROVIDER_HUB_URL || 'https://sightflow.dev/provider-hub.json'
+  process.env.LUMINODE_PROVIDER_HUB_URL || process.env.SIGHTFLOW_PROVIDER_HUB_URL || ''
 const PROVIDER_HUB_CACHE_KEY = 'providerHubCache'
 
 const settingsStore = new StoreClass({
@@ -190,19 +190,39 @@ function normalizeLauncherAppType(raw: string): AppType {
 
 function maybeStartLauncherSidecar(): void {
   if (httpApiServer) return
-  if (process.env.SIGHTFLOW_HTTP_API_AUTOSTART !== '1' && !hasArg('--luminode-sidecar')) return
+  const autostart =
+    process.env.LUMINODE_HTTP_API_AUTOSTART || process.env.SIGHTFLOW_HTTP_API_AUTOSTART || ''
+  if (autostart !== '1' && !hasArg('--luminode-sidecar')) return
 
   const apiPort =
-    Number(getArgValue('--port') || process.env.SIGHTFLOW_HTTP_API_PORT || '21900') || 21900
-  const token = getArgValue('--token') || process.env.SIGHTFLOW_AGENT_TOKEN || ''
+    Number(
+      getArgValue('--port') ||
+        process.env.LUMINODE_HTTP_API_PORT ||
+        process.env.SIGHTFLOW_HTTP_API_PORT ||
+        '21900'
+    ) || 21900
+  const token =
+    getArgValue('--token') ||
+    process.env.LUMINODE_AGENT_TOKEN ||
+    process.env.SIGHTFLOW_AGENT_TOKEN ||
+    ''
   const appType = normalizeLauncherAppType(
-    getArgValue('--app-type') || process.env.SIGHTFLOW_APP_TYPE || ''
+    getArgValue('--app-type') ||
+      process.env.LUMINODE_APP_TYPE ||
+      process.env.SIGHTFLOW_APP_TYPE ||
+      ''
   )
-  const apiKey = getArgValue('--api-key') || process.env.SIGHTFLOW_API_KEY || ''
+  const apiKey =
+    getArgValue('--api-key') || process.env.LUMINODE_API_KEY || process.env.SIGHTFLOW_API_KEY || ''
   // 网关地址+模型：启动器从统一配置(auth-profiles 主 provider)读出后传进来。
   // 不传则视觉客户端回退默认火山地址，拿网关 token 直连会 401。
-  const baseURL = getArgValue('--base-url') || process.env.SIGHTFLOW_BASE_URL || ''
-  const model = getArgValue('--model') || process.env.SIGHTFLOW_MODEL || ''
+  const baseURL =
+    getArgValue('--base-url') ||
+    process.env.LUMINODE_BASE_URL ||
+    process.env.SIGHTFLOW_BASE_URL ||
+    ''
+  const model =
+    getArgValue('--model') || process.env.LUMINODE_MODEL || process.env.SIGHTFLOW_MODEL || ''
 
   httpApiServer = new HttpApiServer({ port: apiPort, host: '127.0.0.1', token })
   standaloneHttpApiDevice = new RPADevice()
@@ -387,6 +407,10 @@ function getCachedProviderHub(): ProviderHubCache | null {
 }
 
 async function fetchProviderHub(url = DEFAULT_PROVIDER_HUB_URL): Promise<ProviderHubCache> {
+  if (!url) {
+    return { sourceUrl: '', fetchedAt: new Date().toISOString(), providers: [] }
+  }
+
   const hub = await fetchJson(url)
   if (!isRecord(hub) || !Array.isArray(hub.providers)) {
     throw new Error('Provider hub JSON must contain a providers array')

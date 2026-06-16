@@ -8,9 +8,9 @@ Read `runtime-context.json` first. The desktop Agent is exposed through the laun
 
 Hard rules:
 
-- Do not connect to SightFlow directly.
-- Do not read, print, ask for, or construct the SightFlow token.
-- Do not infer the local SightFlow port. Use the launcher Bridge routes only.
+- Do not connect to Luminode directly.
+- Do not read, print, ask for, or construct the Luminode token.
+- Do not infer the local Luminode port. Use the launcher Bridge routes only.
 - Click, type, and WeChat send may be blocked by launcher policy unless the user has enabled them in Desktop Agent settings.
 - When a route returns `blocked=true`, report the launcher policy reason instead of retrying through a lower-level path.
 
@@ -52,7 +52,7 @@ npm run desktop:reply -- once --text "reply text" --confirmed
 - For `desktop.click`, `desktop.type`, and `wechat.send`, include `confirmed=true` only when the user has explicitly approved that exact action.
 - Do not type passwords, payment data, real-name identity data, or authorization codes.
 - Keep actions bounded: one inspect, one click/type sequence, then verify with another screenshot.
-- If the desktop Agent is not ready, ask the launcher to start SightFlow from the Desktop Control page.
+- If the desktop Agent is not ready, ask the launcher to start Luminode from the Desktop Control page.
 
 ## Tool Semantics
 

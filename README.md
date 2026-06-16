@@ -30,7 +30,7 @@ OpenClaw Launcher 不是一个演示壳,而是一套把 AI Agent 能力交付到
 | OpenClaw 运行时封装 | 默认面向 OpenClaw `2026.6.1`,便携包内置 Node/OpenClaw 运行环境和 workspace 上下文 |
 | 桌面启动器 | Tauri 2 + React 18 + TypeScript,提供统一控制台、日志、环境诊断、模型配置和授权入口 |
 | 手机控制 | 连接 APKClaw,支持截图、状态读取、任务执行、录屏、图片导入、平台发布和安全签名通道 |
-| 桌面控制 | 集成 SightFlow/Luminode 桌面 Agent 源码,支持窗口识别、截图理解、坐标点击、回复发送和 Provider Hub |
+| 桌面控制 | 集成 Luminode 桌面 Agent 源码,支持窗口识别、截图理解、坐标点击、回复发送和 Provider Hub |
 | IM 通道 | 飞书、微信、钉钉连接器入口,用于把自动化能力接入消息工作流 |
 | AI 图像与视频 | 支持图像生成/编辑、视频生成、广告分镜、首尾帧和素材工作流 |
 | Skills 工作区 | 内置办公向 skills,覆盖会议纪要、周报、PDF/OCR、Excel 分析、PPT 生成、文件整理等场景 |
@@ -48,7 +48,7 @@ OpenClaw Launcher 不是一个演示壳,而是一套把 AI Agent 能力交付到
 │  ├─ openclaw-workspace/                  # 交付给 OpenClaw 的 Agent 上下文、能力清单和 skills
 │  └─ src-tauri/                           # Tauri shell、授权校验、Bridge 进程管理
 ├─ openclaw_ui_integration/                # UI integration / portable packaging variant
-├─ sightflow-desktop-agent-main/           # 桌面 RPA / Luminode / SightFlow 代理源码
+├─ sightflow-desktop-agent-main/           # 桌面 RPA / Luminode 代理源码
 ├─ iosclaw/                                # iOS / macOS 适配源码
 ├─ license_server/                         # 在线授权服务与后台管理
 ├─ scripts/                                # CI、打包、校验、发布脚本
@@ -65,7 +65,7 @@ OpenClaw Launcher 不是一个演示壳,而是一套把 AI Agent 能力交付到
 | 本地服务 | Python 3.11, FastAPI-style Bridge, local HTTP API |
 | Agent 运行时 | Node.js, OpenClaw `2026.6.1`, local workspace skills |
 | 手机侧 | APKClaw / Lumi secure channel |
-| 桌面 RPA | Electron/Vite/TypeScript SightFlow agent, VLM-assisted UI control |
+| 桌面 RPA | Electron/Vite/TypeScript Luminode agent, VLM-assisted UI control |
 | 发布 | GitHub Actions, Windows runner, macOS runner, SHA256 verification |
 
 ### 快速开始
@@ -181,7 +181,7 @@ The goal is simple: a user should be able to download one release, install or un
 | OpenClaw runtime packaging | Targets OpenClaw `2026.6.1` with bundled runtime dependencies and workspace context |
 | Desktop launcher | Tauri 2 + React 18 + TypeScript console for services, logs, settings, diagnostics, and licensing |
 | Phone automation | APKClaw integration for screenshots, device state, task execution, recording, media import, and publishing |
-| Desktop RPA | SightFlow/Luminode desktop agent source with VLM-assisted layout detection and click/reply automation |
+| Desktop RPA | Luminode desktop agent source with VLM-assisted layout detection and click/reply automation |
 | IM connectors | Feishu, WeChat, DingTalk-oriented entry points for message-channel automation |
 | Image and video workflows | AI image generation/editing, video generation, storyboard, keyframe, and material workflows |
 | Skills workspace | Office-oriented skills for meeting notes, weekly reports, PDF/OCR, spreadsheet analysis, slides, and file organization |

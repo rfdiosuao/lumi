@@ -67,9 +67,9 @@ export function DashboardPage() {
     },
     {
       icon: Cpu,
-      title: '桌面 RPA',
-      desc: '保留自动回复能力，作为桌面操作中枢。',
-      meta: '自动回复',
+      title: '桌面自动化',
+      desc: '托管 Luminode 桌面代理，统一处理截图、未读检测和受控回复。',
+      meta: 'Luminode',
       tone: 'neutral' as const,
       featured: true,
       route: 'desktop' as const,

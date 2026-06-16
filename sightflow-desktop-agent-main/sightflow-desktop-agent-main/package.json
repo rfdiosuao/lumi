@@ -1,10 +1,10 @@
 {
-  "name": "sightflow-desktop-agent",
+  "name": "luminode-desktop-agent",
   "version": "1.0.0",
-  "description": "SightFlow Desktop Agent - AI-powered cross-platform desktop RPA client based on Electron and VLM",
+  "description": "Luminode Desktop Agent - AI-powered cross-platform desktop RPA client based on Electron and VLM",
   "main": "./out/main/index.js",
-  "author": "sightflow-dev",
-  "homepage": "https://github.com/sightflow-dev/sightflow-desktop-agent",
+  "author": "Luminode",
+  "homepage": "https://github.com/rfdiosuao/lumi",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",

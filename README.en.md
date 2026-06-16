@@ -14,7 +14,7 @@ Main repository README: [README.md](./README.md)
 | OpenClaw runtime packaging | Bundled runtime dependencies, workspace context, and built-in skills |
 | Desktop launcher | Tauri 2 + React 18 + TypeScript control console |
 | Phone automation | APKClaw screenshots, state, task execution, recording, media import, and publishing |
-| Desktop RPA | SightFlow/Luminode desktop agent source with VLM-assisted UI control |
+| Desktop RPA | Luminode desktop agent source with VLM-assisted UI control |
 | IM connectors | Feishu, WeChat, and DingTalk-oriented connection paths |
 | AI media workflows | Image generation/editing, video generation, storyboard and keyframe workflows |
 | License delivery | Online activation, device binding, and clean customer packages |

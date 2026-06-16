@@ -606,7 +606,7 @@ function SettingsWindow(): React.JSX.Element {
       <aside className="settings-sidebar">
         <div className="settings-sidebar-brand">
           <img src={logoUrl} alt="Luminode" className="app-logo" />
-          <span>设置</span>
+          <span>Luminode 设置</span>
         </div>
         <button
           className={`settings-nav-item ${section === 'base' ? 'active' : ''}`}
@@ -697,7 +697,7 @@ function SettingsPanel() {
       <div className="settings-page-header">
         <div>
           <h1>基础配置</h1>
-          <p>维护桌面端运行所需的基础参数。</p>
+          <p>维护 Luminode 桌面端运行所需的基础参数。</p>
         </div>
       </div>
 

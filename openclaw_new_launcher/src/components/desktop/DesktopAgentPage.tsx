@@ -75,6 +75,7 @@ export const DesktopAgentPage: React.FC = () => {
   const [status, setStatus] = React.useState<DesktopAgentStatus | null>(null);
   const [config, setConfig] = React.useState<DesktopAgentConfig>(defaultConfig);
   const [busy, setBusy] = React.useState(false);
+  const [installing, setInstalling] = React.useState(false);
   const [screenshot, setScreenshot] = React.useState('');
 
   const refresh = React.useCallback(async () => {
@@ -129,6 +130,23 @@ export const DesktopAgentPage: React.FC = () => {
     });
   };
 
+  const installLuminode = async () => {
+    setInstalling(true);
+    try {
+      appendLog('[桌面 Agent] 开始安装 Luminode 组件\n');
+      await desktopAgentApi.installLayer('luminode-desktop');
+      appendLog('[桌面 Agent] Luminode 组件安装完成\n');
+      showToast('Luminode 组件已安装', 'success');
+      await refresh();
+    } catch (error: any) {
+      const message = error?.error || error;
+      appendLog(`[桌面 Agent] Luminode 组件安装失败：${message}\n`);
+      showToast(`Luminode 组件安装失败：${message}`, 'error');
+    } finally {
+      setInstalling(false);
+    }
+  };
+
   const captureScreenshot = async () => {
     const result = await run('截图测试', () => desktopAgentApi.screenshot());
     const shot = (result as any)?.screenshot;
@@ -147,8 +165,8 @@ export const DesktopAgentPage: React.FC = () => {
         <div className="flex items-start justify-between gap-6">
           <div>
             <div className="text-[11px] font-bold uppercase tracking-[0.32em] text-accent">LUMINODE</div>
-            <h1 className="mt-2 text-2xl font-black text-text">OpenClaw 桌面控制</h1>
-            <p className="mt-1 text-sm text-text-muted">启动器托管桌面代理，统一保管 token、策略和 Bridge 调用。</p>
+            <h1 className="mt-2 text-2xl font-black text-text">lumi 桌面控制台</h1>
+            <p className="mt-1 text-sm text-text-muted">启动器托管 Luminode 桌面代理，统一保管 token、策略和 Bridge 调用。</p>
           </div>
           <span className={`rounded-full border px-3 py-1.5 text-xs font-black ${tone.className}`}>{tone.label}</span>
         </div>
@@ -160,7 +178,7 @@ export const DesktopAgentPage: React.FC = () => {
             <h2 className="text-sm font-black text-text">连接配置</h2>
             <div className="mt-4 space-y-4">
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-text-muted">SightFlow 目录</span>
+                <span className="mb-1 block text-xs font-bold text-text-muted">Luminode 目录</span>
                 <Input
                   value={config.agentDir}
                   placeholder="留空时自动查找内置 agents/luminode-desktop"
@@ -274,6 +292,11 @@ export const DesktopAgentPage: React.FC = () => {
               <div>Token：{status?.config.tokenPreview || '未生成'}</div>
             </div>
             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+              {!status?.present && (
+                <Button variant="primary" onClick={installLuminode} disabled={busy || installing} className="md:col-span-2">
+                  {installing ? '安装中...' : '下载并安装 Luminode'}
+                </Button>
+              )}
               <Button variant="success" onClick={() => run('启动桌面代理', () => desktopAgentApi.start())} disabled={busy || status?.running}>启动</Button>
               <Button variant="danger" onClick={() => run('停止桌面代理', () => desktopAgentApi.stop())} disabled={busy || !status?.running}>停止</Button>
               <Button variant="quiet" onClick={() => run('健康检查', () => desktopAgentApi.health())} disabled={busy}>健康检查</Button>

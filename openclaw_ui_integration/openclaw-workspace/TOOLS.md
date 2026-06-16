@@ -44,7 +44,7 @@ npm run desktop:reply -- once --text "reply text" --confirmed
 ```
 
 Never request or print the raw token.
-If the Bridge returns `blocked=true`, stop and report the launcher policy reason. Do not bypass with direct SightFlow calls.
+If the Bridge returns `blocked=true`, stop and report the launcher policy reason. Do not bypass with direct Luminode calls.
 
 ## Image To Phone
 
