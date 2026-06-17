@@ -2,6 +2,38 @@
 
 本页记录启动器、运行时、在线包和完整离线包的交付口径。发布前以本页、GitHub Release 资产和本地 `release/` 目录三处互相校验。
 
+## v2.1.10 - 2026-06-18
+
+| 项 | 值 |
+| --- | --- |
+| 启动器版本 | `2.1.10` |
+| OpenClaw runtime | `2026.6.5` |
+| GitHub Release | [openclaw-runtime-layers v2.1.10](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.10) |
+| 在线便携包 | `LumiClaw-Online-v2.1.10.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.10-2026.06.18-full-offline.zip` |
+| 安装器更新包 | `LumiClaw-Setup-v2.1.10.exe` |
+
+### 交付资产
+
+| 资产 | 体积 | SHA256 |
+| --- | ---: | --- |
+| `LumiClaw-Online-v2.1.10.zip` | `60,858,439 bytes` | `63129A38CFA5ED4C2850CFFA26E31CE30059F386B4D93113F3C4DFA00E3B0358` |
+| `OpenClaw-Portable-v2.1.10-2026.06.18-full-offline.zip` | `394,950,114 bytes` | `61750A41CA757ECE8719539794787ECA26FD34B207B087AEA1CD4FF8F0290E48` |
+| `LumiClaw-Setup-v2.1.10.exe` | `28,452,751 bytes` | `8BEF1D0C187E094F62E9AEB9670DD543CC6CA953D62A879A3A4A63512E706BF8` |
+
+### 本次更新
+
+1. 修复窗口「最小化 / 最大化 / 关闭」按钮：顶栏改为固定吸顶，页面下滑后这三个按钮依然在原位、可点击。
+2. 其余延续 v2.1.9 的小白化改版；运行时层复用 v2.1.8（未变更）。
+
+### 发布验证
+
+| 检查 | 状态 |
+| --- | --- |
+| 安装器线上回读 sha256 | 已通过（== `launcher.json`） |
+| `launcher.json` 回读 | 已通过（v2.1.8 / v2.1.9 / v2.1.10 通道均指向 2.1.10） |
+| 官网下载链接 | 已更新到 2.1.10（自托管） |
+
 ## v2.1.9 - 2026-06-16
 
 | 项 | 值 |
