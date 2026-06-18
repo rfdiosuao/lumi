@@ -47,6 +47,20 @@ function Invoke-Step {
     Write-Host "OK: $Name" -ForegroundColor Green
 }
 
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
 if (-not $SkipSourceText) {
     Invoke-Step "Source text guard" {
         & powershell -ExecutionPolicy Bypass -File $VerifySourceTextScript
@@ -68,11 +82,11 @@ if (-not $SkipFrontend) {
         Push-Location $LauncherDir
         try {
             if (Test-Path -LiteralPath "package-lock.json") {
-                npm ci
+                Invoke-Native npm ci
             } else {
-                npm install
+                Invoke-Native npm install
             }
-            npm run build
+            Invoke-Native npm run build
         } finally {
             Pop-Location
         }
@@ -83,7 +97,7 @@ if (-not $SkipRust) {
     Invoke-Step "Rust cargo check" {
         Push-Location $TauriDir
         try {
-            cargo check
+            Invoke-Native cargo check
         } finally {
             Pop-Location
         }
@@ -100,7 +114,7 @@ if (-not $SkipPython) {
             if (Test-Path -LiteralPath "python/api") {
                 $files += Get-ChildItem -LiteralPath "python/api" -Filter "*.py" | ForEach-Object { $_.FullName }
             }
-            python -m py_compile @files
+            Invoke-Native python -m py_compile @files
         } finally {
             Pop-Location
         }
@@ -111,7 +125,7 @@ if (-not $SkipDistSelftest) {
     $distSelftest = Join-Path $LauncherDir "scripts\dist\dist-selftest.mjs"
     if (Test-Path -LiteralPath $distSelftest) {
         Invoke-Step "Distribution layer self-test" {
-            & node $distSelftest
+            Invoke-Native node $distSelftest
         }
     }
 }
@@ -120,7 +134,7 @@ if (-not $SkipLicenseServer -and (Test-Path -LiteralPath (Join-Path $LicenseServ
     Invoke-Step "Python license server compile" {
         Push-Location $LicenseServerDir
         try {
-            python -m py_compile server.py
+            Invoke-Native python -m py_compile server.py
         } finally {
             Pop-Location
         }
@@ -136,7 +150,7 @@ if (-not $SkipLicenseServer -and (Test-Path -LiteralPath (Join-Path $LicenseServ
         Invoke-Step "License server flow tests" {
             Push-Location $Root
             try {
-                python -m unittest discover -s license_server/tests -p "test_*.py" -v
+                Invoke-Native python -m unittest discover -s license_server/tests -p "test_*.py" -v
             } finally {
                 Pop-Location
             }

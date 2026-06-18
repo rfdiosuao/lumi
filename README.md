@@ -8,8 +8,8 @@
 >
 > English: OpenClaw Launcher is a delivery-ready AI automation workbench that packages the OpenClaw runtime, desktop launcher, phone control, desktop RPA, IM connectors, image/video workflows, and license delivery into a product-ready desktop distribution.
 
-Current launcher version: `v2.0.6`
-Bundled OpenClaw runtime target: `2026.6.1`
+Current launcher version: `v2.1.11`
+Bundled OpenClaw runtime target: `2026.6.5`
 
 Repository: [github.com/rfdiosuao/lumi](https://github.com/rfdiosuao/lumi)
 
@@ -27,7 +27,7 @@ OpenClaw Launcher 不是一个演示壳,而是一套把 AI Agent 能力交付到
 
 | 能力 | 说明 |
 | --- | --- |
-| OpenClaw 运行时封装 | 默认面向 OpenClaw `2026.6.1`,便携包内置 Node/OpenClaw 运行环境和 workspace 上下文 |
+| OpenClaw 运行时封装 | 默认面向 OpenClaw `2026.6.5`,便携包内置 Node/OpenClaw 运行环境和 workspace 上下文 |
 | 桌面启动器 | Tauri 2 + React 18 + TypeScript,提供统一控制台、日志、环境诊断、模型配置和授权入口 |
 | 手机控制 | 连接 APKClaw,支持截图、状态读取、任务执行、录屏、图片导入、平台发布和安全签名通道 |
 | 桌面控制 | 集成 Luminode 桌面 Agent 源码,支持窗口识别、截图理解、坐标点击、回复发送和 Provider Hub |
@@ -42,12 +42,12 @@ OpenClaw Launcher 不是一个演示壳,而是一套把 AI Agent 能力交付到
 
 ```text
 .
-├─ openclaw_new_launcher/                 # 主启动器: Tauri + React + Python Bridge
+├─ openclaw_ui_integration/                # 当前主启动器: Tauri + React + Python Bridge
 │  ├─ src/                                 # 前端功能页: 手机控制/桌面控制/图像/视频/Skills/授权/诊断
 │  ├─ python/                              # 本地 FastAPI Bridge 与服务层
 │  ├─ openclaw-workspace/                  # 交付给 OpenClaw 的 Agent 上下文、能力清单和 skills
 │  └─ src-tauri/                           # Tauri shell、授权校验、Bridge 进程管理
-├─ openclaw_ui_integration/                # UI integration / portable packaging variant
+├─ openclaw_new_launcher/                  # 旧版启动器目录,保留为 legacy,不再作为发布主线
 ├─ sightflow-desktop-agent-main/           # 桌面 RPA / Luminode 代理源码
 ├─ iosclaw/                                # iOS / macOS 适配源码
 ├─ license_server/                         # 在线授权服务与后台管理
@@ -63,7 +63,7 @@ OpenClaw Launcher 不是一个演示壳,而是一套把 AI Agent 能力交付到
 | 桌面壳 | Tauri 2, Rust, WebView2/WKWebView |
 | 前端 | React 18, TypeScript, Vite, Zustand, Tailwind CSS |
 | 本地服务 | Python 3.11, FastAPI-style Bridge, local HTTP API |
-| Agent 运行时 | Node.js, OpenClaw `2026.6.1`, local workspace skills |
+| Agent 运行时 | Node.js, OpenClaw `2026.6.5`, local workspace skills |
 | 手机侧 | APKClaw / Lumi secure channel |
 | 桌面 RPA | Electron/Vite/TypeScript Luminode agent, VLM-assisted UI control |
 | 发布 | GitHub Actions, Windows runner, macOS runner, SHA256 verification |
@@ -79,7 +79,7 @@ Windows 开发环境建议:
 - npm
 
 ```powershell
-cd openclaw_new_launcher
+cd openclaw_ui_integration
 npm ci
 npm run build
 npm run tauri dev
@@ -100,9 +100,9 @@ powershell -ExecutionPolicy Bypass -File scripts\ci-check.ps1 -SkipRust -SkipLic
 ### Windows 便携包
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 `
-  -Version 2.0.6 `
-  -PackageName OpenClaw-Portable-v2.0.6-YYYY.MM.DD `
+powershell -ExecutionPolicy Bypass -File openclaw_ui_integration\scripts\build-portable-ui-integration.ps1 `
+  -Version 2.1.11 `
+  -PackageName OpenClaw-Portable-v2.1.11-YYYY.MM.DD `
   -BrandProfile lumi
 ```
 
@@ -127,7 +127,7 @@ OpenClawFiles/
 macOS 构建必须在真实 macOS 环境或 GitHub Actions macOS runner 上执行:
 
 ```bash
-cd openclaw_new_launcher
+cd openclaw_ui_integration
 npm ci
 npm run build
 npm run tauri -- build --bundles app,dmg
@@ -151,7 +151,7 @@ macOS 不能复用 Windows 的 `node_modules`、`src-tauri/target`、Windows Nod
 gh workflow run release.yml `
   --repo rfdiosuao/lumi `
   --ref codex/phone-agent-hardguard `
-  -f tag_name=v2.0.6
+  -f tag_name=v2.1.11
 ```
 
 ### 安全交付底线
@@ -178,7 +178,7 @@ The goal is simple: a user should be able to download one release, install or un
 
 | Capability | Description |
 | --- | --- |
-| OpenClaw runtime packaging | Targets OpenClaw `2026.6.1` with bundled runtime dependencies and workspace context |
+| OpenClaw runtime packaging | Targets OpenClaw `2026.6.5` with bundled runtime dependencies and workspace context |
 | Desktop launcher | Tauri 2 + React 18 + TypeScript console for services, logs, settings, diagnostics, and licensing |
 | Phone automation | APKClaw integration for screenshots, device state, task execution, recording, media import, and publishing |
 | Desktop RPA | Luminode desktop agent source with VLM-assisted layout detection and click/reply automation |
@@ -221,7 +221,7 @@ User
 ### Development
 
 ```powershell
-cd openclaw_new_launcher
+cd openclaw_ui_integration
 npm ci
 npm run build
 npm run tauri dev
@@ -247,7 +247,7 @@ The main release workflow builds and publishes:
 gh workflow run release.yml `
   --repo rfdiosuao/lumi `
   --ref codex/phone-agent-hardguard `
-  -f tag_name=v2.0.6
+  -f tag_name=v2.1.11
 ```
 
 ### Audience

@@ -54,7 +54,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: openclaw_new_launcher/package-lock.json
+          cache-dependency-path: openclaw_ui_integration/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -72,14 +72,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            openclaw_new_launcher/src-tauri/target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_new_launcher/src-tauri/Cargo.lock') }}
+            openclaw_ui_integration/src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_ui_integration/src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-release-
             ${{ runner.os }}-cargo-
 
       - name: Install frontend dependencies
-        working-directory: openclaw_new_launcher
+        working-directory: openclaw_ui_integration
         run: npm ci
 
       - name: Verify source text
@@ -94,15 +94,15 @@ jobs:
         run: powershell -ExecutionPolicy Bypass -File scripts\download-webview2-runtime.ps1
 
       - name: Build frontend
-        working-directory: openclaw_new_launcher
+        working-directory: openclaw_ui_integration
         run: npm run build
 
       - name: Check Rust
-        working-directory: openclaw_new_launcher/src-tauri
+        working-directory: openclaw_ui_integration/src-tauri
         run: cargo check
 
       - name: Build Tauri bundles
-        working-directory: openclaw_new_launcher
+        working-directory: openclaw_ui_integration
         run: npm run tauri -- build
 
       - name: Prepare portable seed
@@ -164,7 +164,7 @@ jobs:
           PHONE_AGENT_APK_URL: ${{ inputs.phone_agent_apk_url || vars.PHONE_AGENT_APK_URL || '' }}
           PHONE_AGENT_APK_SHA256: ${{ vars.PHONE_AGENT_APK_SHA256 || '' }}
         run: |
-          $apkPath = Join-Path $PWD "openclaw_new_launcher\AgentPhone_latest.apk"
+          $apkPath = Join-Path $PWD "openclaw_ui_integration\AgentPhone_latest.apk"
           if (-not [string]::IsNullOrWhiteSpace($env:PHONE_AGENT_APK_URL)) {
             Write-Host "Downloading AgentPhone_latest.apk from configured URL..."
             Invoke-WebRequest -Uri $env:PHONE_AGENT_APK_URL -OutFile $apkPath
@@ -194,7 +194,7 @@ jobs:
 
           $args = @(
             "-ExecutionPolicy", "Bypass",
-            "-File", "scripts\build-portable.ps1",
+            "-File", "openclaw_ui_integration\scripts\build-portable-ui-integration.ps1",
             "-Version", $version,
             "-PackageName", $packageName,
             "-SeedPortableDir", $env:PORTABLE_SEED_DIR,
@@ -215,7 +215,7 @@ jobs:
           $artifactDir = Join-Path $PWD "ci_artifacts"
           New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 
-          $bundleDir = Join-Path $PWD "openclaw_new_launcher\src-tauri\target\release\bundle"
+          $bundleDir = Join-Path $PWD "openclaw_ui_integration\src-tauri\target\release\bundle"
           if (-not (Test-Path -LiteralPath $bundleDir)) {
             throw "Tauri bundle output not found: $bundleDir"
           }
@@ -323,7 +323,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: openclaw_new_launcher/package-lock.json
+          cache-dependency-path: openclaw_ui_integration/package-lock.json
 
       - name: Setup Rust
         run: |
@@ -336,21 +336,21 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            openclaw_new_launcher/src-tauri/target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_new_launcher/src-tauri/Cargo.lock') }}
+            openclaw_ui_integration/src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_ui_integration/src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-release-
             ${{ runner.os }}-cargo-
 
       - name: Install frontend dependencies
-        working-directory: openclaw_new_launcher
+        working-directory: openclaw_ui_integration
         run: npm ci
 
       - name: Verify version consistency
         env:
           RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
         run: |
-          version="$(node -p "require('./openclaw_new_launcher/package.json').version")"
+          version="$(node -p "require('./openclaw_ui_integration/package.json').version")"
           expected="v${version}"
           if [ "$RELEASE_TAG" != "$expected" ]; then
             echo "Release tag mismatch: $RELEASE_TAG, expected $expected"
@@ -359,23 +359,23 @@ jobs:
           echo "Version consistency check passed: $version"
 
       - name: Build frontend
-        working-directory: openclaw_new_launcher
+        working-directory: openclaw_ui_integration
         run: npm run build
 
       - name: Check Rust
-        working-directory: openclaw_new_launcher/src-tauri
+        working-directory: openclaw_ui_integration/src-tauri
         run: cargo check
 
       - name: Build macOS bundles
-        working-directory: openclaw_new_launcher
+        working-directory: openclaw_ui_integration
         run: npm run tauri -- build --bundles app,dmg
 
       - name: Collect macOS release assets
         run: |
           set -euo pipefail
           artifact_dir="$PWD/ci_artifacts"
-          bundle_dir="$PWD/openclaw_new_launcher/src-tauri/target/release/bundle"
-          version="$(node -p "require('./openclaw_new_launcher/package.json').version")"
+          bundle_dir="$PWD/openclaw_ui_integration/src-tauri/target/release/bundle"
+          version="$(node -p "require('./openclaw_ui_integration/package.json').version")"
           mkdir -p "$artifact_dir"
 
           dmg_path="$(find "$bundle_dir" -type f -name "*.dmg" | head -n 1 || true)"

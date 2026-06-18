@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag, for example v2.0.6-openclaw-6.1-tools-stability"
+        description: "Release tag, for example v2.1.11"
         required: true
-        default: "v2.0.6-openclaw-6.1-tools-stability"
+        default: "v2.1.11"
         type: string
       openclaw_version:
         description: "OpenClaw npm version. Use latest to resolve npm latest at build time."
         required: true
-        default: "2026.6.1"
+        default: "2026.6.5"
         type: string
       package_kind:
         description: "Assets to build"
