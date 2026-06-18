@@ -7,21 +7,22 @@
 | 项 | 当前值 |
 | --- | --- |
 | 启动器包 | `openclaw_ui_integration` |
-| package 版本 | `2.1.11` |
+| package 版本 | `2.1.12` |
 | Tauri 版本 | `2.11.0` |
 | Rust edition | `2021` |
 | Node 版本 | CI 使用 `22` |
 | Python 版本 | CI 使用 `3.11` |
 | OpenClaw runtime | 当前交付包使用 `2026.6.5` |
-| Runtime layers Release | [rfdiosuao/openclaw-runtime-layers v2.1.11](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.11) |
+| Runtime layers Release | [rfdiosuao/openclaw-runtime-layers v2.1.12](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.12) |
+| 运行时层国内镜像 | [gitee.com/rfdiosuao/lumi-claw `dist-v2.1.8`](https://gitee.com/rfdiosuao/lumi-claw/releases/tag/dist-v2.1.8) + `lumiu.heang.top/dist/` |
 
-## v2.1.11 资产清单
+## v2.1.12 资产清单
 
 | 资产 | 用途 | SHA256 |
 | --- | --- | --- |
-| `LumiClaw-Online-v2.1.11.zip` | 小于 100MB 的在线便携包 | `1ACCE34A33ADBD4060C2142DE707115AFD48837044F370E9F4D1E33161FE7359` |
-| `OpenClaw-Portable-v2.1.11-2026.06.18-full-offline.zip` | 完整离线包 | `9E07F45FC3A802B6102ABE02DDBA0A527022B6B73A0BEDBAE853F659D60B9FEE` |
-| `LumiClaw-Setup-v2.1.11.exe` | 启动器自更新安装器 | `EF9D2C3A02007C5007C2E99ABC13ADD8A7A8D2F1674897C0C0565B645FEBA5E0` |
+| `LumiClaw-Online-v2.1.12.zip` | 小于 100MB 的在线便携包 | `D8C84E854D16DDC93567C1FC2FBBD55668561FD8806833031A4C8170FFE18F4F` |
+| `OpenClaw-Portable-v2.1.12-2026.06.18-full-offline.zip` | 完整离线包 | `01244F6EFF50D24389FD6788E95D6BBEE35C1B184F24F1183912398035C487FE` |
+| `LumiClaw-Setup-v2.1.12.exe` | 启动器自更新安装器 | `83E6F9D6B5443D25D70F7579F6A8CD9A665960D1C6CEAACCA8E095EEB0659C36` |
 
 运行时分层资产：
 

@@ -6,9 +6,9 @@
 
 ## 当前启动器版本是多少
 
-当前交付口径是 `openclaw_ui_integration` 版本 `2.1.11`。最新完整离线包和在线包使用 OpenClaw runtime `2026.6.5`。
+当前交付口径是 `openclaw_ui_integration` 版本 `2.1.12`。最新完整离线包和在线包使用 OpenClaw runtime `2026.6.5`。
 
-发布资产在 [openclaw-runtime-layers v2.1.11](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.11)。
+发布资产在 [openclaw-runtime-layers v2.1.12](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.12)。在线包运行时组件优先从 Gitee 国内镜像下载（`gitee.com/rfdiosuao/lumi-claw`），GitHub 兜底。
 
 ## 为什么有时显示 Mock 预览
 
