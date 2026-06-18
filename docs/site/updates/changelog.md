@@ -2,6 +2,42 @@
 
 本页记录启动器、运行时、在线包和完整离线包的交付口径。发布前以本页、GitHub Release 资产和本地 `release/` 目录三处互相校验。
 
+## v2.1.11 - 2026-06-18
+
+| 项 | 值 |
+| --- | --- |
+| 启动器版本 | `2.1.11` |
+| OpenClaw runtime | `2026.6.5` |
+| GitHub Release | [openclaw-runtime-layers v2.1.11](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.11) |
+| 在线便携包 | `LumiClaw-Online-v2.1.11.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.11-2026.06.18-full-offline.zip` |
+| 安装器更新包 | `LumiClaw-Setup-v2.1.11.exe` |
+
+### 交付资产
+
+| 资产 | 体积 | SHA256 |
+| --- | ---: | --- |
+| `LumiClaw-Online-v2.1.11.zip` | `19,405,508 bytes` | `1ACCE34A33ADBD4060C2142DE707115AFD48837044F370E9F4D1E33161FE7359` |
+| `OpenClaw-Portable-v2.1.11-2026.06.18-full-offline.zip` | `353,497,759 bytes` | `9E07F45FC3A802B6102ABE02DDBA0A527022B6B73A0BEDBAE853F659D60B9FEE` |
+| `LumiClaw-Setup-v2.1.11.exe` | `13,068,718 bytes` | `EF9D2C3A02007C5007C2E99ABC13ADD8A7A8D2F1674897C0C0565B645FEBA5E0` |
+
+### 本次更新
+
+1. 安装过程不再弹出黑色终端窗口；定时任务运行时也全程后台静默（taskkill/PowerShell/node/tasklist 均隐藏窗口）。
+2. 安装器加单实例锁（`CreateMutexW`），双击不再打开两个安装窗口。
+3. 在线 / 离线包不再内置 APKClaw 安装包（手机端改用二维码扫码下载），包体更小。
+4. 官网下载按钮修复「一次点击下载两次」。
+5. 运行时层复用 v2.1.8（未变更）。
+
+### 发布验证
+
+| 检查 | 状态 |
+| --- | --- |
+| 安装器线上回读 sha256 | 已通过（== `launcher.json`） |
+| `launcher.json` 回读 | 已通过（v2.1.8 / v2.1.9 / v2.1.10 / v2.1.11 通道均指向 2.1.11） |
+| 在线包不含 APK | 已通过（0 个 `.apk` 条目） |
+| 官网下载链接 | 已更新到 2.1.11（自托管） |
+
 ## v2.1.10 - 2026-06-18
 
 | 项 | 值 |

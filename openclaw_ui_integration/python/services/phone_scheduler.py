@@ -263,6 +263,7 @@ class PhoneAutomationScheduler:
                 text=True,
                 capture_output=True,
                 timeout=900,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             if completed.returncode == 0:
                 self.append_log("[PhoneScheduler] queue drain completed\n")
@@ -390,6 +391,7 @@ class PhoneAutomationScheduler:
                     text=True,
                     capture_output=True,
                     timeout=3,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 return completed.returncode == 0 and str(pid) in (completed.stdout or "")
             except Exception:

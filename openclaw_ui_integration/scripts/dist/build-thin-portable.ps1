@@ -26,7 +26,9 @@ param(
         "OpenClawFiles\node",
         "OpenClawFiles\node_modules",
         "OpenClawFiles\_up_\python-runtime",
-        "OpenClawFiles\agents\luminode-desktop"
+        "OpenClawFiles\agents\luminode-desktop",
+        # APKClaw is distributed via QR link now — don't ship the ~100MB APK in the package.
+        "OpenClawFiles\releases\agent-phone"
     )
 )
 
