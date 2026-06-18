@@ -135,6 +135,7 @@ release/
 !openclaw_new_launcher/src/assets/*.png
 !openclaw_new_launcher/data/themes/**/*.png
 !openclaw_new_launcher/src-tauri/icons/**/*.png
+!openclaw_ui_integration/data/themes/**/*.png
 !sightflow-desktop-agent-main/**/build/
 !sightflow-desktop-agent-main/**/build/**
 !sightflow-desktop-agent-main/**/*.png
