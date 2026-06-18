@@ -265,7 +265,8 @@ class OpenClawProcessService:
         checks.append(self._portable_integrity_check())
         checks.append(self._security_software_block_check())
         checks.append(self._runtime_context_check())
-        checks.append(self._phone_agent_apk_check())
+        # APKClaw is distributed via QR link now and no longer bundled, so the
+        # "APK missing" diagnostic would always warn — drop it.
         checks.append(self._member_gateway_check())
         checks.append(self._core_service_snapshot_check())
 

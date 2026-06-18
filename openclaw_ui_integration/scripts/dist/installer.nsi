@@ -75,13 +75,28 @@ BrandingText "${BRAND} ${APPVERSION}"
 ; Stop the launcher AND its child processes (the bundled node gateway + python
 ; bridge run from $INSTDIR). If they keep running they lock OpenClawFiles, which
 ; is why an uninstall used to leave that folder behind.
+; Use nsExec::Exec (CreateProcess with CREATE_NO_WINDOW) instead of ExecWait so
+; the taskkill / PowerShell helpers run hidden — no black console flashes during
+; install / self-update / uninstall. Pop the exit code to keep the stack balanced.
 !macro KillInstallProcesses
-  ExecWait 'taskkill /IM OpenClaw.exe /F' $0
-  ExecWait `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith('$INSTDIR', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"` $0
+  nsExec::Exec 'taskkill /IM OpenClaw.exe /F'
+  Pop $0
+  nsExec::Exec `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith('$INSTDIR', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
+  Pop $0
   Sleep 800
 !macroend
 
 Section "Install"
+  ; Single-instance guard: a double-click in Explorer can fire two installer
+  ; processes; without a mutex both show a wizard ("opens twice"). 183 =
+  ; ERROR_ALREADY_EXISTS — second instance exits cleanly.
+  System::Call 'kernel32::CreateMutexW(i 0, i 1, w "OpenClaw_Setup_Mutex") i .r0 ?e'
+  Pop $1
+  IntCmp $1 183 0 mutex_ok mutex_ok
+    MessageBox MB_OK|MB_ICONEXCLAMATION "安装程序已在运行，请勿重复启动。"
+    Quit
+  mutex_ok:
+
   ; Stop running launcher + children so files can be overwritten (self-update).
   !insertmacro KillInstallProcesses
   SetOutPath "$INSTDIR"
