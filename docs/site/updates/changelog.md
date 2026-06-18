@@ -2,6 +2,44 @@
 
 本页记录启动器、运行时、在线包和完整离线包的交付口径。发布前以本页、GitHub Release 资产和本地 `release/` 目录三处互相校验。
 
+## v2.1.12 - 2026-06-18
+
+| 项 | 值 |
+| --- | --- |
+| 启动器版本 | `2.1.12` |
+| OpenClaw runtime | `2026.6.5` |
+| GitHub Release | [openclaw-runtime-layers v2.1.12](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.12) |
+| 在线便携包 | `LumiClaw-Online-v2.1.12.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.12-2026.06.18-full-offline.zip` |
+| 安装器更新包 | `LumiClaw-Setup-v2.1.12.exe` |
+
+### 交付资产
+
+| 资产 | 体积 | SHA256 |
+| --- | ---: | --- |
+| `LumiClaw-Online-v2.1.12.zip` | `21,256,120 bytes` | `D8C84E854D16DDC93567C1FC2FBBD55668561FD8806833031A4C8170FFE18F4F` |
+| `OpenClaw-Portable-v2.1.12-2026.06.18-full-offline.zip` | `357,262,683 bytes` | `01244F6EFF50D24389FD6788E95D6BBEE35C1B184F24F1183912398035C487FE` |
+| `LumiClaw-Setup-v2.1.12.exe` | `14,118,988 bytes` | `83E6F9D6B5443D25D70F7579F6A8CD9A665960D1C6CEAACCA8E095EEB0659C36` |
+
+### 本次更新
+
+1. 修复在线包「装好打不开 / 访问不了」：运行时组件原先只从 GitHub 下载、国内拉不到；现在改为 **Gitee 国内镜像优先**，GitHub 兜底。
+2. manifest 与运行时层三重源，按顺序自动切换：
+   - 主源：`https://gitee.com/rfdiosuao/lumi-claw/releases/download/dist-v2.1.8/`
+   - 自有镜像：`https://lumiu.heang.top/dist/`
+   - 兜底：ghproxy / `github.com/rfdiosuao/openclaw-runtime-layers`
+3. 延续 2.1.11：安装静默无黑窗、安装器单实例、不内置 APKClaw。
+
+### 发布验证
+
+| 检查 | 状态 |
+| --- | --- |
+| Gitee 镜像层 URL | 已通过（node/openclaw-deps/python-runtime/manifest 均 200） |
+| 自有镜像 lumiu.heang.top/dist | 已通过（4 层 + manifest 均 200） |
+| 安装器线上 sha256 | 已通过（== `launcher.json`） |
+| 自更新通道 | v2.1.8–v2.1.12 均指向 2.1.12 |
+| 官网下载链接 | 已更新到 2.1.12（自托管） |
+
 ## v2.1.11 - 2026-06-18
 
 | 项 | 值 |
