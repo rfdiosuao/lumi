@@ -84,7 +84,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const toasts = usePreviewStore((state) => state.toasts);
   const dismissToast = usePreviewStore((state) => state.dismissToast);
   const clearToasts = usePreviewStore((state) => state.clearToasts);
-  const studioBusy = usePreviewStore((state) => state.studio.busyKind);
+  const studioImageBusy = usePreviewStore((state) => state.studio.imageBusy);
+  const studioVideoBusy = usePreviewStore((state) => state.studio.videoBusy);
+  const studioBusyLabel = studioImageBusy && studioVideoBusy
+    ? '图像/视频生成中'
+    : studioVideoBusy
+      ? '视频生成中'
+      : studioImageBusy
+        ? '图像生成中'
+        : '';
 
   const handleWindowAction = React.useCallback(async (action: 'minimize' | 'toggleMaximize' | 'close') => {
     if (!isTauriRuntime()) return;
@@ -169,7 +177,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <div className="topbar-title" data-tauri-drag-region>{ROUTE_COPY[route]?.title || 'OpenClaw preview'}</div>
           </div>
           <div className="topbar-right">
-            {studioBusy ? (
+            {studioBusyLabel ? (
               <Button
                 type="button"
                 variant="quiet"
@@ -178,7 +186,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 onClick={() => navigate('studio')}
                 title="正在生成，点此查看进度"
               >
-                {studioBusy === 'video' ? '视频生成中' : '图像生成中'}
+                {studioBusyLabel}
               </Button>
             ) : null}
             <Button type="button" variant="quiet" icon={BellOff} onClick={clearToasts}>
