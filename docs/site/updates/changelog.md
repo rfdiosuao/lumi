@@ -2,6 +2,39 @@
 
 本页记录启动器、运行时、在线包和完整离线包的交付口径。发布前以本页、GitHub Release 资产和本地 `release/` 目录三处互相校验。
 
+## v2.1.13 - 2026-06-19
+
+| 项 | 值 |
+| --- | --- |
+| 启动器版本 | `2.1.13` |
+| OpenClaw runtime | `2026.6.5` |
+| GitHub Release | [openclaw-runtime-layers v2.1.13](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.13) |
+| 在线便携包 | `LumiClaw-Online-v2.1.13.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.13-2026.06.19-full-offline.zip` |
+| 安装器更新包 | `LumiClaw-Setup-v2.1.13.exe` |
+
+### 交付资产
+
+| 资产 | 体积 | SHA256 |
+| --- | ---: | --- |
+| `LumiClaw-Online-v2.1.13.zip` | `24,023,660 bytes` | `CF114388E750C8C1BC9CD2EB9C8553BFB02CBC695B995DC2F864F85346CFBE32` |
+| `OpenClaw-Portable-v2.1.13-2026.06.19-full-offline.zip` | `360,030,223 bytes` | `5FAF8C767F2865D4D4DBDE595F37B2697ABC2B7F07EDAE47B77DE973680C7F1B` |
+| `LumiClaw-Setup-v2.1.13.exe` | `16,909,921 bytes` | `3B6F3A5F8EB9847DF38281D19A60CF53A43C5AE53A6D84C4C32CCC032FEAFC9A` |
+
+### 本次更新
+
+1. **重大修复：启动器窗口「localhost 拒绝连接 / 无法访问」打不开。** 2.1.9–2.1.12 因构建方式问题（误用 `cargo build` 而非 `tauri build`），生产包的窗口去加载开发地址 `localhost:1420`，导致装好后窗口无法加载。2.1.13 用 `tauri build` 正确构建并校验，窗口正常加载内嵌界面。**强烈建议所有用户更新。**
+2. 运行时下载源 GitHub 优先、自有镜像 / Gitee 兜底；manifest 多源容错。
+
+### 发布验证
+
+| 检查 | 状态 |
+| --- | --- |
+| 构建产物不再连开发端口 :1420 | 已通过（netstat 无 SYN_SENT） |
+| 安装器线上 sha256 | 已通过（== `launcher.json`） |
+| 自更新通道 | v2.1.8–v2.1.13 均指向 2.1.13 |
+| 官网下载链接 | 已更新到 2.1.13（在线包 + 离线包） |
+
 ## v2.1.12 - 2026-06-18
 
 | 项 | 值 |
