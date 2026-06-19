@@ -13,7 +13,6 @@ export interface PreviewSettings {
 }
 
 type StudioTab = 'image' | 'video';
-type StudioBusyKind = 'image' | 'video' | null;
 
 export interface StudioSessionState {
   tab: StudioTab;
@@ -32,7 +31,10 @@ export interface StudioSessionState {
   videoReferenceName: string;
   videoProgress: string;
   videoStartedAt: number;
-  busyKind: StudioBusyKind;
+  // Image and video generate independently, so each tracks its own busy flag
+  // (lets them run at the same time).
+  imageBusy: boolean;
+  videoBusy: boolean;
   activeVideoJob: any | null;
   selectedImage: ImageResult | null;
   selectedVideo: VideoResult | null;
@@ -84,7 +86,8 @@ const DEFAULT_STUDIO_SESSION: StudioSessionState = {
   videoReferenceName: '',
   videoProgress: '',
   videoStartedAt: 0,
-  busyKind: null,
+  imageBusy: false,
+  videoBusy: false,
   activeVideoJob: null,
   selectedImage: null,
   selectedVideo: null,

@@ -211,7 +211,8 @@ export function StudioPage() {
     videoReferenceName,
     videoProgress,
     videoStartedAt,
-    busyKind,
+    imageBusy,
+    videoBusy,
     activeVideoJob,
     selectedImage,
     selectedVideo,
@@ -221,8 +222,6 @@ export function StudioPage() {
   const imageReferenceInputRef = React.useRef<HTMLInputElement>(null);
   const videoReferenceInputRef = React.useRef<HTMLInputElement>(null);
   const activeVideoJobRef = React.useRef<ActiveVideoJob | null>(activeVideoJob);
-  const imageBusy = busyKind === 'image';
-  const videoBusy = busyKind === 'video';
   const [imageFailure, setImageFailure] = React.useState<FriendlyError | null>(null);
   const [videoFailure, setVideoFailure] = React.useState<FriendlyError | null>(null);
   const [imageTaskState, setImageTaskState] = React.useState<'idle' | 'success' | 'failed'>('idle');
@@ -346,12 +345,12 @@ export function StudioPage() {
     const stored = activeVideoJob || readActiveVideoJob();
     if (!stored?.jobId) return;
     if (VIDEO_JOB_POLLERS.has(stored.jobId)) {
-      updateStudio({ tab: 'video', activeVideoJob: stored, busyKind: 'video', videoProgress: stored.message || '正在生成视频' });
+      updateStudio({ tab: 'video', activeVideoJob: stored, videoBusy: true, videoProgress: stored.message || '正在生成视频' });
       return;
     }
     VIDEO_JOB_POLLERS.add(stored.jobId);
     activeVideoJobRef.current = stored;
-    updateStudio({ tab: 'video', activeVideoJob: stored, busyKind: 'video', videoProgress: stored.message || '正在恢复视频任务' });
+    updateStudio({ tab: 'video', activeVideoJob: stored, videoBusy: true, videoProgress: stored.message || '正在恢复视频任务' });
 
     let cancelled = false;
     const elapsedMs = Math.max(0, Date.now() - stored.startedAt);
@@ -384,7 +383,7 @@ export function StudioPage() {
       .finally(() => {
         if (cancelled) return;
         VIDEO_JOB_POLLERS.delete(stored.jobId);
-        updateStudio({ busyKind: null, videoProgress: '', videoStartedAt: 0 });
+        updateStudio({ videoBusy: false, videoProgress: '', videoStartedAt: 0 });
       });
 
     return () => {
@@ -406,7 +405,7 @@ export function StudioPage() {
     }
     setImageFailure(null);
     setImageTaskState('idle');
-    updateStudio({ busyKind: 'image', imageStartedAt: Date.now(), tab: 'image' });
+    updateStudio({ imageBusy: true, imageStartedAt: Date.now(), tab: 'image' });
     try {
       const result = await generateImage(settings, {
         baseUrl,
@@ -437,7 +436,7 @@ export function StudioPage() {
       setImageTaskState('failed');
       pushToast({ tone: 'danger', title: failure.title, detail: failure.hint, diagnostic: failure.diagnostic, logRoute: failure.logRoute });
     } finally {
-      updateStudio({ busyKind: null, imageStartedAt: 0 });
+      updateStudio({ imageBusy: false, imageStartedAt: 0 });
     }
   };
 
@@ -470,7 +469,7 @@ export function StudioPage() {
       imagePath: videoImagePath.trim() || undefined,
     };
     const videoStart = Date.now();
-    updateStudio({ busyKind: 'video', videoStartedAt: videoStart, videoProgress: '正在提交视频任务', tab: 'video' });
+    updateStudio({ videoBusy: true, videoStartedAt: videoStart, videoProgress: '正在提交视频任务', tab: 'video' });
     try {
       const result = await generateVideo(settings, payload, (job) => {
         const message = videoJobMessage(job);
@@ -502,7 +501,7 @@ export function StudioPage() {
       pushToast({ tone: 'danger', title: failure.title, detail: failure.hint, diagnostic: failure.diagnostic, logRoute: failure.logRoute });
     } finally {
       if (activeVideoJobRef.current?.jobId) VIDEO_JOB_POLLERS.delete(activeVideoJobRef.current.jobId);
-      updateStudio({ busyKind: null, videoProgress: '', videoStartedAt: 0 });
+      updateStudio({ videoBusy: false, videoProgress: '', videoStartedAt: 0 });
     }
   };
 
@@ -637,7 +636,7 @@ export function StudioPage() {
                   </div>
                 </Field>
                 <div className="button-row">
-                  <Button variant="primary" icon={ImagePlus} onClick={handleGenerateImage} disabled={Boolean(busyKind)}>生成图像</Button>
+                  <Button variant="primary" icon={ImagePlus} onClick={handleGenerateImage} disabled={imageBusy}>生成图像</Button>
                 </div>
                 <div className="upload-hint" role="status">
                   生成任务状态：{imageBusy ? '生成中…' : imageTaskState === 'success' ? '成功' : imageTaskState === 'failed' ? '失败' : '空闲'}
@@ -719,7 +718,7 @@ export function StudioPage() {
                   </div>
                 </Field>
                 <div className="button-row">
-                  <Button variant="primary" icon={Film} onClick={handleGenerateVideo} disabled={Boolean(busyKind)}>生成视频</Button>
+                  <Button variant="primary" icon={Film} onClick={handleGenerateVideo} disabled={videoBusy}>生成视频</Button>
                 </div>
                 <div className="upload-hint" role="status">
                   生成任务状态：{videoBusy ? (videoProgress || '排队中…') : videoTaskState === 'success' ? '成功' : videoTaskState === 'failed' ? '失败' : '空闲'}
