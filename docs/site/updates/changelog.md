@@ -2,6 +2,39 @@
 
 本页记录启动器、运行时、在线包和完整离线包的交付口径。发布前以本页、GitHub Release 资产和本地 `release/` 目录三处互相校验。
 
+## v2.1.14 - 2026-06-19
+
+| 项 | 值 |
+| --- | --- |
+| 启动器版本 | `2.1.14` |
+| OpenClaw runtime | `2026.6.5` |
+| GitHub Release | [openclaw-runtime-layers v2.1.14](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.14) |
+| 在线便携包 | `LumiClaw-Online-v2.1.14.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.14-2026.06.19-full-offline.zip` |
+| 安装器更新包 | `LumiClaw-Setup-v2.1.14.exe` |
+
+### 交付资产
+
+| 资产 | 体积 | SHA256 |
+| --- | ---: | --- |
+| `LumiClaw-Online-v2.1.14.zip` | `24,023,599 bytes` | `129E0FA4E1DC65590823E09F0BB21AAB89526C3850325713D64E30E857CA29F5` |
+| `OpenClaw-Portable-v2.1.14-2026.06.19-full-offline.zip` | `360,030,162 bytes` | `81D1429467620B89B8420E108452343C23F77DCFFDE9A288B39B08DE34A8D566` |
+| `LumiClaw-Setup-v2.1.14.exe` | `16,905,982 bytes` | `6BF1303E92356F065DCDC41A01CD990EC3B86DF4A193CD86DB5BCC34566DAD2C` |
+
+### 本次更新
+
+1. **图像与视频可以同时生成**：此前用单一「忙」状态把两个生成按钮绑死（一个在跑另一个就被禁用），现拆成独立的图像/视频忙状态，互不阻塞；顶栏角标可同时显示「图像/视频生成中」。
+2. 延续 2.1.13：修复启动器窗口「localhost 拒绝连接 / 装好打不开」、正确构建（tauri build）。
+
+### 发布验证
+
+| 检查 | 状态 |
+| --- | --- |
+| 构建产物不连开发端口 :1420 | 已通过 |
+| 安装器线上 sha256 | 已通过（== `launcher.json`） |
+| 自更新通道 | v2.1.8–v2.1.14 均指向 2.1.14 |
+| 官网下载（ghfast 加速） | 已更新到 2.1.14 |
+
 ## v2.1.13 - 2026-06-19
 
 | 项 | 值 |
