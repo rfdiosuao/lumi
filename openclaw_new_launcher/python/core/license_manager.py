@@ -277,7 +277,8 @@ class LicenseManager:
                 "expiresAt": str(source.get("leaseExpiresAt") or source.get("expiresAt") or source.get("expires") or "").strip(),
                 "quotas": source.get("quotas") if isinstance(source.get("quotas"), dict) else {},
                 "usage": source.get("usage") if isinstance(source.get("usage"), dict) else {},
-                "source": fallback_name,
+                "source": str(source.get("source") or fallback_name or "").strip(),
+                "managedBy": str(source.get("managedBy") or source.get("source") or "").strip(),
             }
 
         member_session = read_json(self.paths.member_session_file, None)

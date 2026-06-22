@@ -265,6 +265,45 @@ a {
   border-top: 1px solid var(--line);
 }
 
+.account-chip {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  text-align: left;
+}
+
+.account-chip:hover {
+  border-color: rgba(216, 189, 130, 0.34);
+  background: rgba(216, 189, 130, 0.08);
+}
+
+.account-chip-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-chip-label {
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-chip-meta {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .sidebar-foot-title {
   font-size: 12px;
   text-transform: none;
@@ -1254,6 +1293,13 @@ a {
 
 .quota-box strong {
   font-size: 20px;
+}
+
+.model-list-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .studio-layout {

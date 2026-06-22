@@ -379,6 +379,25 @@ function createDefaultState() {
         url: 'https://license.heang.top',
       },
     },
+    account: {
+      loggedIn: false,
+      source: '',
+      account: '',
+      memberId: '',
+      plan: '',
+      status: 'inactive',
+      baseUrl: 'https://api.heang.top',
+      gatewayBaseUrl: 'https://api.heang.top/v1',
+      tokenMasked: '',
+      models: {
+        text: [],
+        image: [],
+        video: [],
+      },
+      usage: {},
+      lastOnlineAt: '',
+      graceExpiresAt: '',
+    },
     update: {
       current: '2.0.6',
       latest: '2.1.0',
@@ -660,6 +679,92 @@ export async function mockBridgeRequest(path: string, method = 'GET', body?: Rec
   }
   if (route === '/api/member/refresh') return toBridgeMember(state);
   if (route === '/api/member/usage') return toBridgeMember(state);
+
+  if (route === '/api/account/current') return { account: clone(state.account) };
+  if (route === '/api/account/login') {
+    const username = toText(body?.username || body?.email, '').trim();
+    const password = toText(body?.password, '').trim();
+    const baseUrl = toText(body?.baseUrl, 'https://api.heang.top').replace(/\/+$/, '');
+    if (!username || !password) return { account: clone(state.account), error: '账号和密码不能为空' };
+    state.account = {
+      loggedIn: true,
+      source: 'newapi_account',
+      account: username,
+      memberId: `user-${username.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 18) || 'mock'}`,
+      plan: 'default',
+      status: 'active',
+      baseUrl,
+      gatewayBaseUrl: `${baseUrl}/v1`,
+      tokenMasked: 'sk-****MOCK',
+      models: {
+        text: ['gpt-4o-mini', 'doubao-seed-1-6'],
+        image: ['gpt-image-1'],
+        video: ['agnes-video-v2.0'],
+      },
+      usage: { quota: 100000, used: 1200 },
+      lastOnlineAt: nowIso(),
+      graceExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    state.member = {
+      ...state.member,
+      status: 'active',
+      memberId: state.account.memberId,
+      gatewayBaseUrl: state.account.gatewayBaseUrl,
+      gatewayToken: 'mock-newapi-token',
+    };
+    state.configFiles['data/.openclaw/agents/main/agent/auth-profiles.json'] = {
+      models: {
+        primary: 'member_gateway',
+        providers: {
+          member_gateway: {
+            title: 'Heang API',
+            type: 'openai-compatible',
+            baseUrl: state.account.gatewayBaseUrl,
+            apiKey: 'mock-newapi-token',
+            models: state.account.models.text.map((id: string) => ({ id })),
+            managedBy: 'newapi_account',
+          },
+        },
+      },
+    };
+    state.configFiles['imgapi_config.json'] = {
+      gatewayMode: 'member',
+      baseUrl: state.account.gatewayBaseUrl,
+      apiKey: 'mock-newapi-token',
+      model: state.account.models.image[0],
+      managedBy: 'newapi_account',
+    };
+    state.logs = `${state.logs}\n[预览] 中转站账号 ${username} 已登录并同步模型。`;
+    saveState(state);
+    return { account: clone(state.account), member: clone(state.member) };
+  }
+  if (route === '/api/account/sync') {
+    if (!state.account?.loggedIn) return { account: clone(state.account), error: '未登录' };
+    state.account.lastOnlineAt = nowIso();
+    state.logs = `${state.logs}\n[预览] 中转站账号模型已同步。`;
+    saveState(state);
+    return { account: clone(state.account), member: clone(state.member) };
+  }
+  if (route === '/api/account/logout') {
+    state.account = {
+      loggedIn: false,
+      source: '',
+      account: '',
+      memberId: '',
+      plan: '',
+      status: 'inactive',
+      baseUrl: 'https://api.heang.top',
+      gatewayBaseUrl: 'https://api.heang.top/v1',
+      tokenMasked: '',
+      models: { text: [], image: [], video: [] },
+      usage: {},
+      lastOnlineAt: '',
+      graceExpiresAt: '',
+    };
+    state.logs = `${state.logs}\n[预览] 中转站账号已退出。`;
+    saveState(state);
+    return { account: clone(state.account) };
+  }
 
   if (route === '/api/update/check') return toBridgeUpdate(state);
   if (route === '/api/update/do') {

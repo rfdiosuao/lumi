@@ -113,6 +113,26 @@ export interface GatewaySnapshot {
   mode: 'member' | 'manual' | 'unknown';
 }
 
+export interface AccountSnapshot {
+  loggedIn: boolean;
+  source: string;
+  account: string;
+  memberId?: string;
+  plan?: string;
+  status?: string;
+  baseUrl?: string;
+  gatewayBaseUrl?: string;
+  tokenMasked?: string;
+  models: {
+    text: string[];
+    image: string[];
+    video: string[];
+  };
+  usage: Record<string, unknown>;
+  lastOnlineAt?: string;
+  graceExpiresAt?: string;
+}
+
 export interface ImageResult {
   prompt: string;
   size: string;

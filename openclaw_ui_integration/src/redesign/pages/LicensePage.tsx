@@ -1,26 +1,51 @@
 import React from 'react';
-import { BadgeCheck, ExternalLink, RefreshCcw, ShieldCheck } from 'lucide-react';
-import { activateLicense, loadClientConfig, loadLicenseBundle, refreshMember, startProcess } from '../api/adapters';
-import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
+import { BadgeCheck, ExternalLink, LogIn, LogOut, RefreshCcw, ShieldCheck } from 'lucide-react';
+import {
+  activateLicense,
+  loadAccountSnapshot,
+  loadClientConfig,
+  loadLicenseBundle,
+  loginAccount,
+  logoutAccount,
+  refreshMember,
+  startProcess,
+  syncAccount,
+} from '../api/adapters';
+import { Button, Chip, EmptyState, Field, Input, InlineState, Panel, SectionHeader, StatTile, Tabs } from '../components/ui';
 import { translateLicenseError, type FriendlyError } from '../lib/errors';
 import { useAsync } from '../lib/useAsync';
 import { usePreviewStore } from '../store/appStore';
 
+type AuthMode = 'account' | 'license';
+
 export function LicensePage() {
   const settings = usePreviewStore((state) => state.settings);
   const pushToast = usePreviewStore((state) => state.pushToast);
+  const [mode, setMode] = React.useState<AuthMode>('account');
   const [licenseCode, setLicenseCode] = React.useState('');
+  const [accountName, setAccountName] = React.useState('');
+  const [accountPassword, setAccountPassword] = React.useState('');
+  const [accountBaseUrl, setAccountBaseUrl] = React.useState('https://api.heang.top');
+  const [accountApiToken, setAccountApiToken] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [activationError, setActivationError] = React.useState<FriendlyError | null>(null);
+  const [accountError, setAccountError] = React.useState('');
   const { data, loading, error, refresh } = useAsync(async () => {
-    const [bundle, clientConfig] = await Promise.all([loadLicenseBundle(settings), loadClientConfig(settings)]);
-    return { ...bundle, clientConfig: clientConfig.data };
+    const [bundle, clientConfig, account] = await Promise.all([
+      loadLicenseBundle(settings),
+      loadClientConfig(settings),
+      loadAccountSnapshot(settings),
+    ]);
+    return { ...bundle, clientConfig: clientConfig.data, account };
   }, [settings], { cacheKey: 'license' });
 
   const license = data?.license;
   const member = data?.member;
   const gateway = data?.gateway;
   const cardSite = data?.clientConfig?.cardSite;
+  const account = data?.account;
+  const accountLoggedIn = Boolean(account?.loggedIn);
+  const accountModelTotal = (account?.models.text.length || 0) + (account?.models.image.length || 0) + (account?.models.video.length || 0);
 
   const handleActivateLicense = async () => {
     if (!licenseCode.trim()) {
@@ -33,13 +58,11 @@ export function LicensePage() {
       await activateLicense(settings, licenseCode.trim());
       pushToast({ tone: 'ok', title: '授权已激活', detail: licenseCode.trim() });
       refresh();
-      // 授权成功后自动拉起核心服务,免去用户再手动点一次「启动」。运行时层在
-      // 首启时已无条件下载,通常此刻已就绪;若仍在初始化则提示稍后手动启动。
       try {
         await startProcess(settings);
-        pushToast({ tone: 'ok', title: '核心服务启动中', detail: '授权已生效,正在拉起 OpenClaw 运行时。' });
+        pushToast({ tone: 'ok', title: '核心服务启动中', detail: '授权已生效，正在拉起 OpenClaw 运行时。' });
       } catch {
-        pushToast({ tone: 'warn', title: '已授权,服务待启动', detail: '运行时可能还在初始化,稍后可在「服务 / CLI」页手动启动。' });
+        pushToast({ tone: 'warn', title: '已授权，服务待启动', detail: '稍后可在「服务 / CLI」页手动启动。' });
       }
     } catch (err) {
       const friendly = translateLicenseError(err);
@@ -50,12 +73,76 @@ export function LicensePage() {
     }
   };
 
+  const handleAccountLogin = async () => {
+    if (!accountName.trim() || !accountPassword.trim()) {
+      setAccountError('请输入中转站账号和密码。');
+      return;
+    }
+    setBusy(true);
+    setAccountError('');
+    try {
+      await loginAccount(settings, {
+        username: accountName.trim(),
+        password: accountPassword,
+        baseUrl: accountBaseUrl.trim() || 'https://api.heang.top',
+        apiToken: accountApiToken.trim() || undefined,
+      });
+      setAccountPassword('');
+      setAccountApiToken('');
+      refresh();
+      pushToast({ tone: 'ok', title: '账号已登录', detail: '模型配置已同步到本机。' });
+      try {
+        await startProcess(settings);
+      } catch {
+        pushToast({ tone: 'warn', title: '账号已登录，服务待启动', detail: '核心服务稍后可在「服务 / CLI」页启动。' });
+      }
+    } catch (err) {
+      const message = errorMessage(err);
+      setAccountError(message);
+      pushToast({ tone: 'danger', title: '账号登录失败', detail: message, diagnostic: String(err), logRoute: 'license' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAccountSync = async () => {
+    setBusy(true);
+    setAccountError('');
+    try {
+      await syncAccount(settings);
+      refresh();
+      pushToast({ tone: 'ok', title: '模型已同步', detail: '已重新读取中转站模型列表和本机配置。' });
+    } catch (err) {
+      const message = errorMessage(err);
+      setAccountError(message);
+      pushToast({ tone: 'danger', title: '同步失败', detail: message, diagnostic: String(err), logRoute: 'license' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAccountLogout = async () => {
+    setBusy(true);
+    setAccountError('');
+    try {
+      await logoutAccount(settings);
+      refresh();
+      pushToast({ tone: 'ok', title: '账号已退出', detail: '已清理账号托管的本机网关配置。' });
+    } catch (err) {
+      const message = errorMessage(err);
+      setAccountError(message);
+      pushToast({ tone: 'danger', title: '退出失败', detail: message, diagnostic: String(err), logRoute: 'license' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleRefreshMember = async () => {
     setBusy(true);
     try {
       await refreshMember(settings);
-      pushToast({ tone: 'ok', title: '账号信息已刷新', detail: '当前账号与可用额度已重新读取。' });
       refresh();
+      pushToast({ tone: 'ok', title: '账号信息已刷新', detail: '当前账号与可用额度已重新读取。' });
     } catch (err) {
       const friendly = translateLicenseError(err);
       pushToast({ tone: 'danger', title: friendly.title, detail: friendly.hint, diagnostic: friendly.diagnostic, logRoute: friendly.logRoute });
@@ -64,8 +151,6 @@ export function LicensePage() {
     }
   };
 
-  // window.open is a no-op inside the Tauri webview — use the shell opener so the
-  // card site launches in the real browser, falling back to window.open in web preview.
   const openCardSite = async () => {
     if (!cardSite?.url) {
       pushToast({ tone: 'warn', title: '暂未提供获取授权入口', detail: '服务端 client-config 未返回 cardSite.url。' });
@@ -83,8 +168,8 @@ export function LicensePage() {
     <div className="page-grid">
       <section className="hero-band">
         <div className="hero-copy">
-          <div className="eyebrow">授权内测</div>
-          <h1>授权状态、当前账号和获取授权入口集中管理。</h1>
+          <div className="eyebrow">账号 / 授权</div>
+          <h1>登录中转站账号，同步可用模型。</h1>
         </div>
         <div className="hero-actions">
           <Button variant="primary" icon={RefreshCcw} onClick={refresh}>
@@ -97,126 +182,157 @@ export function LicensePage() {
       </section>
 
       <section className="stats-grid">
-        <StatTile label="授权" value={license?.authorized ? '已激活' : '未激活'} hint={license?.licensee || '暂无所有者'} tone={license?.authorized ? 'ok' : 'warn'} />
-        <StatTile label="当前账号" value={memberStatusLabel(member?.status)} hint={member?.memberId || '暂无账号'} tone={member?.status === 'active' ? 'ok' : 'warn'} />
-        <StatTile label="到期时间" value={license?.expires || member?.expiresAt || '暂无'} hint="授权与账号到期时间" tone={license?.authorized ? 'ok' : 'warn'} />
-        <StatTile label="获取授权" value={cardSite?.enabled ? '可获取' : '暂未开放'} hint={cardSite?.enabled ? '点击下方按钮获取授权码' : '请联系发卡方'} tone={cardSite?.enabled ? 'ok' : 'neutral'} />
+        <StatTile label="账号" value={accountLoggedIn ? '已登录' : '未登录'} hint={accountLoggedIn ? account?.account : '中转站账号'} tone={accountLoggedIn ? 'ok' : 'warn'} />
+        <StatTile label="模型" value={accountModelTotal || '暂无'} hint="文本 / 图像 / 视频" tone={accountModelTotal ? 'ok' : 'neutral'} />
+        <StatTile label="授权" value={license?.authorized ? '已激活' : '未激活'} hint={license?.licensee || '兼容旧授权码'} tone={license?.authorized ? 'ok' : 'warn'} />
+        <StatTile label="网关" value={account?.gatewayBaseUrl || gateway?.baseUrl || '暂无'} hint={account?.tokenMasked || gateway?.apiKeyMasked || '未同步'} tone={accountLoggedIn || gateway?.hasGateway ? 'ok' : 'neutral'} />
       </section>
 
       {loading ? (
-        <Panel className="panel-loading">正在读取授权信息...</Panel>
+        <Panel className="panel-loading">正在读取账号信息...</Panel>
       ) : error ? (
         <Panel className="panel-error">
-          <InlineState tone="danger" title="授权信息读取失败" description={error} />
+          <InlineState tone="danger" title="账号信息读取失败" description={error} />
         </Panel>
       ) : data ? (
         <section className="content-grid content-grid-license">
           <Panel className="surface-panel">
             <SectionHeader
-              eyebrow="授权"
-              title="当前授权"
+              eyebrow="登录"
+              title="接入方式"
+              action={
+                <Tabs
+                  value={mode}
+                  onChange={(value) => setMode(value as AuthMode)}
+                  items={[
+                    { key: 'account', label: '账号登录' },
+                    { key: 'license', label: '授权码' },
+                  ]}
+                />
+              }
             />
-            {license?.authorized ? (
+
+            {mode === 'account' ? (
               <div className="detail-stack">
-                <div className="detail-row"><span className="detail-label">所有者</span><span className="detail-value">{license.licensee}</span></div>
-                <div className="detail-row"><span className="detail-label">版本</span><span className="detail-value">{displayEdition(license.edition)}</span></div>
-                <div className="detail-row"><span className="detail-label">到期时间</span><span className="detail-value">{license.expires}</span></div>
-                <div className="detail-row"><span className="detail-label">能力</span><span className="detail-value">{license.features.join(' / ') || '暂无'}</span></div>
-                <details className="settings-details">
-                  <summary>高级信息</summary>
-                  <div className="detail-stack">
-                    <div className="detail-row"><span className="detail-label">安装 ID</span><span className="detail-value">{license.installId}</span></div>
-                    <div className="detail-row"><span className="detail-label">网关地址</span><span className="detail-value">{license.gatewayBaseUrl || '暂无'}</span></div>
-                  </div>
-                </details>
+                <Field label="中转站地址">
+                  <Input value={accountBaseUrl} onChange={(event) => setAccountBaseUrl(event.target.value)} placeholder="https://api.heang.top" />
+                </Field>
+                <Field label="账号">
+                  <Input value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="邮箱或用户名" autoComplete="username" />
+                </Field>
+                <Field label="密码">
+                  <Input value={accountPassword} onChange={(event) => setAccountPassword(event.target.value)} placeholder="中转站登录密码" type="password" autoComplete="current-password" />
+                </Field>
+                <Field label="API Token" hint="可选">
+                  <Input value={accountApiToken} onChange={(event) => setAccountApiToken(event.target.value)} placeholder="New API 已创建的 sk-..." type="password" autoComplete="off" />
+                </Field>
+                {accountError ? <InlineState tone="danger" title="账号操作失败" description={accountError} /> : null}
+                <div className="button-row">
+                  <Button variant="primary" icon={LogIn} onClick={handleAccountLogin} disabled={busy}>
+                    登录并同步
+                  </Button>
+                  <Button variant="secondary" icon={RefreshCcw} onClick={handleAccountSync} disabled={busy || !accountLoggedIn}>
+                    同步模型
+                  </Button>
+                  <Button variant="quiet" icon={LogOut} onClick={handleAccountLogout} disabled={busy || !accountLoggedIn}>
+                    退出
+                  </Button>
+                </div>
               </div>
             ) : (
-              <EmptyState title="暂无授权" description="在右侧输入授权码激活。" />
+              <div className="detail-stack">
+                <Field label="授权码" hint="OC-PRO-xxxx-xxxx">
+                  <Input value={licenseCode} onChange={(event) => setLicenseCode(event.target.value)} placeholder="OC-PRO-XXXX-XXXX-XXXX-XXXX" />
+                </Field>
+                {activationError ? <InlineState tone="danger" title={activationError.title} description={activationError.hint} /> : null}
+                <div className="button-row">
+                  <Button variant="primary" icon={BadgeCheck} onClick={handleActivateLicense} disabled={busy}>
+                    激活授权
+                  </Button>
+                  <Button variant="secondary" icon={ExternalLink} onClick={openCardSite} disabled={!cardSite?.enabled}>
+                    获取授权
+                  </Button>
+                </div>
+              </div>
             )}
-          </Panel>
-
-          <Panel className="surface-panel">
-            <SectionHeader
-              eyebrow="激活"
-              title="授权码"
-            />
-            <Field label="授权码" hint="OC-PRO-xxxx-xxxx">
-              <Input value={licenseCode} onChange={(event) => setLicenseCode(event.target.value)} placeholder="OC-PRO-XXXX-XXXX-XXXX-XXXX" />
-            </Field>
-            {activationError ? (
-              <InlineState tone="danger" title={activationError.title} description={activationError.hint} />
-            ) : null}
-            <div className="button-row">
-              <Button variant="primary" icon={BadgeCheck} onClick={handleActivateLicense} disabled={busy}>
-                激活授权
-              </Button>
-              <Button variant="secondary" icon={RefreshCcw} onClick={handleRefreshMember} disabled={busy}>
-                刷新状态
-              </Button>
-            </div>
           </Panel>
 
           <Panel className="surface-panel">
             <SectionHeader
               eyebrow="账号"
               title="当前账号"
-              subtitle="展示当前账号状态、到期时间和可用额度。"
+              action={<Chip tone={accountLoggedIn ? 'ok' : 'neutral'}>{accountLoggedIn ? '已登录' : '未登录'}</Chip>}
             />
-            {member ? (
+            {accountLoggedIn ? (
               <div className="detail-stack">
-                <div className="detail-row"><span className="detail-label">状态</span><span className="detail-value">{memberStatusLabel(member.status)}</span></div>
-                <div className="detail-row"><span className="detail-label">到期时间</span><span className="detail-value">{member.expiresAt || '暂无'}</span></div>
-                <div className="detail-row"><span className="detail-label">续期时间</span><span className="detail-value">{member.renewAt || '暂无'}</span></div>
-                <div className="quota-grid">
-                  <div className="quota-box"><span>对话额度</span><strong>{member.usage.llm}</strong></div>
-                  <div className="quota-box"><span>图像额度</span><strong>{member.usage.image}</strong></div>
-                  <div className="quota-box"><span>视频额度</span><strong>{member.usage.video}</strong></div>
-                  <div className="quota-box"><span>当前月份</span><strong>{member.usage.month}</strong></div>
-                </div>
-                <details className="settings-details">
-                  <summary>高级信息</summary>
-                  <div className="detail-stack">
-                    <div className="detail-row"><span className="detail-label">租约 ID</span><span className="detail-value">{member.leaseId || '暂无'}</span></div>
-                    <div className="detail-row"><span className="detail-label">账号 ID</span><span className="detail-value">{member.memberId || '暂无'}</span></div>
-                  </div>
-                </details>
+                <div className="detail-row"><span className="detail-label">账号</span><span className="detail-value">{account?.account}</span></div>
+                <div className="detail-row"><span className="detail-label">用户 ID</span><span className="detail-value">{account?.memberId || '暂无'}</span></div>
+                <div className="detail-row"><span className="detail-label">网关</span><span className="detail-value">{account?.gatewayBaseUrl || '暂无'}</span></div>
+                <div className="detail-row"><span className="detail-label">Token</span><span className="detail-value">{account?.tokenMasked || '暂无'}</span></div>
+                <div className="detail-row"><span className="detail-label">最后同步</span><span className="detail-value">{formatTime(account?.lastOnlineAt)}</span></div>
+                <div className="detail-row"><span className="detail-label">离线宽限</span><span className="detail-value">{formatTime(account?.graceExpiresAt)}</span></div>
               </div>
             ) : (
-              <EmptyState title="暂无账号数据" description="刷新状态后会显示当前账号与可用额度；如果后端返回空数据，页面会保持空状态。" />
+              <EmptyState title="未登录" description="登录后会同步中转站的 API Token 与模型列表。" />
             )}
           </Panel>
 
           <Panel className="surface-panel">
-            <SectionHeader
-              eyebrow="获取授权"
-              title="获取授权"
-              action={<Chip tone={cardSite?.enabled ? 'ok' : 'neutral'}>{cardSite?.enabled ? '可获取' : '暂未开放'}</Chip>}
-            />
-            {cardSite?.enabled && cardSite.url ? (
-              <div className="button-row">
-                <Button variant="quiet" icon={ExternalLink} onClick={openCardSite}>
-                  {cardSite.label || '获取授权'}
-                </Button>
+            <SectionHeader eyebrow="模型" title="同步结果" />
+            <div className="quota-grid">
+              <div className="quota-box"><span>文本模型</span><strong>{account?.models.text.length || 0}</strong></div>
+              <div className="quota-box"><span>图像模型</span><strong>{account?.models.image.length || 0}</strong></div>
+              <div className="quota-box"><span>视频模型</span><strong>{account?.models.video.length || 0}</strong></div>
+              <div className="quota-box"><span>来源</span><strong>{account?.source || '手动'}</strong></div>
+            </div>
+            <div className="model-list-block">
+              <ModelLine label="文本" values={account?.models.text} />
+              <ModelLine label="图像" values={account?.models.image} />
+              <ModelLine label="视频" values={account?.models.video} />
+            </div>
+            {account?.models.video.length ? (
+              <InlineState tone="warn" title="视频模型已识别" description="已记录模型列表；视频生成通道会继续使用当前兼容配置，避免误切到不兼容接口。" />
+            ) : null}
+          </Panel>
+
+          <Panel className="surface-panel">
+            <SectionHeader eyebrow="兼容" title="旧授权状态" />
+            {license?.authorized || member?.status === 'active' ? (
+              <div className="detail-stack">
+                <div className="detail-row"><span className="detail-label">授权</span><span className="detail-value">{license?.authorized ? displayEdition(license.edition) : '暂无'}</span></div>
+                <div className="detail-row"><span className="detail-label">账号状态</span><span className="detail-value">{memberStatusLabel(member?.status)}</span></div>
+                <div className="detail-row"><span className="detail-label">到期时间</span><span className="detail-value">{license?.expires || member?.expiresAt || '暂无'}</span></div>
+                <div className="detail-row"><span className="detail-label">网关地址</span><span className="detail-value">{gateway?.baseUrl || '暂无'}</span></div>
               </div>
             ) : (
-              <EmptyState title="暂未开放获取授权" description="服务端暂未提供获取授权入口，请联系发卡方获取授权码。" />
+              <EmptyState title="暂无旧授权" description="旧授权码通道仍可用于兼容部署。" />
             )}
-            <details className="settings-details">
-              <summary>高级信息</summary>
-              <div className="detail-stack">
-                <div className="detail-row"><span className="detail-label">主地址</span><span className="detail-value">{gateway?.baseUrl || '暂无'}</span></div>
-                <div className="detail-row"><span className="detail-label">图像地址</span><span className="detail-value">{gateway?.imageBaseUrl || '暂无'}</span></div>
-                <div className="detail-row"><span className="detail-label">视频地址</span><span className="detail-value">{gateway?.videoBaseUrl || '暂无'}</span></div>
-                <div className="detail-row"><span className="detail-label">模型密钥</span><span className="detail-value">{gateway?.apiKeyMasked || '暂无'}</span></div>
-                <div className="detail-row"><span className="detail-label">图像密钥</span><span className="detail-value">{gateway?.imageApiKeyMasked || '暂无'}</span></div>
-                <div className="detail-row"><span className="detail-label">视频密钥</span><span className="detail-value">{gateway?.videoApiKeyMasked || '暂无'}</span></div>
-              </div>
-            </details>
           </Panel>
         </section>
       ) : null}
     </div>
   );
+}
+
+function ModelLine({ label, values = [] }: { label: string; values?: string[] }) {
+  return (
+    <div className="detail-row">
+      <span className="detail-label">{label}</span>
+      <span className="detail-value">{values.length ? values.slice(0, 6).join(' / ') : '暂无'}</span>
+    </div>
+  );
+}
+
+function errorMessage(err: unknown) {
+  if (err instanceof Error) return err.message || '请求失败';
+  return String(err || '请求失败');
+}
+
+function formatTime(value?: string) {
+  if (!value) return '暂无';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
 function displayEdition(value?: string) {

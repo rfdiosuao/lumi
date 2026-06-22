@@ -19,6 +19,7 @@ import {
   Sparkles,
   SquareTerminal,
   Webhook,
+  UserRound,
   X,
 } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -26,7 +27,9 @@ import { Button, cx } from './ui';
 import { usePreviewStore, type PreviewSettings } from '../store/appStore';
 import type { RouteKey, ToastMessage } from '../types';
 import { isTauriRuntime, resolveBridgeBaseUrl } from '../api/client';
+import { loadAccountSnapshot } from '../api/adapters';
 import { copyText } from '../lib/clipboard';
+import type { AccountSnapshot } from '../types';
 
 const NAV_ITEMS: Array<{ key: RouteKey; label: string; desc: string; icon: typeof Gauge }> = [
   { key: 'dashboard', label: '启动器', desc: '开机总览', icon: Gauge },
@@ -93,6 +96,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       : studioImageBusy
         ? '图像生成中'
         : '';
+  const [account, setAccount] = React.useState<AccountSnapshot | null>(null);
 
   const handleWindowAction = React.useCallback(async (action: 'minimize' | 'toggleMaximize' | 'close') => {
     if (!isTauriRuntime()) return;
@@ -115,6 +119,20 @@ export function Shell({ children }: { children: React.ReactNode }) {
       );
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [toasts, dismissToast]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    loadAccountSnapshot(settings)
+      .then((snapshot) => {
+        if (!cancelled) setAccount(snapshot);
+      })
+      .catch(() => {
+        if (!cancelled) setAccount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings, route]);
 
   return (
     <div className={cx('app-shell', sidebarCollapsed && 'app-shell-sidebar-collapsed')}>
@@ -161,11 +179,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="sidebar-foot">
-          <div className="sidebar-foot-title">当前位置</div>
-          <div className="sidebar-foot-value">{ROUTE_LABELS[route] || route}</div>
+          <button type="button" className="account-chip" onClick={() => navigate('license')}>
+            <UserRound size={15} />
+            <span className="account-chip-main">
+              <span className="account-chip-label">{account?.loggedIn ? account.account : '账号未登录'}</span>
+              <span className="account-chip-meta">
+                {account?.loggedIn ? `${account.models.text.length + account.models.image.length + account.models.video.length} 个模型` : '点击登录中转站'}
+              </span>
+            </span>
+          </button>
           <div className="sidebar-foot-note">
-            服务连接 {getBridgeLabel(settings)}<br />
-            手机 {settings.phoneBaseUrl ? '已绑定' : '未绑定'}
+            当前 {ROUTE_LABELS[route] || route}<br />
+            服务 {getBridgeLabel(settings)} · 手机 {settings.phoneBaseUrl ? '已绑定' : '未绑定'}
           </div>
         </div>
       </aside>

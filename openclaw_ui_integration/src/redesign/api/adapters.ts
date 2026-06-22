@@ -3,6 +3,7 @@ import type {
   DiagnosticsSnapshot,
   GatewaySnapshot,
   ImageResult,
+  AccountSnapshot,
   LicenseSnapshot,
   MemberSnapshot,
   PromptTemplate,
@@ -333,6 +334,30 @@ function normalizeGateway(raw: any, source: DataSource): GatewaySnapshot {
     imageModel: pickText(gateway.imageModel, gateway.gatewayImageModel, 'gpt-image-2'),
     videoModel: pickText(gateway.videoModel, gateway.gatewayVideoModel, 'happyhorse-1.0-t2v'),
     mode: gateway.memberMode === true || gateway.gatewayMode === 'member' ? 'member' : gateway.baseUrl ? 'manual' : 'unknown',
+  };
+}
+
+function normalizeAccountSnapshot(raw: any): AccountSnapshot {
+  const account = raw?.account || raw || {};
+  const models = account?.models || {};
+  return {
+    loggedIn: Boolean(account.loggedIn),
+    source: pickText(account.source, ''),
+    account: pickText(account.account, ''),
+    memberId: pickText(account.memberId, ''),
+    plan: pickText(account.plan, ''),
+    status: pickText(account.status, account.loggedIn ? 'active' : 'inactive'),
+    baseUrl: pickText(account.baseUrl, ''),
+    gatewayBaseUrl: pickText(account.gatewayBaseUrl, ''),
+    tokenMasked: pickText(account.tokenMasked, ''),
+    models: {
+      text: cleanArray(models.text),
+      image: cleanArray(models.image),
+      video: cleanArray(models.video),
+    },
+    usage: account.usage && typeof account.usage === 'object' ? account.usage : {},
+    lastOnlineAt: pickText(account.lastOnlineAt, ''),
+    graceExpiresAt: pickText(account.graceExpiresAt, ''),
   };
 }
 
@@ -966,6 +991,36 @@ export async function activateMember(settings: PreviewSettings, code: string) {
 
 export async function refreshMember(settings: PreviewSettings) {
   return requestBridgeData(settings, '/api/member/refresh', 'POST', {});
+}
+
+export async function loadAccountSnapshot(settings: PreviewSettings): Promise<AccountSnapshot> {
+  const response = await requestBridgeData<any>(settings, '/api/account/current');
+  return normalizeAccountSnapshot(response.data);
+}
+
+export async function loginAccount(settings: PreviewSettings, payload: {
+  username: string;
+  password: string;
+  baseUrl?: string;
+  apiToken?: string;
+}): Promise<AccountSnapshot> {
+  const response = await requestBridgeData<any>(settings, '/api/account/login', 'POST', {
+    username: payload.username,
+    password: payload.password,
+    baseUrl: payload.baseUrl,
+    apiToken: payload.apiToken,
+  });
+  return normalizeAccountSnapshot(response.data);
+}
+
+export async function syncAccount(settings: PreviewSettings): Promise<AccountSnapshot> {
+  const response = await requestBridgeData<any>(settings, '/api/account/sync', 'POST', {});
+  return normalizeAccountSnapshot(response.data);
+}
+
+export async function logoutAccount(settings: PreviewSettings): Promise<AccountSnapshot> {
+  const response = await requestBridgeData<any>(settings, '/api/account/logout', 'POST', {});
+  return normalizeAccountSnapshot(response.data);
 }
 
 export async function loadClientConfig(settings: PreviewSettings) {
