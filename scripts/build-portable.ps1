@@ -560,6 +560,7 @@ function Write-CleanRuntimeConfig {
 
     "{}" | Set-Content -LiteralPath (Join-Path $PackageDir "imgapi_config.json") -Encoding UTF8
     "{}" | Set-Content -LiteralPath (Join-Path $PackageDir "video_config.json") -Encoding UTF8
+    "{}" | Set-Content -LiteralPath (Join-Path $PackageDir "videoapi_config.json") -Encoding UTF8
 
     $phoneAgentVersionInfo = Resolve-PhoneAgentVersionInfo
 
