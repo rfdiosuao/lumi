@@ -38,8 +38,28 @@ struct LauncherManifest {
     url: String,
     #[serde(default)]
     sha256: String,
-    #[serde(default)]
+    // Tolerant: accept `notes` as a plain string OR an array of strings (joined
+    // with newlines) OR missing. A past bug published array `notes` while this
+    // expected a string, which broke self-update parsing for everyone.
+    #[serde(default, deserialize_with = "deserialize_notes")]
     notes: String,
+}
+
+fn deserialize_notes<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Notes {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<Notes>::deserialize(deserializer)? {
+        Some(Notes::One(text)) => text,
+        Some(Notes::Many(items)) => items.join("\n"),
+        None => String::new(),
+    })
 }
 
 fn update_url() -> Option<String> {
