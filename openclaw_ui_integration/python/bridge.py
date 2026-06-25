@@ -26,6 +26,7 @@ from core.paths import AppPaths
 from core.storage import read_json, write_json, update_json
 from core.license_manager import LicenseManager
 from core.member_manager import MemberManager
+from core.newapi_account_manager import NewApiAccountManager
 from core.theme_manager import ThemeManager
 from services.process import OpenClawProcessService
 from services.desktop_agent import DesktopAgentService
@@ -62,6 +63,7 @@ def ui_call(func, *args) -> None:
 # Create service instances
 _license_mgr: LicenseManager | None = None
 _member_mgr: MemberManager | None = None
+_newapi_account_mgr: NewApiAccountManager | None = None
 _process_svc: OpenClawProcessService | None = None
 _desktop_agent_svc: DesktopAgentService | None = None
 _updater: OpenClawUpdater | None = None
@@ -93,6 +95,12 @@ def _get_member_mgr() -> MemberManager:
     if _member_mgr is None:
         _member_mgr = MemberManager(paths)
     return _member_mgr
+
+def _get_newapi_account_mgr() -> NewApiAccountManager:
+    global _newapi_account_mgr
+    if _newapi_account_mgr is None:
+        _newapi_account_mgr = NewApiAccountManager(paths, append_log)
+    return _newapi_account_mgr
 
 def _get_process_svc() -> OpenClawProcessService:
     global _process_svc
@@ -743,6 +751,7 @@ def _build_fastapi_context():
         get_job_mgr=_get_job_mgr,
         get_license_mgr=_get_license_mgr,
         get_member_mgr=_get_member_mgr,
+        get_newapi_account_mgr=_get_newapi_account_mgr,
         get_process_svc=_get_process_svc,
         get_phone_scheduler=_get_phone_scheduler,
         get_skill_svc=_get_skill_svc,

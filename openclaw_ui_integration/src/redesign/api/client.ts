@@ -20,6 +20,12 @@ function parseJson(text: string): any {
   }
 }
 
+function throwIfBridgeError(payload: any, fallback = 'bridge_request_failed'): void {
+  if (payload && typeof payload === 'object' && typeof payload.error === 'string') {
+    throw new Error(payload.error || fallback);
+  }
+}
+
 let tauriCorePromise: Promise<typeof import('@tauri-apps/api/core')> | null = null;
 
 async function getTauriInvoke() {
@@ -136,7 +142,9 @@ export async function bridgeRequest<T = unknown>(
         method,
         body: body ? JSON.stringify(body) : null,
       });
-      return parseJson(String(payload)) as T;
+      const parsed = parseJson(String(payload));
+      throwIfBridgeError(parsed);
+      return parsed as T;
     } catch (error) {
       if (!baseUrl) throw error;
     }
@@ -161,9 +169,7 @@ export async function bridgeRequest<T = unknown>(
     const message = typeof payload?.error === 'string' ? payload.error : `http_${response.status}`;
     throw new Error(message);
   }
-  if (payload && typeof payload === 'object' && typeof payload.error === 'string') {
-    throw new Error(payload.error);
-  }
+  throwIfBridgeError(payload);
   return payload as T;
 }
 

@@ -1,6 +1,41 @@
 # 更新日志
 
 本页记录启动器、运行时、在线包和完整离线包的交付口径。发布前以本页、GitHub Release 资产和本地 `release/` 目录三处互相校验。
+## v2.1.18 - 2026-06-26
+
+| 项 | 值 |
+| --- | --- |
+| 启动器版本 | `2.1.18` |
+| OpenClaw runtime | `2026.6.5` |
+| GitHub Release | [openclaw-runtime-layers v2.1.18](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.18) |
+| 在线便携包 | `LumiClaw-Online-v2.1.18.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.18-2026.06.26-full-offline.zip` |
+| 安装器更新包 | `LumiClaw-Setup-v2.1.18.exe` |
+
+### 交付资产
+
+| 资产 | 体积 | SHA256 |
+| --- | ---: | --- |
+| `LumiClaw-Online-v2.1.18.zip` | `19,436,519 bytes` | `D9C8DE983CA3EBE36F3D87E06C43753A111EE7D28A70A629D54A040EDBF64C64` |
+| `OpenClaw-Portable-v2.1.18-2026.06.26-full-offline.zip` | `359,184,919 bytes` | `E1C402EC1F3FB5652F8540F2144DBBF7AB92A4B3208DF393E648002A0A727A1D` |
+| `LumiClaw-Setup-v2.1.18.exe` | `13,092,406 bytes` | `698F867859B00FCCA744D2B4BE3DF68313ACF7DD010859BAFC51277775E6EED1` |
+
+### 本次更新
+
+1. 修复中转站登录点击无响应：正式包补齐账号路由与 NewAPI manager，前端不再吞掉桥接 `{ error }` 响应。
+2. 授权码模式继续保留，与账号登录双入口并行，作为 NewAPI 异常时的回滚路径。
+3. 在线包内置多源运行时 manifest：自有镜像、GitHub、ghproxy 依次兜底。
+
+### 发布验证
+
+| 检查 | 状态 |
+| --- | --- |
+| `python -m py_compile` | 已通过 |
+| `npm run build` | 已通过 |
+| 账号路由 smoke | 已通过：`current/login/sync/logout` 已注册 |
+| 完整离线包验包和 runtime smoke | 已通过 |
+| 在线便携包重层剥离 | 已通过，包体 18.5MB |
+| 自更新通道 notes 为字符串 | 已通过 |
 
 ## v2.1.14 - 2026-06-19
 
