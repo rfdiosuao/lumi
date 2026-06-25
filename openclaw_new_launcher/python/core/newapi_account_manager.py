@@ -107,8 +107,11 @@ def _extract_account_name(*payloads: Any) -> str:
 
 
 def _extract_api_key(payload: Any) -> str:
-    if isinstance(payload, str) and payload.strip().startswith("sk-"):
-        return payload.strip()
+    if isinstance(payload, str):
+        text = payload.strip()
+        if text.startswith("sk-"):
+            return text
+        return ""
     if isinstance(payload, list):
         for item in payload:
             token = _extract_api_key(item)
@@ -117,14 +120,67 @@ def _extract_api_key(payload: Any) -> str:
         return ""
     if not isinstance(payload, dict):
         return ""
-    for key in ("key", "token", "value", "api_key", "apiKey", "access_token"):
+    for key in ("key", "value", "api_key", "apiKey"):
         value = payload.get(key)
-        if isinstance(value, str) and value.strip().startswith("sk-"):
-            return value.strip()
-    for key in ("data", "token", "result"):
+        if isinstance(value, str):
+            text = value.strip()
+            if len(text) >= 8 and "*" not in text:
+                return text
+    for key in ("token", "access_token"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("sk-") or (len(text) >= 8 and "*" not in text and isinstance(payload.get("name"), str)):
+                return text
+    for key in ("data", "token", "result", "items", "tokens", "rows", "list"):
         token = _extract_api_key(payload.get(key))
         if token:
             return token
+    return ""
+
+
+def _token_quota_value(item: dict[str, Any]) -> int:
+    try:
+        return int(item.get("remain_quota") or item.get("remainQuota") or item.get("quota") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _token_is_usable(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    token = _extract_api_key(item)
+    if not token:
+        return False
+    status = str(item.get("status") or "1")
+    if status not in ("1", "true", "active"):
+        return False
+    return item.get("unlimited_quota") is True or item.get("unlimitedQuota") is True or _token_quota_value(item) > 0
+
+
+def _extract_best_api_key(payload: Any, preferred_name: str = "") -> str:
+    items = _candidate_items(payload)
+    if not items:
+        return _extract_api_key(payload)
+
+    preferred = []
+    usable = []
+    fallback = []
+    for item in items:
+        token = _extract_api_key(item)
+        if not token:
+            continue
+        if preferred_name and isinstance(item, dict) and str(item.get("name") or "") == preferred_name:
+            preferred.append(item)
+        if _token_is_usable(item):
+            usable.append(item)
+        fallback.append(item)
+
+    for group in (preferred, usable, fallback):
+        for item in group:
+            token = _extract_api_key(item)
+            if token:
+                return token
     return ""
 
 
@@ -148,7 +204,7 @@ def _looks_like_image_model(model_id: str) -> bool:
 
 def _looks_like_video_model(model_id: str) -> bool:
     text = model_id.lower()
-    markers = ("video", "veo", "sora", "seedance", "kling", "wan", "hailuo", "runway", "pika", "luma", "agnes", "happyhorse")
+    markers = ("video", "veo", "sora", "seedance", "kling", "wan", "hailuo", "runway", "pika", "luma", "happyhorse")
     return any(marker in text for marker in markers)
 
 
@@ -235,6 +291,34 @@ class NewApiAccountManager:
             headers["New-Api-User"] = user_id
         return headers
 
+    def _request_launcher_token_bridge(
+        self,
+        opener: urllib.request.OpenerDirector,
+        base_url: str,
+        username: str,
+        password: str,
+    ) -> tuple[str, dict[str, Any]]:
+        payload = self._request_json(
+            opener,
+            f"{base_url}/api/openclaw/launcher-token",
+            method="POST",
+            body={"username": username, "password": password},
+            timeout=35,
+        )
+        data = _unwrap(payload)
+        token = _extract_best_api_key(payload)
+        if not token:
+            raise NewApiAccountError("launcher_token_bridge_no_key")
+        models = []
+        if isinstance(data, dict) and isinstance(data.get("models"), list):
+            models = [str(item).strip() for item in data.get("models") or [] if str(item).strip()]
+        return token, {
+            "source": _pick_text(data.get("source") if isinstance(data, dict) else "", "bridge"),
+            "tokenId": data.get("tokenId") if isinstance(data, dict) else None,
+            "tokenName": data.get("tokenName") if isinstance(data, dict) else "",
+            "models": models,
+        }
+
     def _create_launcher_token(
         self,
         opener: urllib.request.OpenerDirector,
@@ -243,7 +327,8 @@ class NewApiAccountManager:
     ) -> str:
         token_name = f"OpenClaw Launcher {int(time.time())}"
         attempts = [
-            {"name": token_name, "remain_quota": -1, "expired_time": -1, "unlimited_quota": False},
+            {"name": token_name, "remain_quota": 0, "expired_time": -1, "unlimited_quota": True},
+            {"name": token_name, "remain_quota": 500000, "expired_time": -1, "unlimited_quota": False},
             {"name": token_name, "expired_time": -1},
             {"name": token_name},
         ]
@@ -251,19 +336,52 @@ class NewApiAccountManager:
         for body in attempts:
             try:
                 payload = self._request_json(opener, f"{base_url}/api/token/", method="POST", body=body, headers=headers)
-                token = _extract_api_key(payload)
+                token = _extract_best_api_key(payload, token_name)
                 if token:
                     return token
-                errors.append("token_create_no_key")
+                created = _unwrap(payload)
+                if isinstance(created, dict) and created.get("success") is False:
+                    errors.append(_pick_text(created.get("message"), "token_create_failed"))
+                    continue
+                list_payload = self._request_json(opener, f"{base_url}/api/token/?p=0&page_size=100", headers=headers)
+                token = _extract_best_api_key(list_payload, token_name)
+                if token:
+                    return token
+                self._delete_created_tokens_by_name(opener, base_url, headers, token_name, list_payload)
+                raise NewApiAccountError("中转站已创建 Token，但接口只返回脱敏 key；请手动填入 API Token，或在服务端开放创建后返回完整 key")
             except NewApiAccountError as error:
-                errors.append(str(error))
+                message = str(error)
+                errors.append(message)
+                if "脱敏 key" in message:
+                    break
         raise NewApiAccountError("无法自动创建 API Token：" + "; ".join(errors[-3:]))
+
+    def _delete_created_tokens_by_name(
+        self,
+        opener: urllib.request.OpenerDirector,
+        base_url: str,
+        headers: dict[str, str],
+        token_name: str,
+        payload: dict[str, Any],
+    ) -> None:
+        for item in _candidate_items(payload):
+            if not isinstance(item, dict) or str(item.get("name") or "") != token_name:
+                continue
+            token_id = _pick_text(item.get("id"))
+            if not token_id:
+                continue
+            try:
+                self._request_json(opener, f"{base_url}/api/token/{token_id}", method="DELETE", headers=headers, timeout=10)
+            except NewApiAccountError:
+                pass
 
     def _read_or_create_api_token(
         self,
         opener: urllib.request.OpenerDirector,
         base_url: str,
         headers: dict[str, str],
+        username: str,
+        password: str,
         supplied_api_token: str,
     ) -> tuple[str, dict[str, Any]]:
         supplied_api_token = supplied_api_token.strip()
@@ -271,8 +389,13 @@ class NewApiAccountManager:
             return supplied_api_token, {"source": "supplied"}
 
         try:
+            return self._request_launcher_token_bridge(opener, base_url, username, password)
+        except NewApiAccountError as error:
+            self.append_log(f"[Account] launcher token bridge unavailable: {error}\n")
+
+        try:
             payload = self._request_json(opener, f"{base_url}/api/token/?p=0&page_size=100", headers=headers)
-            token = _extract_api_key(payload)
+            token = _extract_best_api_key(payload)
             if token:
                 return token, {"source": "existing", "raw": _candidate_items(payload)}
         except NewApiAccountError:
@@ -418,8 +541,10 @@ class NewApiAccountManager:
             user_id = _extract_user_id(self_payload, login_payload)
             headers = self._auth_headers(access_token, user_id)
 
-        api_token_value, token_meta = self._read_or_create_api_token(opener, base_url, headers, api_token)
-        models = self._fetch_models(opener, base_url, api_token_value, headers)
+        api_token_value, token_meta = self._read_or_create_api_token(opener, base_url, headers, username, password, api_token)
+        models = token_meta.get("models") if isinstance(token_meta.get("models"), list) else []
+        if not models:
+            models = self._fetch_models(opener, base_url, api_token_value, headers)
         session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
         self._write_session(session)
         self._sync_image_config(session)
