@@ -6,7 +6,7 @@
 | 项 | 值 |
 | --- | --- |
 | 启动器版本 | `2.1.19` |
-| OpenClaw runtime | `2026.6.5` |
+| OpenClaw runtime | `2026.6.10` |
 | GitHub Release | [openclaw-runtime-layers v2.1.19](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.19) |
 | 在线便携包 | `LumiClaw-Online-v2.1.19.zip` |
 | 完整离线包 | `OpenClaw-Portable-v2.1.19-2026.06.26-full-offline.zip` |

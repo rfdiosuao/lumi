@@ -12,7 +12,7 @@
 | Rust edition | `2021` |
 | Node 版本 | CI 使用 `22` |
 | Python 版本 | CI 使用 `3.11` |
-| OpenClaw runtime | 当前交付包使用 `2026.6.5` |
+| OpenClaw runtime | 当前交付包使用 `2026.6.10` |
 | Runtime layers Release | [rfdiosuao/openclaw-runtime-layers v2.1.19](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.19) |
 | 运行时层国内镜像 | [gitee.com/rfdiosuao/lumi-claw `dist-v2.1.8`](https://gitee.com/rfdiosuao/lumi-claw/releases/tag/dist-v2.1.8) + `lumiu.heang.top/dist/` |
 
@@ -58,7 +58,7 @@ Release workflow 的输入：
 | 输入 | 说明 |
 | --- | --- |
 | `release_tag` | GitHub Release tag |
-| `openclaw_version` | OpenClaw npm runtime 版本；当前交付口径是 `2026.6.5` |
+| `openclaw_version` | OpenClaw npm runtime 版本；当前交付口径是 `2026.6.10` |
 | `package_kind` | `all`、`source`、`windows-portable` |
 | `include_phone_agent_apk` | 是否附带手机 APK |
 

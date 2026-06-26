@@ -1,7 +1,7 @@
 param(
     [string]$Version = "",
     [string]$PackageName = "",
-    [string]$OpenClawRuntimeVersion = "2026.6.5",
+    [string]$OpenClawRuntimeVersion = "2026.6.10",
     [string]$SeedPortableDir = "",
     [string]$BrandProfile = "openclaw",
     [string]$DesktopAgentSourceRoot = "",
@@ -356,8 +356,8 @@ function Write-PortableRuntimePackageJson {
         }
         dependencies = [ordered]@{
             "@dingtalk-real-ai/dingtalk-connector" = "0.8.23"
-            "@larksuite/openclaw-lark" = "2026.5.20"
-            "@tencent-weixin/openclaw-weixin" = "2.4.4"
+            "@larksuite/openclaw-lark" = "2026.6.10"
+            "@tencent-weixin/openclaw-weixin" = "2.4.6"
             openclaw = $OpenClawRuntimeVersion
         }
     }
