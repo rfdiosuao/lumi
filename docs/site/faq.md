@@ -6,9 +6,9 @@
 
 ## 当前启动器版本是多少
 
-当前交付口径是 `openclaw_ui_integration` 版本 `2.1.18`。最新完整离线包和在线包使用 OpenClaw runtime `2026.6.5`。
+当前交付口径是 `openclaw_ui_integration` 版本 `2.1.19`。最新完整离线包和在线包使用 OpenClaw runtime `2026.6.5`。
 
-发布资产在 [openclaw-runtime-layers v2.1.18](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.18)。在线包运行时组件 GitHub 优先、自有镜像与 Gitee 兜底。
+发布资产在 [openclaw-runtime-layers v2.1.19](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.19)。在线包运行时组件 GitHub 优先、自有镜像与 Gitee 兜底。
 
 ## 为什么有时显示 Mock 预览
 
@@ -22,7 +22,7 @@ Mock 预览用于 UI 验收和文档截图，不代表真实核心服务已启�
 
 重新复制手机端 Token，删除旧设备，重新保存并验证。仍失败时检查手机和电脑时间、手机端版本、请求是否被代理改写。
 
-## 120 秒超时是否表示启动器异常
+## 600 秒超时是否表示启动器异常
 
 不一定。该提示表示某条手机任务没有按预期结束。建议检查锁屏、无障碍、截图和任务 prompt 是否过大，再拆成观察、判断、执行三步。
 

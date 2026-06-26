@@ -1,6 +1,42 @@
 # 更新日志
 
 本页记录启动器、运行时、在线包和完整离线包的交付口径。发布前以本页、GitHub Release 资产和本地 `release/` 目录三处互相校验。
+## v2.1.19 - 2026-06-26
+
+| 项 | 值 |
+| --- | --- |
+| 启动器版本 | `2.1.19` |
+| OpenClaw runtime | `2026.6.5` |
+| GitHub Release | [openclaw-runtime-layers v2.1.19](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.19) |
+| 在线便携包 | `LumiClaw-Online-v2.1.19.zip` |
+| 完整离线包 | `OpenClaw-Portable-v2.1.19-2026.06.26-full-offline.zip` |
+| 安装器更新包 | `LumiClaw-Setup-v2.1.19.exe` |
+
+### 交付资产
+
+| 资产 | 体积 | SHA256 |
+| --- | ---: | --- |
+| `LumiClaw-Online-v2.1.19.zip` | `22,208,909 bytes` | `F023FDA3BE43ED27892D17CACF75C4F98648941143D480ABAA421E58E38E6030` |
+| `OpenClaw-Portable-v2.1.19-2026.06.26-full-offline.zip` | `359,186,350 bytes` | `27499411921CD026D544B788BC850AC18237E6A6AC89D5FC43DF46EB49000132` |
+| `LumiClaw-Setup-v2.1.19.exe` | `15,882,892 bytes` | `B7D1F185F4546AD8A838B8DC1855E7161F8AD17EA3A7142B04C8AB62B09E264F` |
+
+### 本次更新
+
+1. 手机控制页恢复 APKClaw Agent 默认任务边界：`600s` 超时、`60` 轮预算。
+2. 修复新版 UI 此前显式传入 `180s / 18 rounds` 导致长流程提前截断的问题。
+3. 适配闲鱼自动化、广告等待、多步应用操作等需要更长执行窗口的手机任务。
+
+### 发布验证
+
+| 检查 | 状态 |
+| --- | --- |
+| `python -m py_compile` | 已通过 |
+| `npm run build` | 已通过 |
+| 完整离线包验包和 runtime smoke | 已通过 |
+| 在线便携包启动 | 已通过，窗口标题 `OpenClaw - AI Creative Console` |
+| 构建产物不连接开发端口 `:1420` | 已通过 |
+| 手机页生产 bundle | 已确认 `timeout=600`、`maxRounds=60` |
+
 ## v2.1.18 - 2026-06-26
 
 | 项 | 值 |

@@ -82,8 +82,8 @@ const PHONE_AGENTS_PATH = 'data/.openclaw/launcher/phone-agents.json';
 const TERMINAL_TASK_STATES = new Set(['success', 'error', 'cancelled', 'canceled']);
 const CORE_SNAPSHOT_TIMEOUT_MS = 7000;
 const EXTRA_SNAPSHOT_TIMEOUT_MS = 2200;
-const PHONE_AGENT_TASK_TIMEOUT_SEC = 180;
-const PHONE_AGENT_TASK_MAX_ROUNDS = 18;
+const PHONE_AGENT_TASK_TIMEOUT_SEC = 600;
+const PHONE_AGENT_TASK_MAX_ROUNDS = 60;
 const PHONE_AGENT_TASK_POLL_SECONDS = PHONE_AGENT_TASK_TIMEOUT_SEC + 20;
 const FLEET_CONCURRENCY = 2;
 

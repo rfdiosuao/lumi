@@ -1,6 +1,6 @@
 {
   "name": "openclaw-new-launcher",
-  "version": "2.1.16",
+  "version": "2.1.19",
   "private": true,
   "type": "module",
   "scripts": {
