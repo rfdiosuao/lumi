@@ -2,6 +2,7 @@ import React from 'react';
 import { BadgeCheck, ExternalLink, LogIn, LogOut, RefreshCcw, ShieldCheck } from 'lucide-react';
 import {
   activateLicense,
+  bindAccountTicket,
   loadAccountSnapshot,
   loadClientConfig,
   loadLicenseBundle,
@@ -27,6 +28,7 @@ export function LicensePage() {
   const [accountPassword, setAccountPassword] = React.useState('');
   const [accountBaseUrl, setAccountBaseUrl] = React.useState('https://api.heang.top');
   const [accountApiToken, setAccountApiToken] = React.useState('');
+  const [accountBindTicket, setAccountBindTicket] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [activationError, setActivationError] = React.useState<FriendlyError | null>(null);
   const [accountError, setAccountError] = React.useState('');
@@ -116,6 +118,35 @@ export function LicensePage() {
       const message = errorMessage(err);
       setAccountError(message);
       pushToast({ tone: 'danger', title: '同步失败', detail: message, diagnostic: String(err), logRoute: 'license' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAccountBindTicket = async () => {
+    if (!accountBindTicket.trim()) {
+      setAccountError('请输入网站绑定码。');
+      return;
+    }
+    setBusy(true);
+    setAccountError('');
+    try {
+      await bindAccountTicket(settings, {
+        ticket: accountBindTicket.trim(),
+        baseUrl: accountBaseUrl.trim() || 'https://api.heang.top',
+      });
+      setAccountBindTicket('');
+      refresh();
+      pushToast({ tone: 'ok', title: '网站账号已绑定', detail: '模型配置已同步到本机。' });
+      try {
+        await startProcess(settings);
+      } catch {
+        pushToast({ tone: 'warn', title: '账号已绑定，服务待启动', detail: '可在「服务 / CLI」页面手动启动。' });
+      }
+    } catch (err) {
+      const message = errorMessage(err);
+      setAccountError(message);
+      pushToast({ tone: 'danger', title: '网站绑定失败', detail: message, diagnostic: String(err), logRoute: 'license' });
     } finally {
       setBusy(false);
     }
@@ -226,10 +257,16 @@ export function LicensePage() {
                 <Field label="API Token" hint="可选">
                   <Input value={accountApiToken} onChange={(event) => setAccountApiToken(event.target.value)} placeholder="New API 已创建的 sk-..." type="password" autoComplete="off" />
                 </Field>
+                <Field label="网站绑定码" hint="可选">
+                  <Input value={accountBindTicket} onChange={(event) => setAccountBindTicket(event.target.value)} placeholder="ocb_..." autoComplete="off" />
+                </Field>
                 {accountError ? <InlineState tone="danger" title="账号操作失败" description={accountError} /> : null}
                 <div className="button-row">
                   <Button variant="primary" icon={LogIn} onClick={handleAccountLogin} disabled={busy}>
                     登录并同步
+                  </Button>
+                  <Button variant="secondary" icon={LogIn} onClick={handleAccountBindTicket} disabled={busy}>
+                    绑定网站账号
                   </Button>
                   <Button variant="secondary" icon={RefreshCcw} onClick={handleAccountSync} disabled={busy || !accountLoggedIn}>
                     同步模型

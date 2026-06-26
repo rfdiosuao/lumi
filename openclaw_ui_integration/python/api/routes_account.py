@@ -41,6 +41,29 @@ def register_account_routes(app, ctx) -> None:
         except NewApiAccountError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)
 
+    @app.post("/api/account/bind-ticket")
+    async def account_bind_ticket(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        ticket = str(body.get("ticket") or body.get("code") or "").strip()
+        base_url = str(body.get("baseUrl") or "").strip()
+        try:
+            session = ctx.get_newapi_account_mgr().bind_ticket(
+                ticket,
+                base_url=base_url,
+            )
+            try:
+                ctx.sync_openclaw_models_from_api_profiles()
+            except Exception as sync_error:
+                ctx.append_log(f"[Account] OpenClaw model sync failed after website bind: {sync_error}\n")
+            return ctx.fastapi_json({
+                "account": ctx.get_newapi_account_mgr().public_session(),
+                "member": session,
+            })
+        except NewApiAccountError as exc:
+            return ctx.fastapi_json({"error": str(exc)}, 400)
+
     @app.post("/api/account/sync")
     async def account_sync(request: Request):
         if error := ctx.auth_error(request):

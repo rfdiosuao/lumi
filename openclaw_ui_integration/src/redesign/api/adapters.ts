@@ -1013,6 +1013,17 @@ export async function loginAccount(settings: PreviewSettings, payload: {
   return normalizeAccountSnapshot(response.data);
 }
 
+export async function bindAccountTicket(settings: PreviewSettings, payload: {
+  ticket: string;
+  baseUrl?: string;
+}): Promise<AccountSnapshot> {
+  const response = await requestBridgeData<any>(settings, '/api/account/bind-ticket', 'POST', {
+    ticket: payload.ticket,
+    baseUrl: payload.baseUrl,
+  });
+  return normalizeAccountSnapshot(response.data);
+}
+
 export async function syncAccount(settings: PreviewSettings): Promise<AccountSnapshot> {
   const response = await requestBridgeData<any>(settings, '/api/account/sync', 'POST', {});
   return normalizeAccountSnapshot(response.data);

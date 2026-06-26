@@ -11,6 +11,7 @@ OpenAI-compatible gateway.
 from __future__ import annotations
 
 import http.cookiejar
+import hashlib
 import json
 import os
 import secrets
@@ -26,6 +27,88 @@ HOST = os.environ.get("OPENCLAW_NEWAPI_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("OPENCLAW_NEWAPI_BRIDGE_PORT", "3016"))
 NEWAPI_BASE = os.environ.get("OPENCLAW_NEWAPI_BASE", "http://127.0.0.1:3000").rstrip("/")
 DB_PATH = os.environ.get("OPENCLAW_NEWAPI_DB", "/mnt/data/new-api/one-api.db")
+BIND_DB_PATH = os.environ.get("OPENCLAW_BIND_DB", "/tmp/openclaw-bind-tickets.db")
+BIND_TICKET_TTL_SEC = int(os.environ.get("OPENCLAW_BIND_TICKET_TTL_SEC", "600"))
+BIND_PAGE_HTML = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenClaw 网站绑定</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #f8fafc; }
+    main { width: min(460px, calc(100vw - 32px)); border: 1px solid rgba(148, 163, 184, .35); border-radius: 18px; background: rgba(15, 23, 42, .92); box-shadow: 0 24px 80px rgba(0,0,0,.35); padding: 28px; }
+    h1 { margin: 0 0 8px; font-size: 24px; line-height: 1.2; }
+    p { margin: 0 0 22px; color: #cbd5e1; line-height: 1.65; }
+    label { display: block; margin: 14px 0 6px; color: #e2e8f0; font-size: 14px; }
+    input { width: 100%; box-sizing: border-box; border-radius: 12px; border: 1px solid rgba(148, 163, 184, .45); background: rgba(2, 6, 23, .65); color: #f8fafc; padding: 12px 13px; outline: none; font-size: 14px; }
+    input:focus { border-color: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, .16); }
+    button { width: 100%; margin-top: 18px; border: 0; border-radius: 12px; padding: 12px 14px; background: #10b981; color: #04130e; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .65; cursor: progress; }
+    .result { margin-top: 18px; padding: 14px; border-radius: 12px; background: rgba(16, 185, 129, .12); border: 1px solid rgba(52, 211, 153, .32); display: none; }
+    .result strong { display: block; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-top: 8px; color: #86efac; }
+    .error { margin-top: 14px; color: #fca5a5; min-height: 20px; }
+    .meta { margin-top: 12px; font-size: 12px; color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>OpenClaw 网站绑定</h1>
+    <p>登录中转站账号，生成一次性绑定码。回到启动器的账号页粘贴绑定码，即可同步模型。</p>
+    <form id="bind-form">
+      <label for="username">账号</label>
+      <input id="username" name="username" autocomplete="username" placeholder="邮箱或用户名" required />
+      <label for="password">密码</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button id="submit" type="submit">生成绑定码</button>
+    </form>
+    <div class="result" id="result">
+      <span>绑定码</span>
+      <strong id="ticket"></strong>
+      <div class="meta" id="expires"></div>
+    </div>
+    <div class="error" id="error"></div>
+  </main>
+  <script>
+    const form = document.getElementById('bind-form');
+    const submit = document.getElementById('submit');
+    const result = document.getElementById('result');
+    const ticketEl = document.getElementById('ticket');
+    const expiresEl = document.getElementById('expires');
+    const errorEl = document.getElementById('error');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      errorEl.textContent = '';
+      result.style.display = 'none';
+      const body = {
+        username: form.username.value.trim(),
+        password: form.password.value,
+      };
+      try {
+        const response = await fetch('/api/openclaw/bind/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.success === false) throw new Error(payload.error || payload.message || '生成失败');
+        form.password.value = '';
+        ticketEl.textContent = payload.data.ticket;
+        const expiresAt = new Date((payload.data.expiresAt || 0) * 1000);
+        expiresEl.textContent = Number.isNaN(expiresAt.getTime()) ? '10 分钟内有效' : `有效期至 ${expiresAt.toLocaleString()}`;
+        result.style.display = 'block';
+        if (navigator.clipboard) navigator.clipboard.writeText(payload.data.ticket).catch(() => {});
+      } catch (error) {
+        errorEl.textContent = error instanceof Error ? error.message : String(error);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>"""
 
 
 def mask_secret(value: str) -> str:
@@ -223,6 +306,128 @@ def handle_launcher_token(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     }
 
 
+def _ticket_hash(ticket: str) -> str:
+    return hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+
+
+def _bind_connection() -> sqlite3.Connection:
+    directory = os.path.dirname(BIND_DB_PATH)
+    if directory:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+    connection = sqlite3.connect(BIND_DB_PATH)
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        create table if not exists bind_tickets (
+            ticket_hash text primary key,
+            payload text not null,
+            created_at integer not null,
+            expires_at integer not null,
+            claimed_at integer
+        )
+        """
+    )
+    try:
+        os.chmod(BIND_DB_PATH, 0o600)
+    except OSError:
+        pass
+    return connection
+
+
+def cleanup_bind_tickets(now: int | None = None) -> None:
+    now = int(now or time.time())
+    connection = _bind_connection()
+    try:
+        connection.execute(
+            "delete from bind_tickets where expires_at < ? or (claimed_at is not null and claimed_at < ?)",
+            (now - 60, now - 60),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def create_bind_ticket(payload: dict[str, Any], ttl_sec: int = BIND_TICKET_TTL_SEC) -> dict[str, Any]:
+    ticket = "ocb_" + secrets.token_urlsafe(24)
+    now = int(time.time())
+    expires_at = now + int(ttl_sec)
+    cleanup_bind_tickets(now)
+    connection = _bind_connection()
+    try:
+        connection.execute(
+            """
+            insert into bind_tickets(ticket_hash, payload, created_at, expires_at, claimed_at)
+            values(?, ?, ?, ?, null)
+            """,
+            (_ticket_hash(ticket), json.dumps(payload, ensure_ascii=False), now, expires_at),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return {"ticket": ticket, "expiresAt": expires_at}
+
+
+def _public_bind_payload(data: dict[str, Any], ticket_info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ticket": ticket_info["ticket"],
+        "expiresAt": ticket_info["expiresAt"],
+        "account": data.get("account") or "",
+        "userId": data.get("userId") or "",
+        "tokenMasked": data.get("tokenMasked") or mask_secret(str(data.get("key") or "")),
+        "tokenId": data.get("tokenId"),
+        "tokenName": data.get("tokenName") or "",
+        "source": data.get("source") or "bridge",
+        "models": data.get("models") if isinstance(data.get("models"), list) else [],
+    }
+
+
+def handle_bind_start(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    status, payload = handle_launcher_token(body)
+    if status != 200 or payload.get("success") is False:
+        return status, payload
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    if not data.get("key"):
+        return 500, {"success": False, "error": "launcher token payload missing key"}
+    ticket_info = create_bind_ticket(payload)
+    return 200, {"success": True, "data": _public_bind_payload(data, ticket_info)}
+
+
+def handle_bind_claim(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    ticket = str(body.get("ticket") or body.get("code") or "").strip()
+    if not ticket:
+        return 400, {"success": False, "error": "ticket is required"}
+    now = int(time.time())
+    cleanup_bind_tickets(now)
+    connection = _bind_connection()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "select payload, expires_at, claimed_at from bind_tickets where ticket_hash = ?",
+            (_ticket_hash(ticket),),
+        ).fetchone()
+        if not row:
+            connection.rollback()
+            return 404, {"success": False, "error": "ticket not found"}
+        if row["claimed_at"]:
+            connection.rollback()
+            return 410, {"success": False, "error": "ticket already claimed"}
+        if int(row["expires_at"] or 0) < now:
+            connection.execute("delete from bind_tickets where ticket_hash = ?", (_ticket_hash(ticket),))
+            connection.commit()
+            return 410, {"success": False, "error": "ticket expired"}
+        connection.execute("delete from bind_tickets where ticket_hash = ?", (_ticket_hash(ticket),))
+        connection.commit()
+    finally:
+        connection.close()
+    try:
+        payload = json.loads(row["payload"])
+    except Exception:
+        return 500, {"success": False, "error": "ticket payload corrupted"}
+    if not isinstance(payload, dict):
+        return 500, {"success": False, "error": "ticket payload invalid"}
+    return 200, payload
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         # Keep default access logging quiet to avoid accidental sensitive context.
@@ -237,14 +442,35 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _send_html(self, status: int, html: str) -> None:
+        raw = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'self'")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def do_GET(self) -> None:
         if self.path == "/health":
             self._send(200, {"success": True, "service": "openclaw-newapi-bridge"})
             return
+        if self.path in ("/api/openclaw/bind/page", "/openclaw-bind"):
+            self._send_html(200, BIND_PAGE_HTML)
+            return
         self._send(404, {"success": False, "error": "not found"})
 
     def do_POST(self) -> None:
-        if self.path != "/api/openclaw/launcher-token":
+        routes = {
+            "/api/openclaw/launcher-token": handle_launcher_token,
+            "/api/openclaw/bind/start": handle_bind_start,
+            "/api/openclaw/bind/claim": handle_bind_claim,
+        }
+        handler = routes.get(self.path)
+        if not handler:
             self._send(404, {"success": False, "error": "not found"})
             return
         try:
@@ -254,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             raw = self.rfile.read(length).decode("utf-8") if length else "{}"
             body = json.loads(raw) if raw else {}
-            status, payload = handle_launcher_token(body)
+            status, payload = handler(body)
             self._send(status, payload)
         except Exception as error:
             self._send(500, {"success": False, "error": str(error)})

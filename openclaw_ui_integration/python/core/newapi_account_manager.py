@@ -319,6 +319,33 @@ class NewApiAccountManager:
             "models": models,
         }
 
+    def _claim_bind_ticket(
+        self,
+        opener: urllib.request.OpenerDirector,
+        base_url: str,
+        ticket: str,
+    ) -> dict[str, Any]:
+        payload = self._request_json(
+            opener,
+            f"{base_url}/api/openclaw/bind/claim",
+            method="POST",
+            body={"ticket": ticket},
+            timeout=35,
+        )
+        data = _unwrap(payload)
+        token = _extract_best_api_key(payload)
+        if not token:
+            raise NewApiAccountError("bind_ticket_no_key")
+        models = []
+        if isinstance(data, dict) and isinstance(data.get("models"), list):
+            models = [str(item).strip() for item in data.get("models") or [] if str(item).strip()]
+        return {
+            "raw": payload,
+            "data": data if isinstance(data, dict) else {},
+            "token": token,
+            "models": models,
+        }
+
     def _create_launcher_token(
         self,
         opener: urllib.request.OpenerDirector,
@@ -545,6 +572,44 @@ class NewApiAccountManager:
         models = token_meta.get("models") if isinstance(token_meta.get("models"), list) else []
         if not models:
             models = self._fetch_models(opener, base_url, api_token_value, headers)
+        session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
+        self._write_session(session)
+        self._sync_image_config(session)
+        return session
+
+    def bind_ticket(self, ticket: str, *, base_url: str = "") -> dict[str, Any]:
+        ticket = ticket.strip()
+        if not ticket:
+            raise NewApiAccountError("bind ticket is required")
+
+        base_url = self.normalize_base_url(base_url)
+        cookie_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        claimed = self._claim_bind_ticket(opener, base_url, ticket)
+        data = claimed["data"] if isinstance(claimed.get("data"), dict) else {}
+        api_token_value = _pick_text(claimed.get("token"))
+        username = _pick_text(data.get("account"), data.get("username"), "NewAPI Account")
+        user_id = _pick_text(data.get("userId"), data.get("user_id"), data.get("id"), username)
+        login_payload = {
+            "success": True,
+            "data": {
+                "id": user_id,
+                "username": username,
+                "email": username,
+                "group": _pick_text(data.get("group"), data.get("plan"), "default"),
+            },
+        }
+        self_payload = login_payload
+        headers = self._auth_headers("", user_id)
+        models = claimed["models"] if isinstance(claimed.get("models"), list) else []
+        if not models:
+            models = self._fetch_models(opener, base_url, api_token_value, headers)
+        token_meta = {
+            "source": _pick_text(data.get("source"), "website_bind"),
+            "tokenId": data.get("tokenId"),
+            "tokenName": data.get("tokenName") or "",
+            "models": models,
+        }
         session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
         self._write_session(session)
         self._sync_image_config(session)

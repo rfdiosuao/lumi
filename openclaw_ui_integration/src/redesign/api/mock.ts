@@ -738,6 +738,62 @@ export async function mockBridgeRequest(path: string, method = 'GET', body?: Rec
     saveState(state);
     return { account: clone(state.account), member: clone(state.member) };
   }
+  if (route === '/api/account/bind-ticket') {
+    const ticket = toText(body?.ticket || body?.code, '').trim();
+    const baseUrl = toText(body?.baseUrl, 'https://api.heang.top').replace(/\/+$/, '');
+    if (!ticket) return { account: clone(state.account), error: '网站绑定码不能为空' };
+    state.account = {
+      loggedIn: true,
+      source: 'newapi_account',
+      account: 'website-user@example.com',
+      memberId: 'user-website-bind',
+      plan: 'default',
+      status: 'active',
+      baseUrl,
+      gatewayBaseUrl: `${baseUrl}/v1`,
+      tokenMasked: 'sk-****BIND',
+      models: {
+        text: ['qwen3.7-plus', 'agnes-2.0-flash'],
+        image: ['gpt-image-1'],
+        video: ['agnes-video-v2.0'],
+      },
+      usage: { quota: 100000, used: 1200 },
+      lastOnlineAt: nowIso(),
+      graceExpiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    state.member = {
+      ...state.member,
+      status: 'active',
+      memberId: state.account.memberId,
+      gatewayBaseUrl: state.account.gatewayBaseUrl,
+      gatewayToken: 'mock-bound-token',
+    };
+    state.configFiles['data/.openclaw/agents/main/agent/auth-profiles.json'] = {
+      models: {
+        primary: 'member_gateway',
+        providers: {
+          member_gateway: {
+            title: 'Heang API',
+            type: 'openai-compatible',
+            baseUrl: state.account.gatewayBaseUrl,
+            apiKey: 'mock-bound-token',
+            models: state.account.models.text.map((id: string) => ({ id })),
+            managedBy: 'newapi_account',
+          },
+        },
+      },
+    };
+    state.configFiles['imgapi_config.json'] = {
+      gatewayMode: 'member',
+      baseUrl: state.account.gatewayBaseUrl,
+      apiKey: 'mock-bound-token',
+      model: state.account.models.image[0],
+      managedBy: 'newapi_account',
+    };
+    state.logs = `${state.logs}\n[预览] 网站账号已绑定并同步模型。`;
+    saveState(state);
+    return { account: clone(state.account), member: clone(state.member) };
+  }
   if (route === '/api/account/sync') {
     if (!state.account?.loggedIn) return { account: clone(state.account), error: '未登录' };
     state.account.lastOnlineAt = nowIso();
