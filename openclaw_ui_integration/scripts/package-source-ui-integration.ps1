@@ -1,6 +1,6 @@
 param(
     [string]$PackageName = "",
-    [string]$OpenClawRuntimeVersion = "2026.6.5",
+    [string]$OpenClawRuntimeVersion = "2026.6.10",
     [switch]$NoZip
 )
 

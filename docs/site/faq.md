@@ -6,7 +6,7 @@
 
 ## 当前启动器版本是多少
 
-当前交付口径是 `openclaw_ui_integration` 版本 `2.1.19`。最新完整离线包和在线包使用 OpenClaw runtime `2026.6.5`。
+当前交付口径是 `openclaw_ui_integration` 版本 `2.1.19`。最新完整离线包和在线包使用 OpenClaw runtime `2026.6.10`。
 
 发布资产在 [openclaw-runtime-layers v2.1.19](https://github.com/rfdiosuao/openclaw-runtime-layers/releases/tag/v2.1.19)。在线包运行时组件 GitHub 优先、自有镜像与 Gitee 兜底。
 

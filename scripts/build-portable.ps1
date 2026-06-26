@@ -20,7 +20,7 @@ $CleanScript = Join-Path $PSScriptRoot "clean-workspace.ps1"
 $VerifyScript = Join-Path $PSScriptRoot "verify-release.ps1"
 $SmokeVerifyScript = Join-Path $PSScriptRoot "verify-portable-smoke.ps1"
 $VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
-$OpenClawRuntimeVersion = "2026.6.5"
+$OpenClawRuntimeVersion = "2026.6.10"
 
 function Invoke-Step {
     param(
@@ -341,8 +341,8 @@ function Write-PortableRuntimePackageJson {
             start = "node start.js"
         }
         dependencies = [ordered]@{
-            "@larksuite/openclaw-lark" = "2026.5.20"
-            "@tencent-weixin/openclaw-weixin" = "2.4.4"
+            "@larksuite/openclaw-lark" = "2026.6.10"
+            "@tencent-weixin/openclaw-weixin" = "2.4.6"
             openclaw = $OpenClawRuntimeVersion
         }
     }

@@ -7,7 +7,7 @@ OpenClaw 当前有两类交付方式：完整便携包和在线瘦包。完整�
 | 项 | 当前值 |
 | --- | --- |
 | 最新启动器 | `2.1.19` |
-| OpenClaw runtime | `2026.6.5` |
+| OpenClaw runtime | `2026.6.10` |
 | 在线便携包 | `LumiClaw-Online-v2.1.19.zip` |
 | 完整离线包 | `OpenClaw-Portable-v2.1.19-2026.06.26-full-offline.zip` |
 | 更新安装器 | `LumiClaw-Setup-v2.1.19.exe` |
