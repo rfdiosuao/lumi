@@ -16,9 +16,9 @@
 
 | 资产 | 体积 | SHA256 |
 | --- | ---: | --- |
-| `LumiClaw-Online-v2.1.18.zip` | `19,436,519 bytes` | `D9C8DE983CA3EBE36F3D87E06C43753A111EE7D28A70A629D54A040EDBF64C64` |
+| `LumiClaw-Online-v2.1.18.zip` | `24,151,685 bytes` | `28AC37040C5D22D2D725A17E486CE50D32F7A79FD6C86A05A14091566FD58A71` |
 | `OpenClaw-Portable-v2.1.18-2026.06.26-full-offline.zip` | `359,184,919 bytes` | `E1C402EC1F3FB5652F8540F2144DBBF7AB92A4B3208DF393E648002A0A727A1D` |
-| `LumiClaw-Setup-v2.1.18.exe` | `13,092,406 bytes` | `698F867859B00FCCA744D2B4BE3DF68313ACF7DD010859BAFC51277775E6EED1` |
+| `LumiClaw-Setup-v2.1.18.exe` | `17,004,620 bytes` | `2ADF9B0182D836EF31843F4A919C266D2086E9537EA28C2EFED3B497B4B84EDA` |
 
 ### 本次更新
 
@@ -34,7 +34,7 @@
 | `npm run build` | 已通过 |
 | 账号路由 smoke | 已通过：`current/login/sync/logout` 已注册 |
 | 完整离线包验包和 runtime smoke | 已通过 |
-| 在线便携包重层剥离 | 已通过，包体 18.5MB |
+| 在线便携包重层剥离 | 已通过，包体 23.0MB |
 | 自更新通道 notes 为字符串 | 已通过 |
 
 ## v2.1.14 - 2026-06-19

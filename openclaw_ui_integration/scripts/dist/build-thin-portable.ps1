@@ -4,10 +4,13 @@
 # and — unlike the NSIS installer — keeps the portable layout that all runtime
 # path-resolution already expects, so it actually runs.
 #
-# The OpenClaw.exe you pass in MUST be built with the manifest URL baked in:
+# The OpenClaw.exe you pass in MUST be built by `tauri build` with the manifest
+# URL baked in. Do not pass a plain `cargo build --release` app.exe: that binary
+# can still select the devUrl path and show "localhost refused" in production.
 #   cd src-tauri
 #   $env:OPENCLAW_DIST_MANIFEST_URL = "https://.../manifest.json"
-#   cargo build --release        # -> target/release/app.exe
+#   cd ..
+#   npm run tauri -- build       # -> src-tauri/target/release/app.exe
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/dist/build-thin-portable.ps1 `
@@ -85,6 +88,10 @@ try {
 
     if ($Exe -ne "") {
         if (-not (Test-Path -LiteralPath $Exe)) { throw "Baked exe not found: $Exe" }
+        $exeItem = Get-Item -LiteralPath $Exe
+        if ($exeItem.Length -lt 9MB) {
+            throw "Baked exe is unexpectedly small ($([math]::Round($exeItem.Length / 1MB, 1)) MB). Use `npm run tauri -- build`, not plain `cargo build --release`, or the app may load localhost:1420."
+        }
         Copy-Item -LiteralPath $Exe -Destination (Join-Path $stage "OpenClaw.exe") -Force
         Write-Host "Swapped OpenClaw.exe with baked build: $Exe"
     } else {
