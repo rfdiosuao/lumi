@@ -11,7 +11,7 @@ import {
   type DiagnosticReport,
   type DiagnosticStatus,
 } from '../../services/api';
-import { Button, showToast } from '../common';
+import { BusyOverlay, Button, showToast } from '../common';
 import { AgentLogo } from './AgentLogo';
 
 const PINNED_COMPONENT_IDS = [
@@ -782,8 +782,30 @@ export const AgentInstallerPage: React.FC = () => {
     }
   };
 
+  const activeBusyName = busyId ? components.find((item) => item.id === busyId)?.name || '' : '';
+  const busyOverlayActive = loading || Boolean(busyId) || preflightLoading || preflightRepairing;
+  const busyOverlayTitle = preflightRepairing
+    ? '正在修复前置环境'
+    : preflightLoading
+      ? '正在检测前置环境'
+      : loading
+        ? '正在读取安装清单'
+        : busyAction === 'detect'
+          ? '正在检测组件'
+          : busyAction === 'start'
+            ? '正在启动组件'
+            : busyAction === 'uninstall'
+              ? '正在卸载组件'
+              : busyAction === 'rollback'
+                ? '正在回滚组件'
+                : '正在安装或升级组件';
+  const busyOverlayDetail = activeBusyName
+    ? `${activeBusyName} 正在处理，请稍候。`
+    : 'LOOM 正在检查本机环境和组件状态。';
+
   return (
     <div data-agent-page-scroll className="h-full overflow-y-auto bg-app-bg">
+      <BusyOverlay active={busyOverlayActive} title={busyOverlayTitle} detail={busyOverlayDetail} />
       <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-6 px-8 py-7">
         <header className="flex flex-wrap items-end justify-between gap-6">
           <div>

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from typing import Callable
@@ -24,10 +25,32 @@ ComponentHealthChecker = Callable[[ReleaseComponent, str], None]
 ComponentLauncher = Callable[[str, str], dict]
 ComponentInstallerRunner = Callable[[list[str], str, int], subprocess.CompletedProcess]
 ProgressCallback = Callable[[str, str], None]
+RetrySleeper = Callable[[float], None]
 
 
 class ComponentInstallError(RuntimeError):
     """Raised when a component cannot be installed safely."""
+
+
+WINDOWS_COMMAND_SUFFIXES = ("", ".cmd", ".exe", ".ps1", ".bat")
+
+KNOWN_COMPONENT_COMMANDS: dict[str, tuple[str, ...]] = {
+    "codex-desktop": ("codex",),
+    "claude-code": ("claude",),
+    "opencode": ("opencode",),
+    "openclaw-companion": ("openclaw",),
+    "hermes": ("hermes",),
+}
+
+KNOWN_NPM_PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
+    "@openai/codex": ("codex",),
+    "@anthropic-ai/claude-code": ("claude",),
+    "opencode-ai": ("opencode",),
+    "opencode-windows-x64": ("opencode",),
+    "openclaw": ("openclaw",),
+}
+
+RETRY_DELAYS_SECONDS = (0.0, 0.8, 1.6)
 
 
 @dataclass(frozen=True)
@@ -46,6 +69,7 @@ class ComponentInstaller:
         health_checker: ComponentHealthChecker | None = None,
         launcher: ComponentLauncher | None = None,
         installer_runner: ComponentInstallerRunner | None = None,
+        retry_sleep: RetrySleeper | None = None,
         timeout: float = 30.0,
     ):
         self.base_path = os.path.abspath(base_path)
@@ -54,6 +78,7 @@ class ComponentInstaller:
         self.health_checker = health_checker or _default_health_checker
         self.launcher = launcher or self._default_launcher
         self.installer_runner = installer_runner or _default_installer_runner
+        self.retry_sleep = retry_sleep or time.sleep
         self.timeout = timeout
         self.cache_dir = os.path.join(self.base_path, "data", ".installer", "cache")
         self.staging_dir = os.path.join(self.base_path, "data", ".installer", "staging")
@@ -73,7 +98,7 @@ class ComponentInstaller:
             return self._simulate_install(component, job_id=job_id, on_progress=on_progress)
         self._mark(component, "downloading", job_id=job_id, on_progress=on_progress, message=f"下载 {component.name}")
         try:
-            package = self._download(component)
+            package = self._download(component, on_progress=on_progress)
         except Exception as exc:
             self.state_store.mark(component.component_id, "download_failed", version=component.version, job_id=job_id, error_message=str(exc))
             if on_progress:
@@ -137,7 +162,7 @@ class ComponentInstaller:
             try:
                 if on_progress:
                     on_progress(f"执行 {component.name} 安装命令", "neutral")
-                self._run_install_command(component, install_path)
+                self._run_install_command(component, install_path, on_progress=on_progress)
                 self._assert_external_install_available(component)
             except Exception as exc:
                 self._restore_previous_after_failed_health(install_path, previous)
@@ -336,13 +361,21 @@ class ComponentInstaller:
             on_progress(f"{component.name} 已卸载", "ok")
         return state
 
-    def _download(self, component: ReleaseComponent) -> bytes:
+    def _download(self, component: ReleaseComponent, *, on_progress: ProgressCallback | None = None) -> bytes:
         errors = []
         for url in component.urls:
-            try:
-                return self.fetcher(url, self.timeout)
-            except Exception as exc:
-                errors.append(f"{url}: {exc}")
+            for attempt_index, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
+                if delay > 0:
+                    self.retry_sleep(delay)
+                try:
+                    return self.fetcher(url, self.timeout)
+                except Exception as exc:
+                    is_last_attempt = attempt_index >= len(RETRY_DELAYS_SECONDS)
+                    if not is_last_attempt:
+                        if on_progress:
+                            on_progress(f"下载失败，正在重试第 {attempt_index + 1} 次：{_short_error(exc)}", "warning")
+                        continue
+                    errors.append(f"{url}: {exc}")
         raise ComponentInstallError("; ".join(errors) if errors else "no component urls configured")
 
     def _mark(
@@ -443,9 +476,12 @@ class ComponentInstaller:
         candidates: list[str] = []
         for raw_path in getattr(component, "external_paths", ()):
             candidate = self._expand_external_path(raw_path)
-            _append_unique(candidates, candidate)
+            self._append_external_path_variants(candidates, candidate)
 
         command_names = self._external_command_names(component)
+        for candidate in self._default_external_entry_candidates(command_names):
+            _append_unique(candidates, candidate)
+
         for name in command_names:
             found = shutil.which(name)
             if found:
@@ -468,13 +504,85 @@ class ComponentInstaller:
             base_name = os.path.basename(raw_path.replace("\\", "/")).strip()
             if not base_name:
                 continue
-            _append_unique(names, base_name)
-            stem, ext = os.path.splitext(base_name)
-            if stem:
-                _append_unique(names, stem)
-                for suffix in (".cmd", ".exe", ".ps1", ".bat"):
-                    _append_unique(names, f"{stem}{suffix}")
+            self._append_command_name_variants(names, base_name)
+        for command_name in KNOWN_COMPONENT_COMMANDS.get(component.component_id, ()):
+            self._append_command_name_variants(names, command_name)
+        for package_name in self._npm_package_names_from_command(component):
+            for command_name in KNOWN_NPM_PACKAGE_COMMANDS.get(package_name, ()):
+                self._append_command_name_variants(names, command_name)
         return tuple(names)
+
+    def _append_external_path_variants(self, candidates: list[str], path: str) -> None:
+        _append_unique(candidates, path)
+        directory = os.path.dirname(path)
+        filename = os.path.basename(path)
+        stem, _ext = os.path.splitext(filename)
+        if not directory or not stem:
+            return
+        for name in self._command_file_names(stem):
+            _append_unique(candidates, os.path.join(directory, name))
+
+    def _append_command_name_variants(self, names: list[str], name: str) -> None:
+        for candidate in self._command_file_names(name):
+            _append_unique(names, candidate)
+
+    def _command_file_names(self, name: str) -> tuple[str, ...]:
+        clean = str(name or "").strip()
+        if not clean:
+            return ()
+        stem, ext = os.path.splitext(clean)
+        base = stem or clean
+        names: list[str] = []
+        _append_unique(names, clean)
+        if base and base != clean:
+            _append_unique(names, base)
+        if base:
+            for suffix in WINDOWS_COMMAND_SUFFIXES:
+                _append_unique(names, f"{base}{suffix}")
+        return tuple(names)
+
+    def _default_external_entry_candidates(self, command_names: tuple[str, ...]) -> tuple[str, ...]:
+        stems = self._command_stems(command_names)
+        if not stems:
+            return ()
+        directories = self._common_command_directories()
+        candidates: list[str] = []
+        for directory in directories:
+            for stem in stems:
+                for name in self._command_file_names(stem):
+                    _append_unique(candidates, os.path.join(directory, name))
+        return tuple(candidates)
+
+    def _command_stems(self, command_names: tuple[str, ...]) -> tuple[str, ...]:
+        stems: list[str] = []
+        for name in command_names:
+            base = os.path.basename(str(name or "").replace("\\", "/")).strip()
+            if not base:
+                continue
+            stem, _ext = os.path.splitext(base)
+            _append_unique(stems, stem or base)
+        return tuple(stems)
+
+    def _common_command_directories(self) -> tuple[str, ...]:
+        directories: list[str] = []
+        appdata = os.environ.get("APPDATA", "").strip()
+        localappdata = os.environ.get("LOCALAPPDATA", "").strip()
+        userprofile = os.environ.get("USERPROFILE", "").strip() or os.path.expanduser("~")
+        program_files = os.environ.get("ProgramFiles", "").strip()
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", "").strip()
+
+        for root, suffixes in (
+            (appdata, ("npm",)),
+            (localappdata, ("pnpm", "npm")),
+            (userprofile, (".local/bin", "scoop/shims", "AppData/Roaming/npm", "AppData/Local/pnpm")),
+            (program_files, ("nodejs",)),
+            (program_files_x86, ("nodejs",)),
+        ):
+            if not root:
+                continue
+            for suffix in suffixes:
+                _append_unique(directories, os.path.abspath(os.path.join(root, *suffix.split("/"))))
+        return tuple(directories)
 
     def _npm_global_bin_dirs(self) -> tuple[str, ...]:
         directories: list[str] = []
@@ -618,22 +726,32 @@ class ComponentInstaller:
             output = output[:240] + "..."
         raise ComponentInstallError(f"卸载命令返回 {code}：{output or '没有输出'}")
 
-    def _run_install_command(self, component: ReleaseComponent, install_path: str) -> None:
+    def _run_install_command(
+        self,
+        component: ReleaseComponent,
+        install_path: str,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> None:
         command = [self._expand_command_part(part) for part in getattr(component, "install_command", ())]
         if not command:
             return
-        result = self.installer_runner(
-            self._resolve_command(command),
-            install_path,
-            int(getattr(component, "command_timeout_ms", 900000) or 900000),
-        )
-        code = int(getattr(result, "returncode", 0) or 0)
-        if code in (0, 3010):
-            return
-        output = ((getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")).strip()
-        if len(output) > 240:
-            output = output[:240] + "..."
-        raise ComponentInstallError(f"安装命令返回 {code}：{output or '没有输出'}")
+        timeout_ms = int(getattr(component, "command_timeout_ms", 900000) or 900000)
+        resolved = self._resolve_command(command)
+        last_error = ""
+        for attempt_index, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
+            if delay > 0:
+                self.retry_sleep(delay)
+            result = self.installer_runner(resolved, install_path, timeout_ms)
+            code = int(getattr(result, "returncode", 0) or 0)
+            if code in (0, 3010):
+                return
+            output = ((getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")).strip()
+            last_error = f"安装命令返回 {code}：{_short_error(output)}"
+            is_last_attempt = attempt_index >= len(RETRY_DELAYS_SECONDS)
+            if not is_last_attempt and on_progress:
+                on_progress(f"安装命令失败，正在重试第 {attempt_index + 1} 次：{_short_error(output)}", "warning")
+        raise ComponentInstallError(last_error or "安装命令失败")
 
     def _detect_installed_version(self, component: ReleaseComponent, install_path: str) -> str | None:
         try:
@@ -860,6 +978,8 @@ def build_launcher_command(executable: str, cwd: str, *, base_path: str | None =
         if not node:
             raise ComponentInstallError("未找到 Node.js，无法启动 JavaScript 组件")
         return [node, executable]
+    if extension == ".ps1":
+        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", executable]
     if extension in {".cmd", ".bat"}:
         return ["cmd", "/c", executable]
     return [executable]
@@ -899,6 +1019,13 @@ def _strip_npm_package_version(package: str) -> str:
         first = text.find("@", 1)
         return text[:first] if first > 0 else text
     return text.split("@", 1)[0]
+
+
+def _short_error(error: object, *, limit: int = 160) -> str:
+    text = str(error or "").strip()
+    if not text:
+        return "没有错误输出"
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def _versions_match(expected: str | None, detected: str | None) -> bool:

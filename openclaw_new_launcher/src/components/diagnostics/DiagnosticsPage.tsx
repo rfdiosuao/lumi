@@ -1,6 +1,6 @@
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Button, showToast } from '../common';
+import { BusyOverlay, Button, showToast } from '../common';
 import {
   diagnosticsApi,
   parseErrorText,
@@ -229,8 +229,19 @@ export const DiagnosticsPage: React.FC = () => {
     ? `${report.startupElapsedSec}s`
     : '-';
 
+  const busyOverlayTitle = repairing
+    ? '正在修复环境'
+    : exporting
+      ? '正在导出诊断包'
+      : '正在诊断环境';
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent">
+      <BusyOverlay
+        active={loading || repairing || exporting}
+        title={busyOverlayTitle}
+        detail="LOOM 正在检查本机运行环境，请稍候。"
+      />
       <div className="flex h-[76px] shrink-0 items-center justify-between border-b border-border bg-surface px-8">
         <div>
           <h1 className="text-xl font-bold text-text">环境诊断</h1>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Input, Select, showToast } from '../common';
+import { BusyOverlay, Button, Input, Select, showToast } from '../common';
 import { accountApi, parseErrorText, wireApi, type AccountSnapshot } from '../../services/api';
 import { useAppStore } from '../../stores/appStore';
 
@@ -134,8 +134,19 @@ export const ModelsPage: React.FC = () => {
     (account?.models?.image?.length || 0) +
     (account?.models?.video?.length || 0);
 
+  const busyOverlayTitle = loading
+    ? '正在读取模型'
+    : sourceMode === 'custom'
+      ? '正在应用第三方配置'
+      : '正在同步模型';
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface">
+      <BusyOverlay
+        active={loading || busy}
+        title={busyOverlayTitle}
+        detail="LOOM 正在读取或写入模型配置。"
+      />
       <header className="shrink-0 border-b border-border/70 bg-surface px-8 py-7">
         <div className="flex items-end justify-between gap-6">
           <div>

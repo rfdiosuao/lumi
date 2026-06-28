@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { open } from '@tauri-apps/plugin-shell';
-import { Button, Input, showToast } from '../common';
+import { BusyOverlay, Button, Input, showToast } from '../common';
 import { accountApi, licenseApi, parseErrorText, wireApi, type AccountSnapshot } from '../../services/api';
 import { useAppStore } from '../../stores/appStore';
 
@@ -349,8 +349,15 @@ export const LicensePage: React.FC = () => {
   const statusTone = statusText.includes('成功') || statusText.includes('已') ? 'text-status-success' : statusText ? 'text-status-danger' : 'text-text-muted';
   const modelHint = useMemo(() => account?.models?.text?.slice(0, 4).join(' / ') || (licenseInfo as any)?.gatewayDefaultModel || '暂无', [account, licenseInfo]);
 
+  const busyOverlayTitle = loading ? '正在读取账号状态' : '正在同步中转站';
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface">
+      <BusyOverlay
+        active={loading || busy}
+        title={busyOverlayTitle}
+        detail="LOOM 正在处理账号、模型和本地配置。"
+      />
       <header className="shrink-0 border-b border-border/70 bg-surface px-8 py-7">
         <div className="flex items-end justify-between gap-6">
           <div>

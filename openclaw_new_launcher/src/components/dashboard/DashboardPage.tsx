@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../../stores/appStore';
+import { BusyOverlay } from '../common';
 import {
   accountApi,
   componentApi,
@@ -10,7 +11,7 @@ import {
 } from '../../services/api';
 import { AgentLogo } from '../agents/AgentLogo';
 
-const PACKAGE_VERSION = '2.1.19';
+const PACKAGE_VERSION = '2.1.20';
 const REQUIRED_AGENT_IDS = ['codex-desktop', 'claude-code', 'opencode', 'openclaw-companion', 'hermes'];
 
 const FALLBACK_AGENTS: Record<string, { name: string; description: string }> = {
@@ -134,6 +135,11 @@ export const DashboardPage: React.FC = () => {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface">
+      <BusyOverlay
+        active={loading}
+        title="正在刷新总览"
+        detail="LOOM 正在读取账号、组件和本地服务状态。"
+      />
       <header className="shrink-0 border-b border-border/70 bg-surface px-8 py-7">
         <div className="flex items-end justify-between gap-8">
           <div className="min-w-0">

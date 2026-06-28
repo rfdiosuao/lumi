@@ -7,7 +7,7 @@ import {
   type PhoneConfigSnapshot,
   type PhoneDeviceSummary,
 } from '../../services/api';
-import { Button, Input, TextArea, showToast } from '../common';
+import { BusyOverlay, Button, Input, TextArea, showToast } from '../common';
 
 type CliResult = {
   success?: boolean;
@@ -375,9 +375,29 @@ export const PhoneDemoPage: React.FC = () => {
   };
 
   const lastText = firstResultText(lastJob);
+  const busyOverlayTitle = busy === 'config'
+    ? '正在读取手机配置'
+    : busy === 'status'
+      ? '正在检测手机连接'
+      : busy === 'devices'
+        ? '正在读取设备'
+        : busy === 'frame'
+          ? '正在截图'
+          : busy === 'read'
+            ? '正在读取屏幕'
+            : busy === 'syncModel'
+              ? '正在同步手机模型'
+              : busy === 'history'
+                ? '正在读取最近任务'
+                : '正在处理手机任务';
 
   return (
     <div className="h-full overflow-y-auto bg-app-bg">
+      <BusyOverlay
+        active={Boolean(busy)}
+        title={busyOverlayTitle}
+        detail="LOOM 正在等待手机 Agent 返回结果。"
+      />
       <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-7 px-8 py-7">
         <header className="flex flex-wrap items-end justify-between gap-6">
           <div>

@@ -1,8 +1,8 @@
 param(
-    [string]$PackageUrl = "https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/rc/packages/LOOM-Online-v2.1.19-20260628-rc3.zip",
-    [string]$PackageSha256 = "F3E4F4013C9272B197F8CFA6FBFA2ED3DF92216E80BE0132813E627A248FBD9C",
-    [string]$PackageRootName = "LOOM-Online-v2.1.19-20260628-rc3",
-    [string]$Version = "2.1.19-20260628-rc3",
+    [string]$PackageUrl = "https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/rc/packages/LOOM-Online-v2.1.20-20260629-rc1.zip",
+    [string]$PackageSha256 = "5B0FE98C572623BFD8AEC17D0835245ACE2B40728C5722B4B030661D17B66655",
+    [string]$PackageRootName = "LOOM-Online-v2.1.20-20260629-rc1",
+    [string]$Version = "2.1.20-20260629-rc1",
     [string]$OutputPath = ""
 )
 
@@ -13,7 +13,7 @@ $ArtifactsDir = Join-Path $Root "artifacts\installer"
 $ReleaseDir = Join-Path $Root "release"
 $IconPath = Join-Path $Root "openclaw_new_launcher\src-tauri\icons\icon.ico"
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $ReleaseDir "LOOM-Online-Setup-v2.1.19-20260628-rc3.exe"
+    $OutputPath = Join-Path $ReleaseDir "LOOM-Online-Setup-v2.1.20-20260629-rc1.exe"
 }
 
 New-Item -ItemType Directory -Path $ArtifactsDir -Force | Out-Null

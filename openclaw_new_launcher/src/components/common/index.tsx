@@ -191,6 +191,28 @@ export const Loading: React.FC<{ text?: string }> = ({ text = '加载中...' }) 
   </div>
 );
 
+export const BusyOverlay: React.FC<{
+  active: boolean;
+  title?: string;
+  detail?: string;
+}> = ({
+  active,
+  title = '正在处理',
+  detail = '请稍候，LOOM 正在完成当前操作。',
+}) => {
+  if (!active) return null;
+
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[80] flex items-center justify-center bg-[#F6F1E8]/42 px-6 backdrop-blur-[1.5px]">
+      <div className="flex min-w-[260px] max-w-[360px] flex-col items-center rounded-[18px] border border-[#0B4A3E]/18 bg-surface/94 px-6 py-5 text-center shadow-[0_24px_72px_rgba(5,35,29,0.22)]">
+        <span className="loom-busy-ring" aria-hidden="true" />
+        <div className="mt-4 text-base font-black text-text">{title}</div>
+        {detail ? <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div> : null}
+      </div>
+    </div>
+  );
+};
+
 export const SectionLabel: React.FC<{ text: string }> = ({ text }) => (
   <div className="mt-2 px-3 py-1 text-xs font-semibold text-text-subtle">{text}</div>
 );

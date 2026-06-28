@@ -187,7 +187,40 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
-            installer = ComponentInstaller(base_path=temp_dir, state_store=store, fetcher=fetcher)
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=fetcher,
+                retry_sleep=lambda _delay: None,
+            )
+
+            ready = installer.install(component, job_id="job_retry")
+
+            self.assertEqual(ready.status, "manual_install_required")
+            self.assertEqual(ready.job_id, "job_retry")
+            self.assertEqual(attempts, 2)
+            installed_file = os.path.join(temp_dir, "agents", component.component_id, "Codex-Installer.exe")
+            with open(installed_file, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
+
+    def test_download_failure_after_retries_records_failed_state(self) -> None:
+        payload = b"codex retry payload"
+        component = make_payload_component(version="1.0.0", payload=payload)
+        attempts = 0
+
+        def fetcher(_url: str, _timeout: float) -> bytes:
+            nonlocal attempts
+            attempts += 1
+            raise RuntimeError("network unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=fetcher,
+                retry_sleep=lambda _delay: None,
+            )
 
             with self.assertRaisesRegex(Exception, "download failed"):
                 installer.install(component, job_id="job_fail")
@@ -195,14 +228,7 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             failed = store.load()[component.component_id]
             self.assertEqual(failed.status, "download_failed")
             self.assertIn("network unavailable", failed.error_message or "")
-
-            ready = installer.install(component, job_id="job_retry")
-
-            self.assertEqual(ready.status, "manual_install_required")
-            self.assertEqual(ready.job_id, "job_retry")
-            installed_file = os.path.join(temp_dir, "agents", component.component_id, "Codex-Installer.exe")
-            with open(installed_file, "rb") as handle:
-                self.assertEqual(handle.read(), payload)
+            self.assertEqual(attempts, 3)
 
     def test_tgz_component_extracts_archive_entries(self) -> None:
         payload = make_tgz_payload(
@@ -385,6 +411,146 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(calls[0][1], install_dir)
             self.assertEqual(calls[0][2], 234000)
             self.assertTrue(os.path.isfile(external_entry))
+
+    def test_install_command_retries_transient_failure_and_then_detects_external_entry(self) -> None:
+        payload = make_tgz_payload({"package/bin/opencode.exe": b"opencode package"})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_entry = os.path.join(temp_dir, "npm-global", "opencode.CMD")
+            component = ReleaseComponent(
+                component_id="opencode",
+                name="opencode",
+                version="1.17.11",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                urls=("https://download.example.invalid/opencode.tgz",),
+                install_path="agents/opencode",
+                entry="package/bin/opencode.exe",
+                install_command=("npm", "install", "-g", "opencode-ai@1.17.11"),
+                external_paths=(external_entry,),
+            )
+            calls: list[list[str]] = []
+            progress: list[tuple[str, str]] = []
+
+            def installer_runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                if len(calls) == 1:
+                    return FakeCompletedProcess(returncode=1, stderr="registry timeout")
+                os.makedirs(os.path.dirname(external_entry), exist_ok=True)
+                with open(external_entry, "wb") as handle:
+                    handle.write(b"opencode")
+                return FakeCompletedProcess(returncode=0)
+
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=lambda _url, _timeout: payload,
+                installer_runner=installer_runner,
+                retry_sleep=lambda _delay: None,
+            )
+
+            state = installer.install(
+                component,
+                job_id="job_install_command_retry",
+                on_progress=lambda message, tone: progress.append((message, tone)),
+            )
+
+            self.assertEqual(state.status, "ready")
+            install_calls = [command for command in calls if command[-3:] == ["install", "-g", "opencode-ai@1.17.11"]]
+            self.assertEqual(len(install_calls), 2)
+            self.assertTrue(any("重试" in message for message, _tone in progress))
+
+    def test_upgrade_available_component_uses_pinned_install_command_to_update(self) -> None:
+        payload = make_tgz_payload({"package/bin/codex.exe": b"codex package"})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_entry = os.path.join(temp_dir, "npm-global", "codex.CMD")
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry="package/bin/codex.exe",
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+                external_paths=(external_entry,),
+            )
+            calls: list[list[str]] = []
+
+            def installer_runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                os.makedirs(os.path.dirname(external_entry), exist_ok=True)
+                with open(external_entry, "wb") as handle:
+                    handle.write(b"codex")
+                return FakeCompletedProcess(returncode=0)
+
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            store.mark(component.component_id, "upgrade_available", version="0.130.0")
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=lambda _url, _timeout: payload,
+                installer_runner=installer_runner,
+            )
+
+            state = installer.install(component, job_id="job_upgrade")
+
+            install_calls = [command for command in calls if command[-3:] == ["install", "-g", "@openai/codex@0.142.3"]]
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "0.142.3-win32-x64")
+            self.assertEqual(len(install_calls), 1)
+
+    def test_install_command_persistent_failure_records_config_failed_after_retries(self) -> None:
+        payload = make_tgz_payload({"package/bin/opencode.exe": b"opencode package"})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            component = ReleaseComponent(
+                component_id="opencode",
+                name="opencode",
+                version="1.17.11",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                urls=("https://download.example.invalid/opencode.tgz",),
+                install_path="agents/opencode",
+                entry="package/bin/opencode.exe",
+                install_command=("npm", "install", "-g", "opencode-ai@1.17.11"),
+                external_paths=(os.path.join(temp_dir, "npm-global", "opencode.CMD"),),
+            )
+            calls: list[list[str]] = []
+
+            def installer_runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                return FakeCompletedProcess(returncode=1, stderr="registry timeout")
+
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=lambda _url, _timeout: payload,
+                installer_runner=installer_runner,
+                retry_sleep=lambda _delay: None,
+            )
+
+            with self.assertRaisesRegex(Exception, "install command failed"):
+                installer.install(component, job_id="job_install_command_retry_fail")
+
+            failed = store.load()[component.component_id]
+            self.assertEqual(failed.status, "config_failed")
+            install_calls = [command for command in calls if command[-3:] == ["install", "-g", "opencode-ai@1.17.11"]]
+            self.assertEqual(len(install_calls), 3)
+            self.assertIn("registry timeout", failed.error_message or "")
 
     def test_install_command_resolves_windows_npm_cmd_shim(self) -> None:
         payload = make_tgz_payload({"package/openclaw.mjs": b"openclaw package"})
@@ -574,6 +740,144 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
             self.assertEqual(state.status, "ready")
             self.assertEqual(state.version, "0.142.3")
+
+    def test_detect_finds_external_entry_sibling_variant_when_manifest_lists_cmd(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            appdata = os.path.join(temp_dir, "AppData", "Roaming")
+            codex_ps1 = os.path.join(appdata, "npm", "codex.ps1")
+            os.makedirs(os.path.dirname(codex_ps1), exist_ok=True)
+            with open(codex_ps1, "wb") as handle:
+                handle.write(b"codex shim")
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="d" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                external_paths=("%APPDATA%/npm/codex.cmd",),
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            old_appdata = os.environ.get("APPDATA")
+            original_which = component_installer_module.shutil.which
+            os.environ["APPDATA"] = appdata
+            component_installer_module.shutil.which = lambda _name: None
+            try:
+                installer = ComponentInstaller(
+                    base_path=temp_dir,
+                    state_store=store,
+                    installer_runner=lambda command, _cwd, _timeout_ms: FakeCompletedProcess(
+                        returncode=0 if command[-1:] == ["--version"] else 1,
+                        stdout="0.142.3\n" if command[-1:] == ["--version"] else "",
+                    ),
+                )
+
+                state = installer.detect(component, job_id="job_detect_codex_ps1")
+            finally:
+                component_installer_module.shutil.which = original_which
+                if old_appdata is None:
+                    os.environ.pop("APPDATA", None)
+                else:
+                    os.environ["APPDATA"] = old_appdata
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "0.142.3")
+
+    def test_detect_finds_codex_in_default_appdata_npm_without_manifest_external_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            appdata = os.path.join(temp_dir, "AppData", "Roaming")
+            codex_cmd = os.path.join(appdata, "npm", "codex.cmd")
+            os.makedirs(os.path.dirname(codex_cmd), exist_ok=True)
+            with open(codex_cmd, "wb") as handle:
+                handle.write(b"codex shim")
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="d" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                external_paths=(),
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            old_appdata = os.environ.get("APPDATA")
+            os.environ["APPDATA"] = appdata
+            try:
+                installer = ComponentInstaller(
+                    base_path=temp_dir,
+                    state_store=store,
+                    installer_runner=lambda command, _cwd, _timeout_ms: FakeCompletedProcess(
+                        returncode=0 if command[-1:] == ["--version"] else 1,
+                        stdout="0.142.3\n" if command[-1:] == ["--version"] else "",
+                    ),
+                )
+
+                state = installer.detect(component, job_id="job_detect_codex_default_appdata")
+            finally:
+                if old_appdata is None:
+                    os.environ.pop("APPDATA", None)
+                else:
+                    os.environ["APPDATA"] = old_appdata
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "0.142.3")
+
+    def test_detect_finds_claude_in_default_user_local_bin_without_manifest_external_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            userprofile = os.path.join(temp_dir, "User")
+            claude_exe = os.path.join(userprofile, ".local", "bin", "claude.exe")
+            os.makedirs(os.path.dirname(claude_exe), exist_ok=True)
+            with open(claude_exe, "wb") as handle:
+                handle.write(b"claude shim")
+            component = ReleaseComponent(
+                component_id="claude-code",
+                name="Claude Code",
+                version="2.1.195",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="c" * 64,
+                urls=("https://download.example.invalid/claude-code.tgz",),
+                install_path="agents/claude-code",
+                entry=None,
+                external_paths=(),
+                install_command=("npm", "install", "-g", "@anthropic-ai/claude-code@2.1.195"),
+            )
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            old_userprofile = os.environ.get("USERPROFILE")
+            os.environ["USERPROFILE"] = userprofile
+            try:
+                installer = ComponentInstaller(
+                    base_path=temp_dir,
+                    state_store=store,
+                    installer_runner=lambda command, _cwd, _timeout_ms: FakeCompletedProcess(
+                        returncode=0 if command[-1:] == ["--version"] else 1,
+                        stdout="2.1.195\n" if command[-1:] == ["--version"] else "",
+                    ),
+                )
+
+                state = installer.detect(component, job_id="job_detect_claude_default_local_bin")
+            finally:
+                if old_userprofile is None:
+                    os.environ.pop("USERPROFILE", None)
+                else:
+                    os.environ["USERPROFILE"] = old_userprofile
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "2.1.195")
 
     def test_detect_existing_external_entry_marks_upgrade_available_when_version_is_old(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
