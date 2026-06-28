@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 
 function Resolve-LauncherDir {
-    $candidates = @("openclaw_ui_integration", "openclaw_new_launcher")
+    $candidates = @("openclaw_new_launcher")
     foreach ($candidate in $candidates) {
         $path = Join-Path $Root $candidate
         if (
@@ -17,7 +17,7 @@ function Resolve-LauncherDir {
             return $path
         }
     }
-    throw "No launcher project found. Expected openclaw_ui_integration or openclaw_new_launcher."
+    throw "No launcher project found. Expected openclaw_new_launcher."
 }
 
 $LauncherDir = Resolve-LauncherDir

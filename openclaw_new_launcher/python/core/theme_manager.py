@@ -16,31 +16,31 @@ from core.paths import AppPaths
 from core.storage import read_json, write_json
 
 DEFAULT_THEME: dict[str, Any] = {
-    "name": "Lumi Graphite Gold",
+    "name": "LOOM Light",
     "colors": {
-        "app_bg": "#05060A",
-        "sidebar_bg": "#070912",
-        "surface": "#090B12",
-        "surface_alt": "#0F1420",
-        "surface_deep": "#1C202A",
-        "surface_deeper": "#14171E",
-        "hover": "#171B28",
-        "input": "#0B1020",
-        "border": "rgba(215, 181, 109, 0.22)",
-        "border_strong": "rgba(215, 181, 109, 0.58)",
-        "text": "#F7F1E3",
-        "text_muted": "#A9B2C3",
-        "text_subtle": "#69758B",
-        "accent": "#D7B56D",
-        "accent_hover": "#F1D99A",
-        "accent_soft": "rgba(215, 181, 109, 0.16)",
-        "accent_ink": "#2B1D05",
-        "success": "#38D996",
-        "warning": "#FFB454",
-        "danger": "#FF4D6D",
-        "danger_hover": "#FF6E86",
-        "terminal_bg": "#05070D",
-        "terminal_header": "#0D1320",
+        "app_bg": "#F6F3EC",
+        "sidebar_bg": "#FBF8F0",
+        "surface": "#FFFCF5",
+        "surface_alt": "#F4EFE4",
+        "surface_deep": "#24211B",
+        "surface_deeper": "#14110D",
+        "hover": "#EEE5D5",
+        "input": "#FFF9EF",
+        "border": "rgba(151, 119, 58, 0.22)",
+        "border_strong": "rgba(187, 146, 68, 0.48)",
+        "text": "#201B12",
+        "text_muted": "#756B5B",
+        "text_subtle": "#A59A88",
+        "accent": "#B98936",
+        "accent_hover": "#D6A64A",
+        "accent_soft": "rgba(214, 180, 106, 0.18)",
+        "accent_ink": "#6E4D12",
+        "success": "#0F9F6E",
+        "warning": "#D88915",
+        "danger": "#E54764",
+        "danger_hover": "#FF5E78",
+        "terminal_bg": "#0A0C12",
+        "terminal_header": "#111827",
         "terminal_text": "#37E6D0",
     },
     "fonts": {
@@ -52,29 +52,22 @@ DEFAULT_THEME: dict[str, Any] = {
         "mono": ["Cascadia Mono", 10, "normal"],
     },
     "brand": {
-        "name": "Lumi",
-        "subtitle": "AI Creative Console",
-        "app_user_model_id": "Lumi.Launcher",
-        "terminal_header": "Lumi Console",
-        "logoUrl": "logo.png",
+        "name": "LOOM",
+        "subtitle": "麓鸣多智能体安装器",
+        "app_user_model_id": "LOOM.Agent",
+        "terminal_header": "LOOM 运行时",
+        "logoUrl": "",
     },
     "navItems": [
-        {"key": "terminal", "label": "服务日志", "desc": "查看运行状态", "icon": "LOG", "group": "工作台"},
-        {"key": "storyboard", "label": "广告视频", "desc": "分镜/首尾帧/九宫格", "icon": "AD", "group": "工作台", "accent": True},
-        {"key": "image", "label": "AI 生图", "desc": "生成/编辑图片", "icon": "IMG", "group": "工作台", "accent": True},
-        {"key": "video", "label": "AI 视频", "desc": "多模型视频生成", "icon": "VID", "group": "工作台", "accent": True},
-        {"key": "license", "label": "授权码", "desc": "在线激活解锁", "icon": "LIC", "group": "配置"},
-        {"key": "api", "label": "API 配置", "desc": "设置模型密钥", "icon": "KEY", "group": "配置"},
-        {"key": "feishu", "label": "飞书机器人", "desc": "绑定消息通道", "icon": "BOT", "group": "配置"},
-        {"key": "weixin", "label": "微信机器人", "desc": "扫码绑定微信", "icon": "WX", "group": "配置"},
-        {"key": "skills", "label": "Skills", "desc": "安装/启用能力模块", "icon": "SK", "group": "扩展"},
-        {"key": "web", "label": "网页界面", "desc": "打开本地控制台", "icon": "WEB", "group": "维护"},
-        {"key": "diagnostics", "label": "环境诊断", "desc": "检查/修复启动环境", "icon": "FIX", "group": "维护", "accent": True},
-        {"key": "update", "label": "检查更新", "desc": "更新 OpenClaw", "icon": "UP", "group": "维护"},
-        {"key": "help", "label": "帮助文档", "desc": "查看使用说明", "icon": "DOC", "group": "维护"},
+        {"key": "dashboard", "label": "启动器", "desc": "总览 / 状态", "icon": "HOME", "group": "LOOM"},
+        {"key": "agents", "label": "智能体", "desc": "安装运行时", "icon": "INS", "group": "LOOM", "accent": True},
+        {"key": "capabilities", "label": "能力", "desc": "本地 AI 能力", "icon": "CAP", "group": "LOOM"},
+        {"key": "license", "label": "账号", "desc": "中转站登录", "icon": "ACC", "group": "LOOM"},
+        {"key": "models", "label": "模型", "desc": "模型选择", "icon": "MDL", "group": "LOOM"},
+        {"key": "diagnostics", "label": "诊断", "desc": "环境 / 日志", "icon": "FIX", "group": "LOOM"},
     ],
     "window": {
-        "title": "Lumi - AI Creative Console",
+        "title": "LOOM - 麓鸣多智能体安装器",
         "width": 1200,
         "height": 800,
     },
@@ -99,17 +92,7 @@ def _normalize_nav_items(items: Any) -> list[dict[str, Any]]:
         if "accent" in item:
             merged["accent"] = bool(item["accent"])
         normalized.append(merged)
-    result = normalized or list(default_items)
-    if not any(item.get("key") == "weixin" for item in result):
-        weixin_item = default_by_key.get("weixin")
-        if weixin_item:
-            insert_index = len(result)
-            for index, item in enumerate(result):
-                if item.get("key") == "feishu":
-                    insert_index = index + 1
-                    break
-            result.insert(insert_index, dict(weixin_item))
-    return result
+    return normalized or list(default_items)
 
 
 def _is_external_asset(value: str) -> bool:

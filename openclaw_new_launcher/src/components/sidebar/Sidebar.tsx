@@ -1,4 +1,5 @@
 import React from 'react';
+import { LoomLogoMark } from '../brand/LoomBrand';
 import { useTheme } from '../../hooks/useTheme';
 import { DEFAULT_NAV_ITEMS, normalizeNavItems } from '../../theme/default';
 import type { NavItem } from '../../types/theme';
@@ -10,24 +11,119 @@ interface SidebarProps {
   isAuthorized: boolean;
   isApiConfigured: boolean;
   onNavigate: (key: string) => void;
-  onStart: () => void;
   onStop: () => void;
 }
 
-function statusLabel(serviceRunning: boolean, serviceStatus: string, isAuthorized: boolean, isApiConfigured: boolean): string {
-  if (!isAuthorized) return '未授权';
-  if (serviceRunning) return '服务运行中';
-  if (serviceStatus === 'starting') return '启动中';
-  if (serviceStatus === 'stopping') return '停止中';
-  if (isApiConfigured) return 'API 已配置';
-  return '未配置 API';
+type IconName = 'rocket' | 'box' | 'phone' | 'user' | 'capability' | 'model' | 'wrench' | 'exit';
+
+function iconFor(item: NavItem): IconName {
+  const key = item.key;
+  if (key === 'dashboard') return 'rocket';
+  if (key === 'agents') return 'box';
+  if (key === 'phone') return 'phone';
+  if (key === 'capabilities') return 'capability';
+  if (key === 'license') return 'user';
+  if (key === 'models') return 'model';
+  if (key === 'diagnostics') return 'wrench';
+  return 'capability';
 }
 
 function statusTone(serviceRunning: boolean, isAuthorized: boolean, isApiConfigured: boolean): string {
-  if (!isAuthorized) return 'bg-status-danger shadow-[0_0_10px_rgba(255,77,109,0.55)]';
-  if (serviceRunning || isApiConfigured) return 'bg-status-success shadow-[0_0_10px_rgba(63,224,143,0.52)]';
-  return 'bg-status-warning shadow-[0_0_10px_rgba(255,180,84,0.38)]';
+  if (serviceRunning || isApiConfigured) return 'bg-status-success';
+  if (isAuthorized) return 'bg-status-warning';
+  return 'bg-status-danger';
 }
+
+const Icon: React.FC<{ name: IconName; className?: string }> = ({ name, className = '' }) => {
+  const common = {
+    className,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  };
+  if (name === 'rocket') {
+    return (
+      <svg {...common}>
+        <path d="M13.5 6.5c2.2-2.2 5-2.8 6.8-2.8 0 1.8-.6 4.6-2.8 6.8l-6.7 6.7-4-4 6.7-6.7Z" />
+        <path d="M9.5 9.5H5.9L3.8 12l3.2.8" />
+        <path d="M14.5 14.5v3.6L12 20.2l-.8-3.2" />
+        <path d="M6.5 17.5 4 20" />
+      </svg>
+    );
+  }
+  if (name === 'box') {
+    return (
+      <svg {...common}>
+        <path d="M7 7.5 12 5l5 2.5-5 2.5-5-2.5Z" />
+        <path d="M7 7.5v6.8l5 2.7 5-2.7V7.5" />
+        <path d="M12 10v7" />
+        <path d="M5 17.5h14" />
+      </svg>
+    );
+  }
+  if (name === 'phone') {
+    return (
+      <svg {...common}>
+        <rect x="7" y="2.8" width="10" height="18.4" rx="2.2" />
+        <path d="M10.5 18.2h3" />
+      </svg>
+    );
+  }
+  if (name === 'user') {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="8" r="3.4" />
+        <path d="M5 20c1.2-3.4 3.5-5 7-5s5.8 1.6 7 5" />
+      </svg>
+    );
+  }
+  if (name === 'wrench') {
+    return (
+      <svg {...common}>
+        <path d="M14.8 6.2a4 4 0 0 0 4.9 4.9l-7.8 7.8a2.4 2.4 0 0 1-3.4-3.4l7.8-7.8Z" />
+        <path d="m7.5 16.5-3.2 3.2" />
+      </svg>
+    );
+  }
+  if (name === 'capability') {
+    return (
+      <svg {...common}>
+        <path d="M7 4.5h10" />
+        <path d="M6 9h12" />
+        <path d="M7 13.5h10" />
+        <path d="M9 18h6" />
+        <path d="M4.5 7.3 7 4.5l2.5 2.8" />
+        <path d="m14.5 16.7 2.5 2.8 2.5-2.8" />
+      </svg>
+    );
+  }
+  if (name === 'model') {
+    return (
+      <svg {...common}>
+        <path d="M12 3.5 18.5 7v10L12 20.5 5.5 17V7L12 3.5Z" />
+        <path d="M12 10.8 18.5 7" />
+        <path d="M12 10.8 5.5 7" />
+        <path d="M12 10.8v9.7" />
+        <path d="M8.3 14.2 5.5 12.7" />
+        <path d="m15.7 14.2 2.8-1.5" />
+      </svg>
+    );
+  }
+  if (name === 'exit') {
+    return (
+      <svg {...common}>
+        <path d="M9 4H5.8A1.8 1.8 0 0 0 4 5.8v12.4A1.8 1.8 0 0 0 5.8 20H9" />
+        <path d="M14 7l5 5-5 5" />
+        <path d="M19 12H9" />
+      </svg>
+    );
+  }
+  return null;
+};
 
 const NavButton: React.FC<{
   item: NavItem;
@@ -35,31 +131,39 @@ const NavButton: React.FC<{
   onClick: () => void;
 }> = ({ item, isActive, onClick }) => (
   <button
+    type="button"
     onClick={onClick}
-    className={`group relative w-full overflow-hidden rounded-[14px] px-3 py-3 text-left transition-all duration-150 ${
+    title={item.label}
+    aria-label={item.label}
+    className={`group relative flex min-h-[64px] w-full flex-col items-center justify-center gap-1.5 rounded-[8px] px-1 py-2 text-center transition-all ${
       isActive
-        ? 'border border-border-strong/80 bg-accent/[0.075] text-text shadow-[inset_0_0_0_1px_rgba(216,184,102,0.05)]'
-        : 'border border-transparent text-text-muted hover:border-border/80 hover:bg-hover/60 hover:text-text'
-    } ${item.accent ? 'font-medium' : ''}`}
+        ? 'bg-white/[0.075] text-accent shadow-[inset_0_0_0_1px_rgba(55,213,163,0.16)]'
+        : 'text-white/58 hover:bg-white/[0.05] hover:text-white'
+    }`}
   >
-    {isActive && (
-      <span className="absolute bottom-3 left-0 top-3 w-[2px] rounded-r bg-accent shadow-[0_0_10px_rgba(216,184,102,0.55)]" />
-    )}
-    <div className="flex items-center gap-3">
-      <span
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border text-[9px] font-black tracking-[0.08em] transition-all ${
-          isActive
-            ? 'border-accent/50 bg-accent/[0.09] text-accent'
-            : 'border-border/75 bg-surface-alt/50 text-text-subtle group-hover:border-border-strong/60 group-hover:text-text'
-        }`}
-      >
-        {item.icon}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-bold leading-tight">{item.label}</div>
-        {item.desc && <div className="mt-1 truncate text-[11px] text-text-subtle">{item.desc}</div>}
-      </div>
-    </div>
+    {isActive && <span className="absolute right-[-8px] top-2 h-11 w-[3px] rounded-l bg-accent" />}
+    <Icon name={iconFor(item)} className="h-[22px] w-[22px]" />
+    <span className={`text-[11px] font-black leading-none ${isActive ? 'text-accent' : 'text-white/68 group-hover:text-white'}`}>
+      {item.label}
+    </span>
+  </button>
+);
+
+const UtilityButton: React.FC<{
+  label: string;
+  icon: IconName;
+  disabled?: boolean;
+  onClick: () => void;
+}> = ({ label, icon, disabled, onClick }) => (
+  <button
+    type="button"
+    title={label}
+    aria-label={label}
+    disabled={disabled}
+    onClick={onClick}
+    className="flex h-10 w-10 items-center justify-center rounded-[8px] text-white/58 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+  >
+    <Icon name={icon} className="h-[21px] w-[21px]" />
   </button>
 );
 
@@ -70,90 +174,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isAuthorized,
   isApiConfigured,
   onNavigate,
-  onStart,
   onStop,
 }) => {
-  const { theme, navItems, themeMode, toggleTheme } = useTheme();
+  const { navItems } = useTheme();
   const items = React.useMemo(() => normalizeNavItems(navItems.length > 0 ? navItems : DEFAULT_NAV_ITEMS), [navItems]);
 
-  const groups = React.useMemo(() => {
-    const groupSet = new Set(items.map((item) => item.group));
-    return Array.from(groupSet);
-  }, [items]);
-
   return (
-    <aside className="relative z-10 flex h-full w-[260px] shrink-0 flex-col border-r border-border/80 bg-app-sidebar">
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.025),transparent_46%)]" />
+    <aside className="relative z-10 flex h-full w-[72px] shrink-0 flex-col border-r border-[#12343D]/75 bg-app-sidebar text-white shadow-[inset_-1px_0_rgba(55,213,163,0.08)]">
+      <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-[linear-gradient(90deg,transparent,rgba(55,213,163,0.08))]" />
 
-      <div className="relative flex shrink-0 flex-col items-center px-5 pb-5 pt-6 text-center">
-        <div className="text-[11px] font-black uppercase tracking-[0.42em] text-text-subtle">Launcher</div>
-        <div className="mt-2 text-base font-black tracking-[0.14em] text-text">{theme.brand.name}</div>
-        <div className="mt-1 max-w-[16rem] text-[11px] text-text-subtle">{theme.brand.subtitle}</div>
+      <div className="relative flex shrink-0 items-center justify-center pb-3 pt-4">
+        <LoomLogoMark className="h-10 w-10 shadow-[0_14px_30px_rgba(0,0,0,0.34),0_0_0_1px_rgba(223,250,255,0.04)]" />
       </div>
 
-      <div className="relative shrink-0 px-4 pb-5">
-        <button
-          onClick={onStart}
-          disabled={serviceRunning || serviceStatus === 'starting'}
-          className={`w-full rounded-[14px] px-4 py-3 text-[13px] font-black transition-all disabled:cursor-not-allowed ${
-            serviceRunning
-              ? 'border border-status-success/25 bg-status-success/10 text-status-success opacity-90'
-              : 'bg-accent text-accent-ink shadow-[0_12px_30px_rgba(216,184,102,0.15)] hover:bg-accent-hover disabled:opacity-55'
-          }`}
-        >
-          {serviceStatus === 'starting' ? '启动中...' : serviceRunning ? '服务已运行' : '启动核心服务'}
-        </button>
-      </div>
-
-      <nav className="relative flex-1 overflow-y-auto px-3 pb-3">
-        {groups.map((group) => {
-          const groupItems = items.filter((item) => item.group === group);
-          return (
-            <section key={group} className="mb-4">
-              <div className="px-3 pb-2 pt-1 text-[10px] font-bold uppercase tracking-[0.22em] text-text-subtle">{group}</div>
-              <div className="space-y-1.5">
-                {groupItems.map((item) => (
-                  <NavButton
-                    key={item.key}
-                    item={item}
-                    isActive={activePage === item.key}
-                    onClick={() => onNavigate(item.key)}
-                  />
-                ))}
-              </div>
-            </section>
-          );
-        })}
+      <nav className="relative flex-1 overflow-y-auto px-2 pb-3">
+        <div className="space-y-2">
+          {items.map((item) => (
+            <NavButton
+              key={item.key}
+              item={item}
+              isActive={activePage === item.key}
+              onClick={() => onNavigate(item.key)}
+            />
+          ))}
+        </div>
       </nav>
 
-      <div className="relative shrink-0 border-t border-border/80 p-3">
-        <div className="mb-2.5 grid grid-cols-[1fr_38px] gap-2">
-          <button
-            onClick={onStop}
-            disabled={!serviceRunning && serviceStatus !== 'starting'}
-            className="rounded-[13px] border border-status-danger/30 bg-status-danger/[0.055] px-3 py-2 text-[13px] font-bold text-status-danger transition-all hover:bg-status-danger/10 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            停止服务
-          </button>
-          <button
-            onClick={toggleTheme}
-            className="flex h-[38px] w-[38px] items-center justify-center rounded-[13px] border border-border/80 bg-surface-alt/50 text-sm font-black text-accent transition-all hover:border-border-strong/70 hover:bg-hover"
-            title={themeMode === 'dark' ? '切换浅色风格' : '切换深色风格'}
-            aria-label={themeMode === 'dark' ? '切换浅色风格' : '切换深色风格'}
-          >
-            {themeMode === 'dark' ? '☀' : '☾'}
-          </button>
-        </div>
-        <div className="rounded-[14px] border border-border/80 bg-surface-alt/40 p-3">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <span className="text-[11px] font-medium text-text-muted">系统状态</span>
-            <span className="text-[9px] uppercase tracking-[0.24em] text-text-subtle">LUMI</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className={`h-2 w-2 shrink-0 rounded-full ${statusTone(serviceRunning, isAuthorized, isApiConfigured)}`} />
-            <span className="truncate text-[11px] font-medium text-text">{statusLabel(serviceRunning, serviceStatus, isAuthorized, isApiConfigured)}</span>
-          </div>
-        </div>
+      <div className="relative flex shrink-0 flex-col items-center gap-2 px-2 pb-4">
+        <span
+          title={serviceRunning ? '核心运行中' : isApiConfigured ? '配置已就绪' : isAuthorized ? '待启动' : '未登录'}
+          className={`mb-1 h-2 w-2 rounded-full ${statusTone(serviceRunning, isAuthorized, isApiConfigured)}`}
+        />
+        <UtilityButton
+          label="停止运行环境"
+          icon="exit"
+          disabled={!serviceRunning && serviceStatus !== 'starting'}
+          onClick={() => {
+            if (confirm('确定要停止运行环境吗？正在运行的任务可能中断。')) onStop();
+          }}
+        />
       </div>
     </aside>
   );

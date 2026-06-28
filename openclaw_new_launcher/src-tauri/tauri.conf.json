@@ -1,8 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "OpenClaw",
+  "productName": "LOOM",
+  "mainBinaryName": "LOOM",
   "version": "2.1.19",
-  "identifier": "com.yonghaotech.openclaw",
+  "identifier": "top.heang.loom",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "OpenClaw - AI Creative Console",
+        "title": "LOOM - 麓鸣多智能体安装器",
         "width": 1200,
         "height": 800,
         "minWidth": 960,

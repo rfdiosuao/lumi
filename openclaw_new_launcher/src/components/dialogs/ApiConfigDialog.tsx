@@ -201,11 +201,11 @@ export const ApiConfigDialog: React.FC<{ onClose: () => void; onSaved?: () => vo
       openclaw.agents.defaults.models[modelRef] = { alias: primaryModel };
       await configApi.write('data/.openclaw/openclaw.json', openclaw);
 
-      showToast('API 配置已保存', 'success');
+      showToast('模型配置已保存', 'success');
       onSaved?.();
       onClose();
-    } catch (e: any) {
-      showToast('保存失败: ' + (e?.error || e), 'error');
+    } catch {
+      showToast('保存失败，请检查配置', 'error');
     } finally {
       setSaving(false);
     }
@@ -219,7 +219,7 @@ export const ApiConfigDialog: React.FC<{ onClose: () => void; onSaved?: () => vo
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold text-text">API 配置</h2>
+          <h2 className="text-lg font-semibold text-text">模型配置</h2>
           <button onClick={onClose} className="text-text-muted hover:text-text text-xl">&times;</button>
         </div>
 

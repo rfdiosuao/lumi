@@ -4,13 +4,14 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/x-icon" href="/logo.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Lumi - AI Creative Console</title>
+    <title>LOOM - 麓鸣多智能体安装器</title>
     <script>
       (function () {
         try {
-          var mode = window.localStorage.getItem('lumi_theme_mode') === 'light' ? 'light' : 'dark';
+          var stored = window.localStorage.getItem('loom_theme_mode_v2') || window.localStorage.getItem('loom_theme_mode');
+          var mode = stored === 'dark' ? 'dark' : 'light';
           document.documentElement.dataset.themeMode = mode;
-          document.documentElement.style.background = mode === 'dark' ? '#050510' : '#F3F4F6';
+          document.documentElement.style.background = mode === 'dark' ? '#061017' : '#F4EFE5';
           document.documentElement.style.colorScheme = mode;
         } catch (error) {
           document.documentElement.dataset.themeMode = 'light';

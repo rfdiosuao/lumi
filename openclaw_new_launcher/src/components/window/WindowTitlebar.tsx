@@ -1,8 +1,6 @@
 import React from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import logoImg from '../../assets/logo.png';
-import { BrandLogo } from '../common';
-import { useTheme } from '../../hooks/useTheme';
+import { LoomTitleLockup } from '../brand/LoomBrand';
 
 const appWindow = (() => {
   try {
@@ -13,11 +11,11 @@ const appWindow = (() => {
 })();
 
 const WindowButton: React.FC<{
-  label: string;
   title: string;
   danger?: boolean;
   onClick: () => void;
-}> = ({ label, title, danger, onClick }) => (
+  children: React.ReactNode;
+}> = ({ title, danger, onClick, children }) => (
   <button
     type="button"
     title={title}
@@ -26,20 +24,37 @@ const WindowButton: React.FC<{
       event.stopPropagation();
       onClick();
     }}
-    className={`flex h-8 w-10 items-center justify-center rounded-lg text-sm font-semibold transition-colors ${
+    className={`flex h-10 w-12 items-center justify-center rounded-none transition-colors ${
       danger
-        ? 'text-text-muted hover:bg-status-danger hover:text-white'
+        ? 'text-text-muted hover:bg-[#E81123] hover:text-white'
         : 'text-text-muted hover:bg-hover hover:text-text'
     }`}
   >
-    {label}
+    <span className="pointer-events-none flex h-[14px] w-[14px] items-center justify-center">
+      {children}
+    </span>
   </button>
 );
 
-export const WindowTitlebar: React.FC = () => {
-  const { brandName, brandSubtitle, logoUrl } = useTheme();
-  const brandLogo = logoUrl || logoImg;
+const MinimizeGlyph = () => (
+  <svg viewBox="0 0 16 16" className="h-[14px] w-[14px]" aria-hidden="true">
+    <path d="M3.5 8.5h9" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+  </svg>
+);
 
+const MaximizeGlyph = () => (
+  <svg viewBox="0 0 16 16" className="h-[14px] w-[14px]" aria-hidden="true">
+    <rect x="4.25" y="4.25" width="7.5" height="7.5" fill="none" stroke="currentColor" strokeWidth="1.15" />
+  </svg>
+);
+
+const CloseGlyph = () => (
+  <svg viewBox="0 0 16 16" className="h-[14px] w-[14px]" aria-hidden="true">
+    <path d="M4.25 4.25l7.5 7.5M11.75 4.25l-7.5 7.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+  </svg>
+);
+
+export const WindowTitlebar: React.FC = () => {
   const toggleMaximize = () => {
     appWindow?.toggleMaximize().catch(() => {});
   };
@@ -50,23 +65,21 @@ export const WindowTitlebar: React.FC = () => {
       onDoubleClick={toggleMaximize}
       className="flex h-10 shrink-0 items-stretch border-b border-border bg-surface text-text"
     >
-      <div data-tauri-drag-region className="flex w-[260px] shrink-0 items-center gap-2 bg-app-sidebar px-3">
-        <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-border bg-surface-alt">
-          <BrandLogo src={brandLogo} fallbackSrc={logoImg} className="h-4 w-4 object-contain" />
-        </div>
-        <div data-tauri-drag-region className="truncate text-xs font-black tracking-wide">
-          {brandName}
-        </div>
-        <div data-tauri-drag-region className="hidden truncate text-xs text-text-subtle sm:block">
-          {brandSubtitle}
-        </div>
+      <div data-tauri-drag-region className="flex w-[292px] shrink-0 items-center border-r border-[#12343D]/75 bg-app-sidebar px-3 text-white">
+        <LoomTitleLockup wordmarkTone="light" />
       </div>
 
-      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-end bg-surface px-3">
-        <div className="flex items-center gap-1">
-          <WindowButton title="Minimize" label="-" onClick={() => appWindow?.minimize()} />
-          <WindowButton title="Maximize / Restore" label="[]" onClick={toggleMaximize} />
-          <WindowButton title="Close" label="x" danger onClick={() => appWindow?.close()} />
+      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-stretch justify-end bg-surface">
+        <div className="flex h-full items-stretch">
+          <WindowButton title="最小化" onClick={() => appWindow?.minimize()}>
+            <MinimizeGlyph />
+          </WindowButton>
+          <WindowButton title="最大化/还原" onClick={toggleMaximize}>
+            <MaximizeGlyph />
+          </WindowButton>
+          <WindowButton title="关闭" danger onClick={() => appWindow?.close()}>
+            <CloseGlyph />
+          </WindowButton>
         </div>
       </div>
     </div>

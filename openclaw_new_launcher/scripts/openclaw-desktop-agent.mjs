@@ -213,7 +213,6 @@ async function resolveRoot(inputRoot) {
   const candidates = [
     cwd,
     path.join(cwd, 'openclaw_new_launcher'),
-    path.join(cwd, 'openclaw_ui_integration'),
     defaultRoot,
   ];
   for (const candidate of candidates) {
@@ -228,6 +227,8 @@ async function resolveBridgePath(root) {
   const bridgePath = await firstExisting([
     path.join(root, 'python', 'bridge.py'),
     path.join(root, '_up_', 'python', 'bridge.py'),
+    path.join(root, 'LOOMFiles', '_up_', 'python', 'bridge.py'),
+    path.join(root, 'LOOMFiles', 'python', 'bridge.py'),
     path.join(root, 'OpenClawFiles', '_up_', 'python', 'bridge.py'),
     path.join(root, 'OpenClawFiles', 'python', 'bridge.py'),
   ]);

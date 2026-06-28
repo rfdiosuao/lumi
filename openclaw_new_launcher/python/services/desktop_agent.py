@@ -1,4 +1,4 @@
-"""Luminode desktop agent sidecar management."""
+"""LOOM desktop RPA sidecar management."""
 
 from __future__ import annotations
 
@@ -19,8 +19,16 @@ from core.paths import AppPaths
 LogCall = Callable[[str], None]
 
 
+def _strict_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 class DesktopAgentService:
-    """Manage Luminode as an optional local desktop execution sidecar."""
+    """Manage the optional local desktop execution sidecar."""
 
     DEFAULT_PORT = 21900
     ALLOWED_PROXY_PATHS = {
@@ -157,15 +165,15 @@ class DesktopAgentService:
 
         agent_dir = self.resolve_agent_dir(config)
         if not agent_dir:
-            raise FileNotFoundError("未找到 Luminode Desktop Agent 目录，请在桌面控制页设置 agentDir")
+            raise FileNotFoundError("未找到桌面 RPA 组件目录，请在桌面控制页设置 agentDir")
 
         command = self.resolve_command(agent_dir)
         if not command:
-            raise FileNotFoundError(f"未找到 Luminode 可启动入口：{agent_dir}")
+            raise FileNotFoundError(f"未找到桌面 RPA 组件可启动入口：{agent_dir}")
 
         # 显式以 sidecar 模式启动并传参,让 agent 自动开启 token 保护的本地 HTTP API。
-        # agent 读 --luminode-sidecar / --port / --token / --app-type / --api-key(arg 优先于 env)。
-        # 此前启动器只设 LUMINODE_* env,而 agent 读 SIGHTFLOW_* env,前缀对不上 → API 起不来、
+        # sidecar 仍读取 --luminode-sidecar / --port / --token / --app-type / --api-key(arg 优先于 env)。
+        # 这些名称属于桌面组件兼容协议；此前启动器只设 LUMINODE_* env,而 agent 读 SIGHTFLOW_* env,前缀对不上 → API 起不来、
         # 桌面控制无法自主启动。用显式 arg 绕开前缀问题,最可靠。
         sidecar_port = int(config.get("port") or self.DEFAULT_PORT)
         sidecar_token = str(config.get("token") or "")
@@ -210,7 +218,7 @@ class DesktopAgentService:
         if sidecar_provider.get("model"):
             env["SIGHTFLOW_MODEL"] = sidecar_provider["model"]
 
-        self.append_log(f"[DesktopAgent] Starting Luminode: {' '.join(self._redact_command(command))}\n")
+        self.append_log(f"[DesktopAgent] Starting desktop RPA sidecar: {' '.join(self._redact_command(command))}\n")
         popen_kwargs = self._popen_platform_kwargs()
         self.process = subprocess.Popen(
             command,
@@ -379,6 +387,7 @@ class DesktopAgentService:
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             return
@@ -433,11 +442,12 @@ class DesktopAgentService:
                     ["taskkill", "/F", "/T", "/PID", pid],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 stopped = stopped or result.returncode == 0
             else:
-                result = subprocess.run(["kill", "-TERM", pid], capture_output=True, text=True)
+                result = subprocess.run(["kill", "-TERM", pid], capture_output=True, text=True, errors="replace")
                 stopped = stopped or result.returncode == 0
         return stopped
 
@@ -448,6 +458,7 @@ class DesktopAgentService:
                     ["netstat", "-ano", "-p", "tcp"],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             except Exception:
@@ -460,7 +471,7 @@ class DesktopAgentService:
                     pids.add(parts[-1])
             return pids
         try:
-            result = subprocess.run(["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True)
+            result = subprocess.run(["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True, errors="replace")
         except Exception:
             return set()
         return {line.strip() for line in result.stdout.splitlines() if line.strip()}
@@ -515,35 +526,35 @@ class DesktopAgentService:
         wechat = self._public_wechat(config)
 
         if path == "/screenshot" and not policy["allowScreenshot"]:
-            raise PermissionError("desktop screenshot is disabled by launcher policy")
+            raise PermissionError("桌面截图未开启")
 
         if path == "/click":
             if not policy["allowClick"]:
-                raise PermissionError("desktop click is disabled by launcher policy")
-            if policy["requireConfirmForClick"] and not bool(body.get("confirmed")):
-                raise PermissionError("desktop click requires confirmed=true")
+                raise PermissionError("桌面点击未开启")
+            if policy["requireConfirmForClick"] and not _strict_bool(body.get("confirmed")):
+                raise PermissionError("桌面点击需要确认后执行")
 
         if path == "/type":
             if not policy["allowType"]:
-                raise PermissionError("desktop typing is disabled by launcher policy")
-            if policy["requireConfirmForType"] and not bool(body.get("confirmed")):
-                raise PermissionError("desktop typing requires confirmed=true")
+                raise PermissionError("桌面输入未开启")
+            if policy["requireConfirmForType"] and not _strict_bool(body.get("confirmed")):
+                raise PermissionError("桌面输入需要确认后执行")
             self._block_sensitive_text(str(body.get("text") or ""), policy)
 
         if path == "/wechat/send":
             if not policy["allowWechatSend"]:
-                raise PermissionError("wechat send is disabled by launcher policy")
+                raise PermissionError("自动发送未开启")
             if wechat["sendMode"] != "auto_enter":
-                raise PermissionError(f"wechat sendMode={wechat['sendMode']} blocks automatic sending")
-            if policy["requireConfirmForSend"] and not bool(body.get("confirmed")):
-                raise PermissionError("wechat send requires confirmed=true")
+                raise PermissionError("当前发送模式不允许自动发送")
+            if policy["requireConfirmForSend"] and not _strict_bool(body.get("confirmed")):
+                raise PermissionError("自动发送需要确认后执行")
             self._block_sensitive_text(str(body.get("text") or ""), policy)
 
     def _block_sensitive_text(self, text: str, policy: dict) -> None:
         lowered = text.lower()
         for keyword in policy.get("blockedWindowKeywords") or []:
             if keyword and keyword.lower() in lowered:
-                raise PermissionError(f"desktop action blocked by sensitive keyword: {keyword}")
+                raise PermissionError(f"内容包含敏感关键词：{keyword}")
 
     def _augment_body(self, path: str, body: dict, config: dict) -> dict:
         enriched = dict(body)

@@ -18,7 +18,7 @@ const DEFAULT_MAX_WAIT_SEC = DEFAULT_TIMEOUT_SEC + 15;
 const DEFAULT_POLL_MS = 1800;
 const DEFAULT_RELAY_WAIT_SEC = 300;
 const DEFAULT_RELAY_POLL_MS = 2000;
-const DEFAULT_ALBUM = 'OpenClaw Publish';
+const DEFAULT_ALBUM = 'LOOM Publish';
 
 const PLATFORM_META = {
   x: {
@@ -50,7 +50,7 @@ const PLATFORM_META = {
 
 function usage() {
   return `
-OpenClaw platform publish CLI
+LOOM platform publish CLI
 
 Usage:
   npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --image ./a.png --video ./b.mp4
@@ -64,7 +64,7 @@ Options:
   --body <text>                                   Main caption / body
   --hashtags <tag1,tag2>                          Comma, space or newline separated hashtags
   --notes <text>                                  Extra operator notes for the Agent prompt
-  --album <name>                                  Default phone album. Default: OpenClaw Publish
+  --album <name>                                  Default phone album. Default: LOOM Publish
   --relay-url <url>                               Optional reverse relay / phone publish endpoint
   --relay-token <token>                           Optional reverse relay auth token. Env: OPENCLAW_PUBLISH_RELAY_TOKEN
   --channel-id <id>                               Optional reverse publish channel

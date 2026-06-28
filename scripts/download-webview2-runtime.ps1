@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$LauncherDir = Join-Path $Root "openclaw_ui_integration"
+$LauncherDir = Join-Path $Root "openclaw_new_launcher"
 $RedistDir = Join-Path $LauncherDir "redist"
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $RedistDir "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"

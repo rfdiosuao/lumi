@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button, showToast } from '../common';
 import {
   diagnosticsApi,
+  parseErrorText,
   type DiagnosticCheck,
   type DiagnosticExportResult,
   type DiagnosticReport,
@@ -24,7 +25,7 @@ const toneMap: Record<DiagnosticStatus, {
   },
   warn: {
     label: '需处理',
-    dot: 'bg-status-warning shadow-[0_0_12px_rgba(245,158,11,0.55)]',
+    dot: 'bg-status-warning shadow-[0_0_12px_rgba(79,112,95,0.45)]',
     badge: 'border-status-warning/30 bg-status-warning/10 text-status-warning',
     panel: 'border-status-warning/25 bg-status-warning/10',
   },
@@ -59,9 +60,12 @@ const CheckRow: React.FC<{ check: DiagnosticCheck }> = ({ check }) => {
         </span>
       </div>
       {check.detail && (
-        <div className="mt-3 break-all rounded-lg border border-border bg-black/10 px-3 py-2 font-mono text-xs leading-relaxed text-text-subtle">
-          {check.detail}
-        </div>
+        <details className="mt-3 rounded-lg border border-border bg-black/10 px-3 py-2">
+          <summary className="cursor-pointer text-xs font-bold text-text-muted">高级详情</summary>
+          <div className="mt-2 break-all font-mono text-xs leading-relaxed text-text-subtle">
+            {check.detail}
+          </div>
+        </details>
       )}
     </div>
   );
@@ -97,7 +101,7 @@ export const DiagnosticsPage: React.FC = () => {
     } catch (error: any) {
       try {
         const fallback = await diagnosticsApi.bridgeStartupReport();
-        const message = String(error?.error || error || 'Bridge 启动失败');
+        const message = parseErrorText(error) || 'Bridge 启动失败，请查看诊断详情。';
         const checks: DiagnosticCheck[] = [
           {
             id: 'diagnostics_bridge_unavailable',
@@ -126,7 +130,8 @@ export const DiagnosticsPage: React.FC = () => {
         setActions([]);
         showToast('Bridge 未启动，已切换到外层诊断', 'error');
       } catch (fallbackError: any) {
-        showToast(`诊断失败: ${fallbackError?.error || fallbackError || error?.error || error}`, 'error');
+        const message = parseErrorText(fallbackError) || parseErrorText(error) || '诊断服务不可用，请使用 LOOM 桌面应用重新打开。';
+        showToast(`诊断失败: ${message}`, 'error');
       }
     } finally {
       setLoading(false);
@@ -138,14 +143,27 @@ export const DiagnosticsPage: React.FC = () => {
   }, [runDiagnostics]);
 
   const handleRepair = async () => {
+    if (!canRepair) {
+      showToast('当前没有可自动修复的检查项，请先重新诊断或导出诊断包。', 'info');
+      return;
+    }
+    if (!confirm('确定要执行环境修复吗？可能会停止残留进程并清理临时状态。')) return;
     setRepairing(true);
     try {
-      const result = await diagnosticsApi.repair();
+      const result = await diagnosticsApi.repair({ confirmed: true });
       setActions(result.actions || []);
       setReport(result.diagnostics);
-      showToast('一键修复已完成，可以重新启动核心服务', 'success');
+      const hasFailedAction = result.actions.some((action) => action.status === 'fail');
+      const hasWarnAction = result.actions.some((action) => action.status === 'warn');
+      if (hasFailedAction) {
+        showToast('环境修复未完成，请查看失败项并重新诊断', 'error');
+      } else if (hasWarnAction) {
+        showToast('环境修复后仍有需要手动处理的项目', 'info');
+      } else {
+        showToast('一键修复已完成，可以重新检测运行状态', 'success');
+      }
     } catch (error: any) {
-      showToast(`修复失败: ${error?.error || error}`, 'error');
+      showToast(`修复失败: ${parseErrorText(error) || '环境修复未完成，请重新诊断。'}`, 'error');
     } finally {
       setRepairing(false);
     }
@@ -158,7 +176,7 @@ export const DiagnosticsPage: React.FC = () => {
       setExportInfo(result);
       showToast(`诊断包已生成: ${result.filename}`, 'success');
     } catch (error: any) {
-      showToast(`导出失败: ${error?.error || error}`, 'error');
+      showToast(`导出失败: ${parseErrorText(error) || '诊断包导出失败，请检查写入权限。'}`, 'error');
     } finally {
       setExporting(false);
     }
@@ -169,7 +187,7 @@ export const DiagnosticsPage: React.FC = () => {
     try {
       await invoke('open_path', { path: exportInfo.directory });
     } catch (error: any) {
-      showToast(`打开目录失败: ${error?.error || error}`, 'error');
+      showToast(`打开目录失败: ${parseErrorText(error) || '无法打开诊断包目录。'}`, 'error');
     }
   };
 
@@ -180,7 +198,7 @@ export const DiagnosticsPage: React.FC = () => {
     }
     const checks = [...(report.checks || [])].sort((a, b) => statusPriority(a.status) - statusPriority(b.status));
     const lines = [
-      'OpenClaw 环境诊断摘要',
+      'LOOM 环境诊断摘要',
       `状态: ${report.summary?.status || 'unknown'} | 正常 ${report.summary?.ok ?? 0} / 警告 ${report.summary?.warnings ?? 0} / 阻塞 ${report.summary?.failed ?? 0}`,
       `安装目录: ${report.basePath || '-'}`,
       `服务 PID: ${report.servicePid || '未运行'}`,
@@ -194,7 +212,7 @@ export const DiagnosticsPage: React.FC = () => {
       await navigator.clipboard.writeText(lines.join('\n'));
       showToast('诊断摘要已复制', 'success');
     } catch (error: any) {
-      showToast(`复制失败: ${error?.message || error}`, 'error');
+      showToast(`复制失败: ${parseErrorText(error) || '浏览器剪贴板暂不可用。'}`, 'error');
     }
   };
 
@@ -228,8 +246,8 @@ export const DiagnosticsPage: React.FC = () => {
           <Button variant="quiet" onClick={handleExport} disabled={loading || repairing || exporting}>
             {exporting ? '导出中...' : '导出诊断包'}
           </Button>
-          <Button variant="primary" onClick={handleRepair} disabled={loading || repairing}>
-            {repairing ? '修复中...' : canRepair ? '一键修复' : '重新整理环境'}
+          <Button variant="primary" onClick={handleRepair} disabled={loading || repairing || !canRepair}>
+            {repairing ? '修复中...' : canRepair ? '一键修复' : '无可修复项'}
           </Button>
         </div>
       </div>
@@ -262,14 +280,23 @@ export const DiagnosticsPage: React.FC = () => {
             </section>
 
             <section className="rounded-2xl border border-border bg-surface-alt/70 p-5">
-              <h2 className="text-sm font-bold text-text">当前安装目录</h2>
-              <div className="mt-3 break-all rounded-lg border border-border bg-black/10 px-3 py-2 font-mono text-xs text-text-subtle">
-                {report?.basePath || '等待诊断结果...'}
+              <h2 className="text-sm font-bold text-text">安装状态</h2>
+              <div className="mt-3 rounded-lg border border-border bg-black/10 px-3 py-2 text-sm font-bold text-text">
+                {report?.basePath ? '已定位安装目录' : '等待诊断结果...'}
               </div>
               <div className="mt-4 flex items-center justify-between text-sm">
-                <span className="text-text-muted">服务 PID</span>
-                <span className="font-mono text-text">{report?.servicePid || '未运行'}</span>
+                <span className="text-text-muted">核心服务</span>
+                <span className="font-bold text-text">{report?.servicePid ? '已运行' : '未运行'}</span>
               </div>
+              {report?.basePath || report?.servicePid ? (
+                <details className="mt-3 rounded-lg border border-border bg-black/10 px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-bold text-text-muted">高级详情</summary>
+                  <div className="mt-2 space-y-2 break-all font-mono text-xs text-text-subtle">
+                    <div>basePath: {report?.basePath || '-'}</div>
+                    <div>pid: {report?.servicePid || '-'}</div>
+                  </div>
+                </details>
+              ) : null}
             </section>
 
             <section className="rounded-2xl border border-border bg-surface-alt/70 p-5">
@@ -298,16 +325,15 @@ export const DiagnosticsPage: React.FC = () => {
                   <span className="font-mono text-text">{report?.startupTimeoutSec ? `${report.startupTimeoutSec}s` : '-'}</span>
                 </div>
               </div>
-              {report?.startupError && (
-                <div className="mt-3 break-all rounded-lg border border-border bg-black/10 px-3 py-2 font-mono text-xs text-text-subtle">
-                  {report.startupError}
-                </div>
-              )}
-              {report?.startupSnapshotPath && (
-                <div className="mt-3 break-all rounded-lg border border-border bg-black/10 px-3 py-2 font-mono text-xs text-text-subtle">
-                  {report.startupSnapshotPath}
-                </div>
-              )}
+              {report?.startupError || report?.startupSnapshotPath ? (
+                <details className="mt-3 rounded-lg border border-border bg-black/10 px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-bold text-text-muted">高级启动详情</summary>
+                  <div className="mt-2 space-y-2 break-all font-mono text-xs text-text-subtle">
+                    {report?.startupError ? <div>error: {report.startupError}</div> : null}
+                    {report?.startupSnapshotPath ? <div>snapshot: {report.startupSnapshotPath}</div> : null}
+                  </div>
+                </details>
+              ) : null}
             </section>
 
             {exportInfo && (
@@ -318,12 +344,19 @@ export const DiagnosticsPage: React.FC = () => {
                     打开目录
                   </Button>
                 </div>
-                <div className="mt-3 break-all rounded-lg border border-border bg-black/10 px-3 py-2 font-mono text-xs text-text-subtle">
-                  {exportInfo.path}
+                <div className="mt-3 truncate rounded-lg border border-border bg-black/10 px-3 py-2 text-sm font-bold text-text" title={exportInfo.filename}>
+                  {exportInfo.filename}
                 </div>
                 <div className="mt-3 text-xs text-text-muted">
                   大小: {Math.max(1, Math.round(exportInfo.size / 1024))} KB
                 </div>
+                <details className="mt-3 rounded-lg border border-border bg-black/10 px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-bold text-text-muted">高级详情</summary>
+                  <div className="mt-2 space-y-2 break-all font-mono text-xs text-text-subtle">
+                    <div>path: {exportInfo.path}</div>
+                    <div>directory: {exportInfo.directory}</div>
+                  </div>
+                </details>
               </section>
             )}
 

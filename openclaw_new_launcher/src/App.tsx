@@ -6,17 +6,24 @@ import { WindowTitlebar } from './components/window/WindowTitlebar';
 import { ToastContainer, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
-import { processApi, logApi, updateApi, waitForProcessReady } from './services/api';
+import { processApi, logApi, parseErrorText, updateApi } from './services/api';
 import { detectApiConfigured } from './services/apiStatus';
 import { ThemeProvider } from './providers/ThemeProvider';
 import { useTheme } from './hooks/useTheme';
 import { getFeatureDefinition } from './features/registry';
 import { renderFeaturePage } from './features/pages';
-import { ApiConfigDialog as ModernApiConfigDialog } from './components/dialogs/ApiConfigDialog';
-import { FeishuConfigDialog, WeixinConfigDialog } from './components/dialogs/FeishuConfigDialog';
 import { SetupGate } from './components/SetupGate';
+import { LoomSplash } from './components/brand/LoomSplash';
+
+const NAV_PARENT_BY_PAGE: Record<string, string> = {
+  models: 'license',
+  diagnostics: 'capabilities',
+  terminal: 'capabilities',
+};
 
 function formatError(error: unknown): string {
+  const friendly = parseErrorText(error);
+  if (friendly) return friendly;
   if (typeof error === 'string') return error;
   if (error && typeof error === 'object') {
     const value = error as { error?: unknown; message?: unknown };
@@ -64,7 +71,6 @@ export default function App() {
   } = useAppStore();
   const appendLog = useLogStore((s) => s.append);
   const replaceLog = useLogStore((s) => s.replace);
-  const [activeDialog, setActiveDialog] = useState<'api' | 'feishu' | 'weixin' | null>(null);
   const [apiConfigured, setApiConfigured] = useState(false);
   const logInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const logOffset = useRef(0);
@@ -144,48 +150,6 @@ export default function App() {
     }
   }, [currentPage, isAuthorized, isLicenseChecking, setCurrentPage]);
 
-  const handleStart = async () => {
-    if (!isAuthorized) {
-      showToast('请先完成授权', 'error');
-      setCurrentPage('license');
-      return;
-    }
-    setServiceRunning(false);
-    setServiceStatus('starting');
-    try {
-      await processApi.start();
-      startLogPolling();
-      let lastNotice = 0;
-      showToast('核心服务正在后台启动，低配机器会持续等待', 'info');
-      const status = await waitForProcessReady({
-        timeoutMs: 10 * 60 * 1000,
-        intervalMs: 1500,
-        onProgress: (progress) => {
-          const elapsed = progress.startupElapsedSec || 0;
-          const stage = progress.startupStage || 'starting';
-          if (elapsed - lastNotice >= 20) {
-            lastNotice = elapsed;
-            appendLog(`[启动] 核心服务仍在启动中：${elapsed}s / ${progress.startupTimeoutSec || 420}s，当前阶段=${stage}，低配机器可能需要更久。\n`);
-          }
-        }
-      });
-      if (status.running) {
-        setServiceRunning(true);
-        setServiceStatus('running');
-        appendLog('[启动] 核心服务已就绪\n');
-        showToast('核心服务已启动', 'success');
-        setTimeout(() => open('http://127.0.0.1:18790'), 1200);
-        return;
-      }
-      setServiceStatus('starting');
-      showToast('核心服务仍在启动中，请稍后查看状态或环境诊断', 'info');
-    } catch (error: any) {
-      setServiceRunning(false);
-      setServiceStatus('idle');
-      showToast(`启动失败: ${error?.error || error}`, 'error');
-    }
-  };
-
   const handleStop = async () => {
     setServiceStatus('stopping');
     try {
@@ -204,18 +168,13 @@ export default function App() {
     const feature = getFeatureDefinition(key);
 
     if (feature?.requiresLicense && !isAuthorized) {
-      showToast('请先输入授权码完成在线激活', 'info');
+      showToast('请先邮箱登录，或输入授权码完成授权', 'info');
       setCurrentPage('license');
       return;
     }
 
     if (feature?.action.type === 'external') {
       open(feature.action.url);
-      return;
-    }
-
-    if (feature?.action.type === 'dialog') {
-      setActiveDialog(feature.action.dialog);
       return;
     }
 
@@ -244,6 +203,7 @@ export default function App() {
   const currentFeature = getFeatureDefinition(currentPage);
   const canOpenCurrentPage = !currentFeature?.requiresLicense || isAuthorized || isLicenseChecking;
   const visiblePage = canOpenCurrentPage ? currentPage : 'license';
+  const activeNavPage = NAV_PARENT_BY_PAGE[visiblePage] || visiblePage;
 
   return (
     <ThemeProvider>
@@ -252,13 +212,12 @@ export default function App() {
         <WindowTitlebar />
         <div className="flex min-h-0 flex-1 overflow-hidden bg-surface">
           <Sidebar
-            activePage={visiblePage}
+            activePage={activeNavPage}
             serviceRunning={serviceRunning}
             serviceStatus={serviceStatus}
             isAuthorized={isAuthorized}
             isApiConfigured={apiConfigured}
             onNavigate={handleNavigate}
-            onStart={handleStart}
             onStop={handleStop}
           />
           <main className="relative flex-1 overflow-hidden bg-surface">
@@ -267,10 +226,8 @@ export default function App() {
         </div>
 
         <ToastContainer />
+        <LoomSplash />
         <SetupGate />
-        {activeDialog === 'api' && <ModernApiConfigDialog onClose={() => setActiveDialog(null)} onSaved={refreshApiConfigured} />}
-        {activeDialog === 'feishu' && <FeishuConfigDialog onClose={() => setActiveDialog(null)} />}
-        {activeDialog === 'weixin' && <WeixinConfigDialog onClose={() => setActiveDialog(null)} />}
       </div>
     </ThemeProvider>
   );

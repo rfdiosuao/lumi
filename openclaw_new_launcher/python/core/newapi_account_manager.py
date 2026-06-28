@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import http.cookiejar
+import copy
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -13,8 +15,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core.license_manager import LicenseManager
+from core.openclaw_model_sync import sync_openclaw_models
 from core.paths import AppPaths
+from core.secret_store import protect_secret, unprotect_secret
 from core.storage import read_json, write_json
+from core.wire_config import WireService
 
 
 class NewApiAccountError(RuntimeError):
@@ -24,7 +29,30 @@ class NewApiAccountError(RuntimeError):
 DEFAULT_BASE_URL = "https://api.heang.top"
 DEFAULT_API_BASE = "https://api.heang.top/v1"
 ACCOUNT_SOURCE = "newapi_account"
+LEGACY_ACCOUNT_SOURCE = "heang_account"
 SESSION_GRACE_DAYS = 14
+DEFAULT_TEXT_MODEL = "qwen3.7-plus"
+DEFAULT_PHONE_MODEL = "agnes-2.0-flash"
+MANAGED_ACCOUNT_SOURCES = {ACCOUNT_SOURCE, LEGACY_ACCOUNT_SOURCE}
+OPENCLAW_EMAIL_CODE_SEND_PATHS = (
+    "/api/openclaw/auth/email-code/send",
+    "/api/openclaw/email-code/send",
+)
+OPENCLAW_EMAIL_CODE_LOGIN_PATHS = (
+    "/api/openclaw/auth/email-code/login",
+    "/api/openclaw/email-code/login",
+)
+SESSION_SECRET_PATHS = (
+    ("memberToken",),
+    ("gatewayImageAccessToken",),
+    ("gatewayVideoAccessToken",),
+    ("gateway", "accessToken"),
+    ("gateway", "imageAccessToken"),
+    ("gateway", "videoAccessToken"),
+    ("newApi", "sessionCookie"),
+    ("newApi", "launcherToken"),
+    ("phoneAgent", "apiKey"),
+)
 
 
 def _utc_now() -> datetime:
@@ -45,6 +73,24 @@ def _pick_text(*values: Any) -> str:
     return ""
 
 
+def _looks_like_email(value: Any) -> bool:
+    text = str(value or "").strip()
+    return "@" in text and "." in text.rsplit("@", 1)[-1]
+
+
+def _should_retry_email_login(error: Exception) -> bool:
+    text = str(error or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "invalid parameter",
+            "invalid parameters",
+            "missing",
+            "required",
+        )
+    )
+
+
 def _mask_secret(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -52,6 +98,25 @@ def _mask_secret(value: Any) -> str:
     if len(text) <= 8:
         return "****"
     return f"{text[:4]}****{text[-4:]}"
+
+
+SECRET_TEXT_PATTERNS = (
+    re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|session[_-]?cookie|password|secret|token)(\s*[:=]\s*)([^\s,;]+)"),
+    re.compile(r"(?i)\b(bearer\s+)([a-z0-9._~+/=-]{8,})"),
+    re.compile(r"\b(sk-[A-Za-z0-9._-]+|sess-[A-Za-z0-9._-]+|eyJ[A-Za-z0-9._=-]+)"),
+)
+
+
+def _redact_secret_text(value: Any) -> str:
+    text = str(value or "")
+    for pattern in SECRET_TEXT_PATTERNS:
+        if pattern.groups >= 3:
+            text = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}[redacted]", text)
+        elif pattern.groups == 2:
+            text = pattern.sub(lambda match: f"{match.group(1)}[redacted]", text)
+        else:
+            text = pattern.sub("[redacted]", text)
+    return text
 
 
 def _unwrap(payload: Any) -> Any:
@@ -196,6 +261,63 @@ def _extract_models(payload: Any) -> list[str]:
     return models
 
 
+def _model_ids_from_group(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        value = _candidate_items(value) or value.get("models") or value.get("items") or value.get("data")
+    if not isinstance(value, list):
+        value = [value] if value else []
+    result: list[str] = []
+    for item in value:
+        model_id = _pick_text(
+            item.get("id") if isinstance(item, dict) else "",
+            item.get("model") if isinstance(item, dict) else "",
+            item.get("name") if isinstance(item, dict) else "",
+            item,
+        )
+        if model_id and model_id not in result:
+            result.append(model_id)
+    return result
+
+
+def _merge_model_ids(*groups: list[str]) -> list[str]:
+    result: list[str] = []
+    for group in groups:
+        for model_id in group:
+            if model_id and model_id not in result:
+                result.append(model_id)
+    return result
+
+
+def _classified_models_from_catalog(catalog: Any) -> dict[str, list[str]]:
+    if not isinstance(catalog, dict):
+        return _classify_models(_model_ids_from_group(catalog))
+    text = _merge_model_ids(
+        _model_ids_from_group(catalog.get("text")),
+        _model_ids_from_group(catalog.get("chat")),
+        _model_ids_from_group(catalog.get("llm")),
+    )
+    image = _merge_model_ids(
+        _model_ids_from_group(catalog.get("image")),
+        _model_ids_from_group(catalog.get("images")),
+    )
+    video = _merge_model_ids(
+        _model_ids_from_group(catalog.get("video")),
+        _model_ids_from_group(catalog.get("videos")),
+    )
+    inferred = _classify_models(_extract_models(catalog))
+    return {
+        "text": _merge_model_ids(text, inferred["text"]),
+        "image": _merge_model_ids(image, inferred["image"]),
+        "video": _merge_model_ids(video, inferred["video"]),
+    }
+
+
+def _flatten_model_catalog(catalog: Any) -> list[str]:
+    classes = _classified_models_from_catalog(catalog)
+    phone = _model_ids_from_group(catalog.get("phone") if isinstance(catalog, dict) else None)
+    return _merge_model_ids(classes["text"], classes["image"], classes["video"], phone)
+
+
 def _looks_like_image_model(model_id: str) -> bool:
     text = model_id.lower()
     markers = ("image", "dall-e", "gpt-image", "flux", "midjourney", "mj-", "stable-diffusion", "sd-", "imagen", "seedream")
@@ -218,6 +340,17 @@ def _classify_models(models: list[str]) -> dict[str, list[str]]:
         else:
             classified["text"].append(model)
     return classified
+
+
+def _choose_model(candidates: list[str], preferred: str, fallback: list[str] | None = None) -> str:
+    if preferred in candidates:
+        return preferred
+    if candidates:
+        return candidates[0]
+    fallback = fallback or []
+    if preferred in fallback:
+        return preferred
+    return fallback[0] if fallback else preferred
 
 
 class NewApiAccountManager:
@@ -257,7 +390,7 @@ class NewApiAccountManager:
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "OpenClaw-Launcher/2.1",
+                "User-Agent": "LOOM-Launcher/2.1",
                 **(headers or {}),
             },
         )
@@ -298,11 +431,11 @@ class NewApiAccountManager:
         username: str,
         password: str,
     ) -> tuple[str, dict[str, Any]]:
-        payload = self._request_json(
+        payload = self._login_request(
             opener,
             f"{base_url}/api/openclaw/launcher-token",
-            method="POST",
-            body={"username": username, "password": password},
+            username,
+            password,
             timeout=35,
         )
         data = _unwrap(payload)
@@ -319,13 +452,274 @@ class NewApiAccountManager:
             "models": models,
         }
 
+    def _login_request(
+        self,
+        opener: urllib.request.OpenerDirector,
+        url: str,
+        username: str,
+        password: str,
+        *,
+        timeout: int = 20,
+    ) -> dict[str, Any]:
+        try:
+            return self._request_json(
+                opener,
+                url,
+                method="POST",
+                body={"username": username, "password": password},
+                timeout=timeout,
+            )
+        except NewApiAccountError as error:
+            if not (_looks_like_email(username) and _should_retry_email_login(error)):
+                raise
+            self.append_log("[Account] username login payload rejected; retrying email payload\n")
+            return self._request_json(
+                opener,
+                url,
+                method="POST",
+                body={"email": username, "password": password},
+                timeout=timeout,
+            )
+
+    def _claim_bind_ticket(
+        self,
+        opener: urllib.request.OpenerDirector,
+        base_url: str,
+        ticket: str,
+    ) -> dict[str, Any]:
+        payload = self._request_json(
+            opener,
+            f"{base_url}/api/openclaw/bind/claim",
+            method="POST",
+            body={"ticket": ticket},
+            timeout=35,
+        )
+        data = _unwrap(payload)
+        token = _extract_best_api_key(payload)
+        if not token:
+            raise NewApiAccountError("bind_ticket_no_key")
+        models = []
+        if isinstance(data, dict) and isinstance(data.get("models"), list):
+            models = [str(item).strip() for item in data.get("models") or [] if str(item).strip()]
+        return {
+            "raw": payload,
+            "data": data if isinstance(data, dict) else {},
+            "token": token,
+            "models": models,
+        }
+
+    def _request_openclaw_auth_endpoint(
+        self,
+        opener: urllib.request.OpenerDirector,
+        base_url: str,
+        paths: tuple[str, ...],
+        body: dict[str, Any],
+        *,
+        timeout: int = 35,
+    ) -> dict[str, Any]:
+        errors: list[str] = []
+        for path in paths:
+            try:
+                return self._request_json(
+                    opener,
+                    f"{base_url}{path}",
+                    method="POST",
+                    body=body,
+                    timeout=timeout,
+                )
+            except NewApiAccountError as error:
+                errors.append(_redact_secret_text(error))
+        raise NewApiAccountError("; ".join(errors[-2:]) or "openclaw_auth_endpoint_unavailable")
+
+    def send_email_code(self, email: str, *, base_url: str = "") -> dict[str, Any]:
+        email = email.strip()
+        if not _looks_like_email(email):
+            raise NewApiAccountError("请输入有效的中转站邮箱")
+
+        base_url = self.normalize_base_url(base_url)
+        opener = urllib.request.build_opener()
+        payload = self._request_openclaw_auth_endpoint(
+            opener,
+            base_url,
+            OPENCLAW_EMAIL_CODE_SEND_PATHS,
+            {
+                "email": email,
+                "product": "LOOM",
+                "app": "LOOM",
+            },
+        )
+        data = _unwrap(payload)
+        data = data if isinstance(data, dict) else {}
+        result = {
+            "sent": bool(data.get("sent", payload.get("success", True))),
+            "email": email,
+            "maskedEmail": _pick_text(data.get("maskedEmail"), data.get("masked_email")),
+            "retryAfter": data.get("retryAfter") or data.get("retry_after"),
+            "expiresIn": data.get("expiresIn") or data.get("expires_in"),
+            "message": _pick_text(data.get("message"), payload.get("message")),
+        }
+        return {key: value for key, value in result.items() if value not in ("", None)}
+
+    def _build_email_code_session(
+        self,
+        base_url: str,
+        email: str,
+        payload: dict[str, Any],
+        cookie_jar: http.cookiejar.CookieJar,
+    ) -> dict[str, Any]:
+        data = _unwrap(payload)
+        if not isinstance(data, dict):
+            data = {}
+        account = data.get("account") if isinstance(data.get("account"), dict) else {}
+        quota = data.get("quota") if isinstance(data.get("quota"), dict) else {}
+        api = data.get("api") if isinstance(data.get("api"), dict) else {}
+        defaults = data.get("defaults") if isinstance(data.get("defaults"), dict) else {}
+        models_catalog = data.get("models")
+
+        api_token = _pick_text(
+            api.get("token"),
+            api.get("apiKey"),
+            api.get("api_key"),
+            api.get("key"),
+            data.get("scopedModelToken"),
+            data.get("modelToken"),
+            data.get("apiToken"),
+            data.get("apiKey"),
+        )
+        if not api_token:
+            api_token = _extract_best_api_key({"data": api}) or _extract_best_api_key(data)
+        if not api_token:
+            raise NewApiAccountError("邮箱验证码登录成功，但服务端未返回托管模型 Token")
+
+        api_base_url = _pick_text(api.get("baseUrl"), api.get("baseURL"), data.get("baseUrl"), f"{base_url}/v1").rstrip("/")
+        session_base_url = api_base_url[:-3].rstrip("/") if api_base_url.lower().endswith("/v1") else self.normalize_base_url(base_url)
+        username = _pick_text(account.get("email"), account.get("username"), account.get("name"), email)
+        user_id = _pick_text(account.get("id"), account.get("userId"), account.get("user_id"), username)
+        plan = _pick_text(account.get("plan"), account.get("group"), data.get("plan"), "default")
+        launcher_token = _pick_text(data.get("launcherToken"), data.get("launcher_token"), data.get("sessionToken"))
+        flat_models = _flatten_model_catalog(models_catalog)
+        if not flat_models:
+            flat_models = _extract_models(payload)
+        classified = _classified_models_from_catalog(models_catalog)
+        if not any(classified.values()):
+            classified = _classify_models(flat_models)
+        phone_models = _model_ids_from_group(models_catalog.get("phone") if isinstance(models_catalog, dict) else None)
+
+        login_payload = {
+            "success": True,
+            "data": {
+                "id": user_id,
+                "username": username,
+                "email": username,
+                "name": _pick_text(account.get("name"), username),
+                "group": plan,
+                "launcherToken": launcher_token,
+            },
+        }
+        self_payload = {
+            "success": True,
+            "data": {
+                "id": user_id,
+                "username": username,
+                "email": username,
+                "name": _pick_text(account.get("name"), username),
+                "group": plan,
+                "quota": quota.get("remaining") if quota else account.get("quota"),
+                "usedQuota": quota.get("used") if quota else account.get("usedQuota"),
+                "requestCount": quota.get("requestCount") if quota else account.get("requestCount"),
+            },
+        }
+        token_meta = {
+            "source": "openclaw_email_code",
+            "launcherToken": launcher_token,
+            "models": flat_models,
+        }
+        session = self._build_session(
+            session_base_url,
+            username,
+            api_token,
+            login_payload,
+            self_payload,
+            token_meta,
+            flat_models,
+            cookie_jar,
+        )
+        text_model = _pick_text(defaults.get("textModel"), defaults.get("launcherTextModel"), session.get("gatewayDefaultModel"))
+        image_model = _pick_text(defaults.get("imageModel"), session.get("gatewayImageModel"))
+        video_model = _pick_text(defaults.get("videoDraftModel"), defaults.get("videoModel"), session.get("gatewayVideoDraftModel"))
+        phone_model = _pick_text(defaults.get("phoneModel"), phone_models[0] if phone_models else "", DEFAULT_PHONE_MODEL)
+        session.update({
+            "gatewayBaseUrl": api_base_url,
+            "gatewayImageBaseUrl": api_base_url,
+            "gatewayDefaultModel": text_model,
+            "gatewayImageModel": image_model,
+            "gatewayVideoDraftModel": video_model,
+            "gatewayModels": flat_models,
+            "usage": quota,
+        })
+        gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
+        gateway.update({
+            "baseUrl": api_base_url,
+            "imageBaseUrl": api_base_url,
+            "defaultModel": text_model,
+            "imageModel": image_model,
+            "videoDraftModel": video_model,
+            "models": flat_models,
+            "classifiedModels": classified,
+        })
+        gateway.pop("videoModel", None)
+        session["gateway"] = gateway
+        newapi = session.get("newApi") if isinstance(session.get("newApi"), dict) else {}
+        newapi.update({
+            "baseUrl": session_base_url,
+            "launcherToken": launcher_token,
+            "authMethod": "email_code",
+            "modelClasses": classified,
+        })
+        session["newApi"] = newapi
+        phone_agent = session.get("phoneAgent") if isinstance(session.get("phoneAgent"), dict) else {}
+        phone_agent.update({
+            "baseUrl": api_base_url,
+            "apiKey": api_token,
+            "model": phone_model,
+        })
+        session["phoneAgent"] = phone_agent
+        return session
+
+    def login_with_email_code(self, email: str, code: str, *, base_url: str = "") -> dict[str, Any]:
+        email = email.strip()
+        code = code.strip()
+        if not _looks_like_email(email):
+            raise NewApiAccountError("请输入有效的中转站邮箱")
+        if not code:
+            raise NewApiAccountError("请输入邮箱验证码")
+
+        base_url = self.normalize_base_url(base_url)
+        cookie_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        payload = self._request_openclaw_auth_endpoint(
+            opener,
+            base_url,
+            OPENCLAW_EMAIL_CODE_LOGIN_PATHS,
+            {
+                "email": email,
+                "code": code,
+                "product": "LOOM",
+                "app": "LOOM",
+            },
+        )
+        session = self._build_email_code_session(base_url, email, payload, cookie_jar)
+        self._write_session(session)
+        self.sync_targets(session)
+        return session
+
     def _create_launcher_token(
         self,
         opener: urllib.request.OpenerDirector,
         base_url: str,
         headers: dict[str, str],
     ) -> str:
-        token_name = f"OpenClaw Launcher {int(time.time())}"
+        token_name = f"LOOM Launcher {int(time.time())}"
         attempts = [
             {"name": token_name, "remain_quota": 0, "expired_time": -1, "unlimited_quota": True},
             {"name": token_name, "remain_quota": 500000, "expired_time": -1, "unlimited_quota": False},
@@ -350,7 +744,7 @@ class NewApiAccountManager:
                 self._delete_created_tokens_by_name(opener, base_url, headers, token_name, list_payload)
                 raise NewApiAccountError("中转站已创建 Token，但接口只返回脱敏 key；请手动填入 API Token，或在服务端开放创建后返回完整 key")
             except NewApiAccountError as error:
-                message = str(error)
+                message = _redact_secret_text(error)
                 errors.append(message)
                 if "脱敏 key" in message:
                     break
@@ -391,7 +785,7 @@ class NewApiAccountManager:
         try:
             return self._request_launcher_token_bridge(opener, base_url, username, password)
         except NewApiAccountError as error:
-            self.append_log(f"[Account] launcher token bridge unavailable: {error}\n")
+            self.append_log(f"[Account] launcher token bridge unavailable: {_redact_secret_text(error)}\n")
 
         try:
             payload = self._request_json(opener, f"{base_url}/api/token/?p=0&page_size=100", headers=headers)
@@ -443,7 +837,7 @@ class NewApiAccountManager:
         account_name = _extract_account_name(self_data, login_data) or username
         user_id = _extract_user_id(self_data, login_data) or account_name
         classified = _classify_models(models)
-        text_model = classified["text"][0] if classified["text"] else (models[0] if models else "")
+        text_model = _choose_model(classified["text"], DEFAULT_TEXT_MODEL, models)
         image_model = classified["image"][0] if classified["image"] else ""
         video_model = classified["video"][0] if classified["video"] else ""
         now = _utc_now()
@@ -468,8 +862,13 @@ class NewApiAccountManager:
             "gatewayVideoBaseUrl": "",
             "gatewayDefaultModel": text_model,
             "gatewayImageModel": image_model,
-            "gatewayVideoModel": video_model,
+            "gatewayVideoDraftModel": video_model,
             "gatewayModels": models,
+            "lastGoodModels": {
+                "models": models,
+                "classified": classified,
+                "updatedAt": _iso(now),
+            },
             "memberToken": api_token,
             "gatewayImageAccessToken": api_token,
             "gatewayVideoAccessToken": "",
@@ -489,7 +888,7 @@ class NewApiAccountManager:
                 "videoAccessToken": "",
                 "defaultModel": text_model,
                 "imageModel": image_model,
-                "videoModel": video_model,
+                "videoDraftModel": video_model,
                 "models": models,
                 "classifiedModels": classified,
             },
@@ -502,6 +901,12 @@ class NewApiAccountManager:
                 "graceExpiresAt": _iso(now + timedelta(days=SESSION_GRACE_DAYS)),
                 "modelClasses": classified,
             },
+            "phoneAgent": {
+                "managedBy": ACCOUNT_SOURCE,
+                "baseUrl": f"{base_url}/v1",
+                "apiKey": api_token,
+                "model": DEFAULT_PHONE_MODEL,
+            },
             "updatedAt": _iso(now),
             "managedBy": ACCOUNT_SOURCE,
         }
@@ -510,16 +915,16 @@ class NewApiAccountManager:
         username = username.strip()
         password = password.strip()
         if not username or not password:
-            raise NewApiAccountError("请输入中转站账号和密码")
+            raise NewApiAccountError("请输入中转站邮箱和密码")
 
         base_url = self.normalize_base_url(base_url)
         cookie_jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-        login_payload = self._request_json(
+        login_payload = self._login_request(
             opener,
             f"{base_url}/api/user/login",
-            method="POST",
-            body={"username": username, "password": password},
+            username,
+            password,
         )
         login_data = _unwrap(login_payload)
         access_token = _pick_text(
@@ -547,7 +952,45 @@ class NewApiAccountManager:
             models = self._fetch_models(opener, base_url, api_token_value, headers)
         session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
         self._write_session(session)
-        self._sync_image_config(session)
+        self.sync_targets(session)
+        return session
+
+    def bind_ticket(self, ticket: str, *, base_url: str = "") -> dict[str, Any]:
+        ticket = ticket.strip()
+        if not ticket:
+            raise NewApiAccountError("bind ticket is required")
+
+        base_url = self.normalize_base_url(base_url)
+        cookie_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        claimed = self._claim_bind_ticket(opener, base_url, ticket)
+        data = claimed["data"] if isinstance(claimed.get("data"), dict) else {}
+        api_token_value = _pick_text(claimed.get("token"))
+        username = _pick_text(data.get("account"), data.get("username"), "NewAPI Account")
+        user_id = _pick_text(data.get("userId"), data.get("user_id"), data.get("id"), username)
+        login_payload = {
+            "success": True,
+            "data": {
+                "id": user_id,
+                "username": username,
+                "email": username,
+                "group": _pick_text(data.get("group"), data.get("plan"), "default"),
+            },
+        }
+        self_payload = login_payload
+        headers = self._auth_headers("", user_id)
+        models = claimed["models"] if isinstance(claimed.get("models"), list) else []
+        if not models:
+            models = self._fetch_models(opener, base_url, api_token_value, headers)
+        token_meta = {
+            "source": _pick_text(data.get("source"), "website_bind"),
+            "tokenId": data.get("tokenId"),
+            "tokenName": data.get("tokenName") or "",
+            "models": models,
+        }
+        session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
+        self._write_session(session)
+        self.sync_targets(session)
         return session
 
     def refresh_current(self) -> dict[str, Any]:
@@ -566,25 +1009,39 @@ class NewApiAccountManager:
             self_payload = self._request_json(opener, f"{base_url}/api/user/self", headers=headers)
         except NewApiAccountError:
             self_payload = {}
-        models = self._fetch_models(opener, base_url, api_token, headers)
+        online = False
+        try:
+            models = self._fetch_models(opener, base_url, api_token, headers)
+            online = bool(models)
+        except NewApiAccountError:
+            models = []
         if not models and isinstance(session.get("gatewayModels"), list):
             models = list(session.get("gatewayModels") or [])
+        if not models:
+            last_good = session.get("lastGoodModels") if isinstance(session.get("lastGoodModels"), dict) else {}
+            if isinstance(last_good.get("models"), list):
+                models = list(last_good.get("models") or [])
         classified = _classify_models(models)
         now = _utc_now()
         session["gatewayModels"] = models
-        session["gatewayDefaultModel"] = classified["text"][0] if classified["text"] else (models[0] if models else _pick_text(session.get("gatewayDefaultModel")))
+        session["gatewayDefaultModel"] = _choose_model(classified["text"], DEFAULT_TEXT_MODEL, models or [_pick_text(session.get("gatewayDefaultModel"))])
         session["gatewayImageModel"] = classified["image"][0] if classified["image"] else _pick_text(session.get("gatewayImageModel"))
-        session["gatewayVideoModel"] = classified["video"][0] if classified["video"] else _pick_text(session.get("gatewayVideoModel"))
+        session["gatewayVideoDraftModel"] = classified["video"][0] if classified["video"] else _pick_text(
+            session.get("gatewayVideoDraftModel"),
+            session.get("gatewayVideoModel"),
+        )
+        session.pop("gatewayVideoModel", None)
         gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
         gateway.update({
             "models": models,
             "classifiedModels": classified,
             "defaultModel": session["gatewayDefaultModel"],
             "imageModel": session["gatewayImageModel"],
-            "videoModel": session["gatewayVideoModel"],
+            "videoDraftModel": session["gatewayVideoDraftModel"],
         })
+        gateway.pop("videoModel", None)
         session["gateway"] = gateway
-        if isinstance(self_payload, dict):
+        if isinstance(self_payload, dict) and self_payload:
             self_data = _unwrap(self_payload)
             if isinstance(self_data, dict):
                 session["usage"] = {
@@ -592,32 +1049,78 @@ class NewApiAccountManager:
                     "usedQuota": self_data.get("used_quota") or self_data.get("usedQuota"),
                     "requestCount": self_data.get("request_count") or self_data.get("requestCount"),
                 }
+                online = True
+        if online:
+            newapi.update({
+                "lastOnlineAt": _iso(now),
+                "graceExpiresAt": _iso(now + timedelta(days=SESSION_GRACE_DAYS)),
+            })
+            session["lastGoodModels"] = {
+                "models": models,
+                "classified": classified,
+                "updatedAt": _iso(now),
+            }
+        else:
+            newapi.update({
+                "offline": True,
+                "stale": True,
+            })
         newapi.update({
             "baseUrl": base_url,
-            "lastOnlineAt": _iso(now),
-            "graceExpiresAt": _iso(now + timedelta(days=SESSION_GRACE_DAYS)),
             "modelClasses": classified,
         })
         session["newApi"] = newapi
         session["updatedAt"] = _iso(now)
         self._write_session(session)
-        self._sync_image_config(session)
+        self.sync_targets(session)
         return session
 
     def _write_session(self, session: dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(self.session_path), exist_ok=True)
-        write_json(self.session_path, session)
+        write_json(self.session_path, self._protected_session(session))
 
     def current(self) -> dict[str, Any] | None:
         session = read_json(self.session_path, None)
         if isinstance(session, dict) and session.get("source") == ACCOUNT_SOURCE:
-            return session
+            return self._unprotected_session(session)
         return None
+
+    def _protected_session(self, session: dict[str, Any]) -> dict[str, Any]:
+        return self._transform_session_secrets(session, protect_secret)
+
+    def _unprotected_session(self, session: dict[str, Any]) -> dict[str, Any]:
+        return self._transform_session_secrets(session, unprotect_secret)
+
+    @staticmethod
+    def _transform_session_secrets(session: dict[str, Any], transform) -> dict[str, Any]:
+        result = copy.deepcopy(session)
+        for path in SESSION_SECRET_PATHS:
+            current: Any = result
+            for key in path[:-1]:
+                if not isinstance(current, dict):
+                    current = None
+                    break
+                current = current.get(key)
+            if not isinstance(current, dict):
+                continue
+            leaf = path[-1]
+            if leaf in current and current.get(leaf):
+                current[leaf] = transform(current.get(leaf))
+        return result
 
     def public_session(self) -> dict[str, Any]:
         session = self.current()
         if not session:
-            return {"loggedIn": False, "source": "", "account": "", "tokenMasked": "", "models": {"text": [], "image": [], "video": []}, "usage": {}}
+            return {
+                "loggedIn": False,
+                "source": "",
+                "account": "",
+                "tokenMasked": "",
+                "models": {"text": [], "image": [], "video": []},
+                "selectedModels": {"text": "", "image": "", "videoDraft": ""},
+                "usage": {},
+                "lastSyncResults": [],
+            }
         newapi = session.get("newApi") if isinstance(session.get("newApi"), dict) else {}
         gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
         classes = gateway.get("classifiedModels") if isinstance(gateway.get("classifiedModels"), dict) else newapi.get("modelClasses")
@@ -638,9 +1141,71 @@ class NewApiAccountManager:
                 "image": classes.get("image") if isinstance(classes.get("image"), list) else [],
                 "video": classes.get("video") if isinstance(classes.get("video"), list) else [],
             },
+            "selectedModels": {
+                "text": _pick_text(session.get("gatewayDefaultModel"), gateway.get("defaultModel")),
+                "image": _pick_text(session.get("gatewayImageModel"), gateway.get("imageModel")),
+                "videoDraft": _pick_text(
+                    session.get("gatewayVideoDraftModel"),
+                    gateway.get("videoDraftModel"),
+                    session.get("gatewayVideoModel"),
+                    gateway.get("videoModel"),
+                ),
+            },
             "usage": session.get("usage") if isinstance(session.get("usage"), dict) else {},
             "lastOnlineAt": _pick_text(newapi.get("lastOnlineAt")),
             "graceExpiresAt": _pick_text(newapi.get("graceExpiresAt"), session.get("leaseExpiresAt")),
+            "offline": bool(newapi.get("offline")),
+            "stale": bool(newapi.get("stale")),
+            "lastSyncResults": session.get("lastSyncResults") if isinstance(session.get("lastSyncResults"), list) else [],
+        }
+
+    def select_models(self, *, text_model: str = "", image_model: str = "", video_model: str = "") -> dict[str, Any]:
+        session = self.current()
+        if not session:
+            raise NewApiAccountError("尚未登录中转站账号")
+        classes = self._session_model_classes(session)
+        text_model = text_model.strip()
+        image_model = image_model.strip()
+        video_model = video_model.strip()
+        if text_model:
+            self._ensure_model_choice(text_model, classes.get("text", []), "文本模型")
+            session["gatewayDefaultModel"] = text_model
+        if image_model:
+            self._ensure_model_choice(image_model, classes.get("image", []), "图像模型")
+            session["gatewayImageModel"] = image_model
+        if video_model:
+            self._ensure_model_choice(video_model, classes.get("video", []), "视频模型")
+            session["gatewayVideoDraftModel"] = video_model
+        gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
+        if text_model:
+            gateway["defaultModel"] = text_model
+        if image_model:
+            gateway["imageModel"] = image_model
+        if video_model:
+            gateway["videoDraftModel"] = video_model
+        session.pop("gatewayVideoModel", None)
+        gateway.pop("videoModel", None)
+        session["gateway"] = gateway
+        session["updatedAt"] = _iso(_utc_now())
+        self._write_session(session)
+        self.sync_targets(session, targets=("openclaw", "image", "desktop", "phone"))
+        return self.public_session()
+
+    @staticmethod
+    def _ensure_model_choice(model: str, candidates: list[str], label: str) -> None:
+        if model not in candidates:
+            raise NewApiAccountError(f"{label}不在当前账号可用列表中")
+
+    def _session_model_classes(self, session: dict[str, Any]) -> dict[str, list[str]]:
+        newapi = session.get("newApi") if isinstance(session.get("newApi"), dict) else {}
+        gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
+        classes = gateway.get("classifiedModels") if isinstance(gateway.get("classifiedModels"), dict) else newapi.get("modelClasses")
+        if not isinstance(classes, dict):
+            classes = _classify_models(session.get("gatewayModels") if isinstance(session.get("gatewayModels"), list) else [])
+        return {
+            "text": classes.get("text") if isinstance(classes.get("text"), list) else [],
+            "image": classes.get("image") if isinstance(classes.get("image"), list) else [],
+            "video": classes.get("video") if isinstance(classes.get("video"), list) else [],
         }
 
     def _sync_image_config(self, session: dict[str, Any]) -> None:
@@ -661,6 +1226,73 @@ class NewApiAccountManager:
         })
         write_json(self.paths.image_config, current)
 
+    def _sync_video_config(self, session: dict[str, Any]) -> None:
+        self._clear_managed_video_config()
+
+    def _clear_managed_video_config(self) -> None:
+        for path in (self.paths.video_config, self.paths.videoapi_config):
+            current = read_json(path, {})
+            if not isinstance(current, dict) or current.get("lockedByUser") is True:
+                continue
+            if current.get("managedBy") in MANAGED_ACCOUNT_SOURCES or current.get("gatewayMode") == "member":
+                write_json(path, {})
+
+    def _sync_openclaw_models(self) -> None:
+        sync_openclaw_models(self.paths, self.license_mgr.current_gateway_profile())
+
+    def _sync_desktop_agent_config(self, session: dict[str, Any]) -> None:
+        model = _pick_text(session.get("gatewayDefaultModel"), DEFAULT_TEXT_MODEL)
+        base_url = _pick_text(session.get("gatewayBaseUrl"), DEFAULT_API_BASE)
+        api_key = _pick_text(session.get("memberToken"))
+        path = os.path.join(self.paths.launcher_dir, "desktop-agent.json")
+        current = read_json(path, {})
+        if not isinstance(current, dict):
+            current = {}
+        provider = {
+            "managedBy": ACCOUNT_SOURCE,
+            "apiKey": api_key,
+            "baseUrl": base_url,
+            "baseURL": base_url,
+            "model": model,
+        }
+        current.setdefault("provider", {})
+        current.setdefault("llm", {})
+        current.setdefault("chatProvider", {})
+        current["chatProvider"].setdefault("config", {})
+        current["provider"].update(provider)
+        current["llm"].update(provider)
+        current["chatProvider"]["config"].update(provider)
+        write_json(path, current)
+
+    def _sync_phone_agent_config(self, session: dict[str, Any]) -> None:
+        phone_agent = session.get("phoneAgent") if isinstance(session.get("phoneAgent"), dict) else {}
+        base_url = _pick_text(phone_agent.get("baseUrl"), session.get("gatewayBaseUrl"), DEFAULT_API_BASE)
+        api_key = _pick_text(phone_agent.get("apiKey"), session.get("memberToken"))
+        model = _pick_text(phone_agent.get("model"), DEFAULT_PHONE_MODEL)
+        path = os.path.join(self.paths.launcher_dir, "phone-agent.json")
+        current = read_json(path, {})
+        if not isinstance(current, dict):
+            current = {}
+        current.setdefault("llm", {})
+        current["llm"].update({
+            "managedBy": ACCOUNT_SOURCE,
+            "baseUrl": base_url,
+            "apiKey": api_key,
+            "model": model,
+        })
+        write_json(path, current)
+
+    def sync_targets(self, session: dict[str, Any] | None = None, *, targets: tuple[str, ...] = ("openclaw", "image", "desktop", "phone")) -> list[dict[str, Any]]:
+        session = session or self.current()
+        if not session:
+            raise NewApiAccountError("not_logged_in")
+        result = WireService(self.paths, self.append_log).sync_from_session(session, targets=targets)
+        results = result["syncResults"] if isinstance(result.get("syncResults"), list) else []
+        session["lastSyncResults"] = results
+        if isinstance(session, dict) and session.get("source") == ACCOUNT_SOURCE:
+            self._write_session(session)
+        return results
+
     def logout(self) -> bool:
         session = self.current()
         if not session:
@@ -678,14 +1310,14 @@ class NewApiAccountManager:
             models = profiles.get("models") if isinstance(profiles.get("models"), dict) else {}
             providers = models.get("providers") if isinstance(models.get("providers"), dict) else {}
             if isinstance(providers, dict):
-                provider = providers.get("member_gateway")
-                if isinstance(provider, dict) and provider.get("managedBy") == ACCOUNT_SOURCE:
-                    providers.pop("member_gateway", None)
-                    if models.get("primary") == "member_gateway":
-                        models["primary"] = next(iter(providers), "")
+                for provider_id, provider in list(providers.items()):
+                    if isinstance(provider, dict) and provider.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
+                        providers.pop(provider_id, None)
+                if models.get("primary") not in providers:
+                    models["primary"] = next(iter(providers), "")
                     write_json(self.paths.auth_profiles, profiles)
 
         for path in (self.paths.image_config, self.paths.video_config, os.path.join(self.paths.base_path, "videoapi_config.json")):
             data = read_json(path, {})
-            if isinstance(data, dict) and data.get("managedBy") == ACCOUNT_SOURCE:
+            if isinstance(data, dict) and data.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
                 write_json(path, {})

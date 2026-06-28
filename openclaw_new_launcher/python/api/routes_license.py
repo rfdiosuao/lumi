@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from api.safe_payload import public_safe_payload
 from core.license_manager import LicenseError
 
 
@@ -18,11 +19,11 @@ def register_license_routes(app, ctx) -> None:
             member = ctx.get_member_mgr().current()
         except Exception:
             member = None
-        return ctx.fastapi_json({
+        return ctx.fastapi_json(public_safe_payload({
             "license": license_data,
             "gatewayProfile": gateway_profile,
             "member": member,
-        })
+        }))
 
     @app.get("/api/license/client-config")
     async def license_client_config(request: Request):
@@ -52,6 +53,6 @@ def register_license_routes(app, ctx) -> None:
             except Exception as sync_error:
                 ctx.append_log(f"[License] Gateway config sync failed after activation: {sync_error}\n")
             theme = ctx.get_theme_mgr().get_current(ctx.get_license_mgr().current_license())
-            return ctx.fastapi_json({"license": result, "theme": theme})
+            return ctx.fastapi_json(public_safe_payload({"license": result, "theme": theme}))
         except LicenseError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)

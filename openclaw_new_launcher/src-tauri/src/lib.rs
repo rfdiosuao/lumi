@@ -1,7 +1,7 @@
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::io::Read;
 use std::io::Write;
-use std::collections::HashMap;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
@@ -22,7 +22,10 @@ static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const PORTABLE_PAYLOAD_DIR: &str = "OpenClawFiles";
+const PRIMARY_PAYLOAD_DIR: &str = "LOOMFiles";
+const LEGACY_PAYLOAD_DIR: &str = "OpenClawFiles";
+const PORTABLE_PAYLOAD_DIRS: [&str; 2] = [PRIMARY_PAYLOAD_DIR, LEGACY_PAYLOAD_DIR];
+const LAUNCHER_EXE_NAME: &str = "LOOM.exe";
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,7 +143,14 @@ fn summarize_checks(checks: &[DiagnosticCheck]) -> DiagnosticSummary {
     let warnings = checks.iter().filter(|item| item.status == "warn").count();
     let ok = checks.iter().filter(|item| item.status == "ok").count();
     DiagnosticSummary {
-        status: if failed > 0 { "fail" } else if warnings > 0 { "warn" } else { "ok" }.to_string(),
+        status: if failed > 0 {
+            "fail"
+        } else if warnings > 0 {
+            "warn"
+        } else {
+            "ok"
+        }
+        .to_string(),
         ok,
         warnings,
         failed,
@@ -153,8 +163,22 @@ fn path_check(id: &str, label: &str, path: &std::path::Path, required: bool) -> 
     DiagnosticCheck {
         id: id.to_string(),
         label: label.to_string(),
-        status: if exists { "ok" } else if required { "fail" } else { "warn" }.to_string(),
-        message: if exists { "已找到" } else if required { "缺失，启动器无法继续启动 Bridge" } else { "未找到，可能影响便携包完整性" }.to_string(),
+        status: if exists {
+            "ok"
+        } else if required {
+            "fail"
+        } else {
+            "warn"
+        }
+        .to_string(),
+        message: if exists {
+            "已找到"
+        } else if required {
+            "缺失，启动器无法继续启动 Bridge"
+        } else {
+            "未找到，可能影响便携包完整性"
+        }
+        .to_string(),
         detail: path.to_string_lossy().to_string(),
         repairable: false,
     }
@@ -171,11 +195,30 @@ fn protected_feature(path: &str) -> Option<&'static str> {
 
 fn portable_base_dir() -> Result<std::path::PathBuf, String> {
     let install_root = bootstrap::install_root()?;
-    let payload_dir = install_root.join(PORTABLE_PAYLOAD_DIR);
-    if payload_dir.exists() {
-        return Ok(payload_dir);
+    for payload_dir in PORTABLE_PAYLOAD_DIRS {
+        let path = install_root.join(payload_dir);
+        if path.exists() {
+            return Ok(path);
+        }
     }
     Ok(install_root)
+}
+
+fn payload_bridge_candidates(base_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut candidates = vec![
+        base_dir.join("python").join("bridge.py"),
+        base_dir.join("_up_").join("python").join("bridge.py"),
+    ];
+    for payload_dir in PORTABLE_PAYLOAD_DIRS {
+        candidates.push(
+            base_dir
+                .join(payload_dir)
+                .join("_up_")
+                .join("python")
+                .join("bridge.py"),
+        );
+    }
+    candidates
 }
 
 fn python_binary_names() -> &'static [&'static str] {
@@ -226,6 +269,18 @@ fn bridge_python_exe(py_path: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
+fn is_packaged_bridge(py_path: &std::path::Path) -> bool {
+    let mut saw_up = false;
+    for component in py_path.components() {
+        let text = component.as_os_str().to_string_lossy();
+        if saw_up && text.eq_ignore_ascii_case("python") {
+            return true;
+        }
+        saw_up = text.eq_ignore_ascii_case("_up_");
+    }
+    false
+}
+
 fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     if !py_path.exists() {
         let message = format!("bridge.py 未找到: {}", py_path.display());
@@ -234,6 +289,14 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     }
 
     let python_exe = bridge_python_exe(py_path);
+    if is_packaged_bridge(py_path) && !python_exe.exists() {
+        let message = format!(
+            "Python 运行时未就绪：未找到 {}。请重新解压在线包，确认首启运行时下载完成，或改用包含 Python 运行时的新版在线包。",
+            python_exe.display()
+        );
+        set_bridge_startup_error(message.clone());
+        return Err(message);
+    }
     let mut child_cmd = Command::new(&python_exe);
     child_cmd.arg(py_path);
     child_cmd.env("PYTHONUTF8", "1");
@@ -250,18 +313,16 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     child_cmd.stderr(std::process::Stdio::piped());
     #[cfg(windows)]
     child_cmd.creation_flags(CREATE_NO_WINDOW);
-    let mut child = child_cmd
-        .spawn()
-        .map_err(|e| {
-            let message = format!(
-                "启动 Python bridge 失败: python={} bridge={} error={}",
-                python_exe.display(),
-                py_path.display(),
-                e
-            );
-            set_bridge_startup_error(message.clone());
-            message
-        })?;
+    let mut child = child_cmd.spawn().map_err(|e| {
+        let message = format!(
+            "启动 Python bridge 失败: python={} bridge={} error={}",
+            python_exe.display(),
+            py_path.display(),
+            e
+        );
+        set_bridge_startup_error(message.clone());
+        message
+    })?;
     let child_pid = child.id();
     if let Ok(mut guard) = BRIDGE_CHILD_PID.lock() {
         *guard = Some(child_pid);
@@ -375,22 +436,27 @@ fn get_portable_base_path() -> Result<String, String> {
 fn bridge_startup_report() -> Result<DiagnosticReport, String> {
     let base_dir = portable_base_dir()?;
     let mut checks: Vec<DiagnosticCheck> = Vec::new();
-    let exe_path = std::env::current_exe().unwrap_or_else(|_| base_dir.join("OpenClaw.exe"));
+    let exe_path = std::env::current_exe().unwrap_or_else(|_| base_dir.join(LAUNCHER_EXE_NAME));
     checks.push(path_check("tauri_exe", "启动器 EXE", &exe_path, true));
     checks.push(path_check("portable_base", "运行根目录", &base_dir, true));
 
-    let candidates = [
-        base_dir.join("python").join("bridge.py"),
-        base_dir.join("_up_").join("python").join("bridge.py"),
-        base_dir.join(PORTABLE_PAYLOAD_DIR).join("_up_").join("python").join("bridge.py"),
-    ];
+    let candidates = payload_bridge_candidates(&base_dir);
     let bridge_path = candidates.iter().find(|path| path.exists()).cloned();
     checks.push(DiagnosticCheck {
         id: "bridge_py_outer".to_string(),
         label: "Bridge 脚本外层检查".to_string(),
         status: if bridge_path.is_some() { "ok" } else { "fail" }.to_string(),
-        message: if bridge_path.is_some() { "已找到 bridge.py" } else { "未找到 bridge.py，Python Bridge 无法启动" }.to_string(),
-        detail: candidates.iter().map(|path| path.to_string_lossy().to_string()).collect::<Vec<_>>().join("；"),
+        message: if bridge_path.is_some() {
+            "已找到 bridge.py"
+        } else {
+            "未找到 bridge.py，Python Bridge 无法启动"
+        }
+        .to_string(),
+        detail: candidates
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("；"),
         repairable: false,
     });
 
@@ -401,7 +467,12 @@ fn bridge_startup_report() -> Result<DiagnosticReport, String> {
             id: "bridge_python_outer".to_string(),
             label: "Bridge Python 外层检查".to_string(),
             status: if python_is_path { "ok" } else { "fail" }.to_string(),
-            message: if python_is_path { "已找到随包 Python" } else { "未找到随包 Python，离线包不能依赖系统 Python" }.to_string(),
+            message: if python_is_path {
+                "已找到随包 Python"
+            } else {
+                "未找到随包 Python，离线包不能依赖系统 Python"
+            }
+            .to_string(),
             detail: python_exe.to_string_lossy().to_string(),
             repairable: false,
         });
@@ -416,8 +487,20 @@ fn bridge_startup_report() -> Result<DiagnosticReport, String> {
     checks.push(DiagnosticCheck {
         id: "bridge_startup_error".to_string(),
         label: "Bridge 启动失败快照".to_string(),
-        status: if bridge_running { "ok" } else if last_error.starts_with("暂无") { "warn" } else { "fail" }.to_string(),
-        message: if bridge_running { "Bridge 已启动" } else { "Bridge 未启动，下面是启动器外层捕获到的最近错误" }.to_string(),
+        status: if bridge_running {
+            "ok"
+        } else if last_error.starts_with("暂无") {
+            "warn"
+        } else {
+            "fail"
+        }
+        .to_string(),
+        message: if bridge_running {
+            "Bridge 已启动"
+        } else {
+            "Bridge 未启动，下面是启动器外层捕获到的最近错误"
+        }
+        .to_string(),
         detail: last_error,
         repairable: false,
     });
@@ -454,9 +537,9 @@ async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
         return Ok(format!("Bridge already started on port {}", existing_port));
     }
 
-    // Prefer the external payload root. Mac full/online packages keep
-    // OpenClawFiles next to OpenClaw.app so runtime layers can be downloaded
-    // without mutating the signed .app bundle.
+    // Prefer the external payload root. Mac full/online packages keep the
+    // payload next to the .app so runtime layers can be downloaded without
+    // mutating the signed app bundle.
     if let Ok(base_dir) = portable_base_dir() {
         for rel_path in ["_up_/python/bridge.py", "python/bridge.py"] {
             let py_path = base_dir.join(rel_path);
@@ -479,14 +562,9 @@ async fn start_bridge(app: tauri::AppHandle) -> Result<String, String> {
     // Release binaries run next to the bundled payload directory before installation.
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            for rel_path in [
-                "python/bridge.py",
-                "_up_/python/bridge.py",
-                "OpenClawFiles/_up_/python/bridge.py",
-            ] {
-                let py_path = exe_dir.join(rel_path);
+            for py_path in payload_bridge_candidates(exe_dir) {
                 if py_path.exists() {
-                    return spawn_bridge(&py_path);
+                    return spawn_bridge(py_path.as_path());
                 }
             }
         }
@@ -624,7 +702,11 @@ async fn phone_proxy_request(
             if trimmed_name.is_empty() || trimmed_value.is_empty() {
                 continue;
             }
-            if trimmed_name.contains('\r') || trimmed_name.contains('\n') || trimmed_value.contains('\r') || trimmed_value.contains('\n') {
+            if trimmed_name.contains('\r')
+                || trimmed_name.contains('\n')
+                || trimmed_value.contains('\r')
+                || trimmed_value.contains('\n')
+            {
                 return Err("invalid_phone_header".to_string());
             }
             req = req.header(trimmed_name, trimmed_value);

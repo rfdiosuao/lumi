@@ -19,13 +19,21 @@ from core.paths import AppPaths
 
 UiCall = Callable[..., None]
 LogCall = Callable[[str], None]
+CommandRunner = Callable[[list[str], int], subprocess.CompletedProcess]
 
 
 class OpenClawProcessService:
-    def __init__(self, paths: AppPaths, append_log: LogCall, ui_call: UiCall):
+    def __init__(
+        self,
+        paths: AppPaths,
+        append_log: LogCall,
+        ui_call: UiCall,
+        command_runner: CommandRunner | None = None,
+    ):
         self.paths = paths
         self.append_log = append_log
         self.ui_call = ui_call
+        self.command_runner = command_runner or self._run_command
         self.process: subprocess.Popen | None = None
         self.running = False
         self._output_tail: list[str] = []
@@ -208,6 +216,7 @@ class OpenClawProcessService:
                     ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             self.running = False
@@ -219,7 +228,7 @@ class OpenClawProcessService:
         if self.process and self.process.poll() is None:
             pid = self.process.pid
             self.append_log("\n[OpenClaw] Stopping...\n")
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, text=True)
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, text=True, errors="replace")
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -257,12 +266,51 @@ class OpenClawProcessService:
                 "repairable": repairable and not exists,
             })
 
+        def first_existing(candidates: list[str]) -> str:
+            for candidate in candidates:
+                if candidate and os.path.exists(candidate):
+                    return candidate
+            return ""
+
         file_check("base_path", "安装目录", self.paths.base_path)
         checks.append(self._storage_health_check(write_test=True))
         file_check("node", "Node.js 运行时", self.paths.node_exe)
+        file_check("npm", "npm 包管理器", self.paths.npm_cli)
         file_check("start_js", "OpenClaw 启动脚本", self.paths.find_file("start.js", ("back", "backup", "")))
         file_check("openclaw_core", "OpenClaw 本体", self.paths.openclaw_mjs)
         file_check("data_dir", "数据目录", self.paths.data_dir, required=False, repairable=True)
+        git_path = shutil.which("git")
+        checks.append({
+            "id": "git",
+            "label": "Git",
+            "status": "ok" if git_path else "warn",
+            "message": "已找到" if git_path else "未找到；部分编程智能体的仓库能力会受限",
+            "detail": git_path or "Git for Windows",
+            "repairable": False,
+        })
+        git_bash_path = shutil.which("bash") or first_existing([
+            os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Git", "bin", "bash.exe"),
+            os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Git", "usr", "bin", "bash.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Git", "bin", "bash.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Git", "usr", "bin", "bash.exe"),
+        ])
+        checks.append({
+            "id": "git_bash",
+            "label": "Git Bash",
+            "status": "ok" if git_bash_path else "warn",
+            "message": "已找到" if git_bash_path else "未找到；部分命令行智能体的 shell 能力会受限",
+            "detail": git_bash_path or "Git for Windows bash.exe",
+            "repairable": False,
+        })
+        uv_path = shutil.which("uv")
+        checks.append({
+            "id": "uv",
+            "label": "uv",
+            "status": "ok" if uv_path else "warn",
+            "message": "已找到" if uv_path else "未找到；Python 组件安装会使用备用流程",
+            "detail": uv_path or "Python uv package manager",
+            "repairable": False,
+        })
         checks.append(self._openclaw_config_check())
         checks.append(self._webview2_check())
         checks.append(self._python_runtime_check())
@@ -406,6 +454,11 @@ class OpenClawProcessService:
             "message": storage_check["message"],
             "count": 0,
         })
+
+        preflight_checks = self.diagnose_environment().get("checks", [])
+        actions.append(self._install_public_prerequisites_action(preflight_checks))
+        actions.append(self._repair_webview2_runtime(preflight_checks))
+        actions.append(self._prerequisite_source_check_action(preflight_checks))
 
         return {
             "actions": actions,
@@ -576,10 +629,10 @@ class OpenClawProcessService:
                     shutil.copy2(source, target)
 
         fallbacks = {
-            "AGENTS.md": "# AGENTS.md - OpenClaw Portable Launcher Workspace\n\nUse the portable launcher capabilities before asking the user to move files manually.\n",
-            "SOUL.md": "# SOUL.md - OpenClaw Portable Launcher\n\nBe careful, practical, and aware that this workspace runs inside a portable launcher.\n",
+            "AGENTS.md": "# AGENTS.md - LOOM Portable Launcher Workspace\n\nUse the portable launcher capabilities before asking the user to move files manually.\n",
+            "SOUL.md": "# SOUL.md - LOOM Portable Launcher\n\nBe careful, practical, and aware that this workspace runs inside a portable launcher.\n",
             "TOOLS.md": "# TOOLS.md - Portable Launcher Tools\n\nRead runtime-context.json for current paths and phone Agent state.\n",
-            "CAPABILITIES.md": "# OpenClaw Portable Launcher Capability Map\n\nRead runtime-context.json for current capability state.\n",
+            "CAPABILITIES.md": "# LOOM Portable Launcher Capability Map\n\nRead runtime-context.json for current capability state.\n",
         }
         for filename, content in fallbacks.items():
             target = os.path.join(self.paths.openclaw_workspace, filename)
@@ -605,7 +658,7 @@ class OpenClawProcessService:
         member_gateway_models: list[str] = []
         member_gateway_default_model = ""
         member_gateway_image_model = ""
-        member_gateway_video_model = ""
+        member_gateway_video_draft_model = ""
         for gateway_source in (member_license, member_session):
             if not isinstance(gateway_source, dict):
                 continue
@@ -667,9 +720,12 @@ class OpenClawProcessService:
                 or gateway.get("imageModel")
                 or ""
             ).strip()
-            member_gateway_video_model = str(
-                gateway_source.get("gatewayVideoModel")
+            member_gateway_video_draft_model = str(
+                gateway_source.get("gatewayVideoDraftModel")
+                or gateway_source.get("videoDraftModel")
+                or gateway_source.get("gatewayVideoModel")
                 or gateway_source.get("videoModel")
+                or gateway.get("videoDraftModel")
                 or gateway.get("videoModel")
                 or ""
             ).strip()
@@ -719,7 +775,7 @@ class OpenClawProcessService:
                 "tags": [],
                 "lastSeenAt": None,
             }]
-        phone_album = str(selected_phone_config.get("album") or os.environ.get("OPENCLAW_PHONE_ALBUM") or "OpenClaw") if isinstance(selected_phone_config, dict) else "OpenClaw"
+        phone_album = str(selected_phone_config.get("album") or os.environ.get("OPENCLAW_PHONE_ALBUM") or "LOOM") if isinstance(selected_phone_config, dict) else "LOOM"
         phone_url = str(selected_phone_config.get("baseUrl") or "").rstrip("/") if isinstance(selected_phone_config, dict) else ""
         token_available = bool(str(selected_phone_config.get("token") or "").strip()) if isinstance(selected_phone_config, dict) else False
         desktop_port = int(desktop_config.get("port") or 21900) if isinstance(desktop_config, dict) else 21900
@@ -738,7 +794,7 @@ class OpenClawProcessService:
             "schema": "openclaw.launcher.runtime-context.v1",
             "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "launcher": {
-                "name": "OpenClaw Portable Launcher",
+                "name": "LOOM Portable Launcher",
                 "version": launcher_version,
                 "mode": "usb-portable",
                 "root": self.paths.base_path,
@@ -754,7 +810,7 @@ class OpenClawProcessService:
                     "videoBaseUrl": member_gateway_video_base or member_gateway_base or None,
                     "defaultModel": member_gateway_default_model or None,
                     "imageModel": member_gateway_image_model or None,
-                    "videoModel": member_gateway_video_model or None,
+                    "videoDraftModel": member_gateway_video_draft_model or None,
                     "models": member_gateway_models,
                 },
             },
@@ -785,7 +841,7 @@ class OpenClawProcessService:
                     "available": True,
                     "configured": self._has_config_values(video_config) or member_gateway_configured,
                     "model": video_config.get("model") if isinstance(video_config, dict) else None,
-                    "memberModel": member_gateway_video_model or None,
+                    "memberModel": member_gateway_video_draft_model or None,
                 },
                 "phoneAgent": {
                     "available": True,
@@ -1064,6 +1120,202 @@ class OpenClawProcessService:
             "repairable": False,
         }
 
+    def _run_command(self, command: list[str], timeout_sec: int) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout_sec,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    def _install_public_prerequisites_action(self, checks: list[dict]) -> dict:
+        package_rules = (
+            (("git", "git_bash"), "Git", "Git.Git"),
+            (("node", "npm"), "Node.js", "OpenJS.NodeJS.LTS"),
+            (("python_runtime",), "Python", "Python.Python.3.11"),
+            (("uv",), "uv", "astral-sh.uv"),
+        )
+        missing_packages: list[tuple[str, str]] = []
+        seen_package_ids: set[str] = set()
+        for check_ids, label, package_id in package_rules:
+            if package_id in seen_package_ids:
+                continue
+            missing = any(
+                str(check.get("id") or "") in check_ids and str(check.get("status") or "") in {"fail", "warn"}
+                for check in checks
+            )
+            if missing:
+                missing_packages.append((label, package_id))
+                seen_package_ids.add(package_id)
+
+        if not missing_packages:
+            return {
+                "label": "安装公共前置环境",
+                "status": "ok",
+                "message": "Git、Node.js、Python 和 uv 已就绪，无需安装",
+                "count": 0,
+            }
+
+        failures: list[str] = []
+        installed: list[str] = []
+        if missing_packages:
+            try:
+                winget_check = self.command_runner(["winget", "--version"], 20)
+                winget_code = int(getattr(winget_check, "returncode", 0) or 0)
+            except Exception as error:
+                winget_code = 1
+                failures.append(f"winget 不可用：{error}")
+            if winget_code == 0:
+                for label, package_id in missing_packages:
+                    command = [
+                        "winget",
+                        "install",
+                        "--id",
+                        package_id,
+                        "--exact",
+                        "--accept-package-agreements",
+                        "--accept-source-agreements",
+                        "--silent",
+                    ]
+                    try:
+                        result = self.command_runner(command, 1800)
+                        code = int(getattr(result, "returncode", 0) or 0)
+                    except Exception as error:
+                        failures.append(f"{label} 安装命令失败：{error}")
+                        continue
+                    if code in (0, 3010):
+                        installed.append(label)
+                    else:
+                        output = ((getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")).strip()
+                        if len(output) > 180:
+                            output = output[:180] + "..."
+                        failures.append(f"{label} 安装失败，退出码 {code}：{output or '请手动运行 winget 后重试'}")
+
+        if failures:
+            return {
+                "label": "安装公共前置环境",
+                "status": "fail" if not installed else "warn",
+                "message": "；".join(failures),
+                "count": len(installed),
+            }
+        return {
+            "label": "安装公共前置环境",
+            "status": "ok",
+            "message": f"已执行公共前置安装：{'、'.join(installed)}。安装完成后可能需要重启 LOOM 或重新打开终端。",
+            "count": len(installed),
+        }
+
+    def _webview2_redist_path(self) -> str:
+        redist_candidates = [
+            os.path.join(self.paths.base_path, "redist", "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"),
+            os.path.join(self.paths.base_path, "_up_", "redist", "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"),
+        ]
+        return next((path for path in redist_candidates if os.path.isfile(path)), "")
+
+    def _repair_webview2_runtime(self, checks: list[dict]) -> dict:
+        webview2 = next((check for check in checks if check.get("id") == "webview2"), None)
+        if not isinstance(webview2, dict):
+            webview2 = self._webview2_check()
+        if webview2.get("status") == "ok":
+            return {
+                "label": "安装 WebView2 Runtime",
+                "status": "ok",
+                "message": "已检测到 WebView2 Runtime，无需处理",
+                "count": 0,
+            }
+        if not webview2.get("repairable"):
+            return {
+                "label": "安装 WebView2 Runtime",
+                "status": "warn",
+                "message": "未检测到 WebView2 Runtime，且包内缺少离线安装器。请使用完整 LOOM 离线包或先安装 Microsoft Edge WebView2 Runtime。",
+                "count": 0,
+            }
+
+        installer = self._webview2_redist_path()
+        if not installer:
+            return {
+                "label": "安装 WebView2 Runtime",
+                "status": "warn",
+                "message": "WebView2 可修复，但未找到随包离线安装器。请使用完整 LOOM 离线包。",
+                "count": 0,
+            }
+
+        command = [installer, "/silent", "/install"]
+        self.append_log(f"[Diagnostics] Installing WebView2 Runtime from bundled offline installer: {installer}\n")
+        try:
+            result = self.command_runner(command, 180)
+        except subprocess.TimeoutExpired:
+            return {
+                "label": "安装 WebView2 Runtime",
+                "status": "fail",
+                "message": "WebView2 离线安装器执行超时，请稍后重试或手动运行 redist 目录中的安装器。",
+                "count": 0,
+            }
+        except Exception as error:
+            return {
+                "label": "安装 WebView2 Runtime",
+                "status": "fail",
+                "message": f"WebView2 离线安装器启动失败：{error}",
+                "count": 0,
+            }
+
+        code = int(getattr(result, "returncode", 0) or 0)
+        if code in (0, 3010):
+            return {
+                "label": "安装 WebView2 Runtime",
+                "status": "ok",
+                "message": "已执行 WebView2 离线安装器；如窗口仍异常，请重启 LOOM 后重新检测。",
+                "count": 1,
+            }
+        output = ((getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")).strip()
+        if len(output) > 240:
+            output = output[:240] + "..."
+        return {
+            "label": "安装 WebView2 Runtime",
+            "status": "fail",
+            "message": f"WebView2 离线安装器返回 {code}。{output or '请以管理员身份重试，或手动运行 redist 目录中的安装器。'}",
+            "count": 0,
+        }
+
+    def _prerequisite_source_check_action(self, checks: list[dict]) -> dict:
+        required_labels = {
+            "node": "Node.js",
+            "npm": "npm",
+            "python_runtime": "Python",
+            "git": "Git",
+            "git_bash": "Git Bash",
+        }
+        missing: list[str] = []
+        for check in checks:
+            check_id = str(check.get("id") or "")
+            if check_id not in required_labels:
+                continue
+            status = str(check.get("status") or "")
+            if status not in ("fail", "warn"):
+                continue
+            if check.get("repairable"):
+                continue
+            label = required_labels[check_id]
+            if label not in missing:
+                missing.append(label)
+
+        if not missing:
+            return {
+                "label": "前置环境离线源检查",
+                "status": "ok",
+                "message": "关键前置环境已就绪或已有随包修复源。",
+                "count": 0,
+            }
+        names = "、".join(missing)
+        return {
+            "label": "前置环境离线源检查",
+            "status": "warn",
+            "message": f"检测到 {names} 缺失或不可用。当前包内没有对应离线安装源；请使用完整 LOOM 离线包，或先安装官方运行时后重新检测。",
+            "count": len(missing),
+        }
+
     def _webview2_check(self) -> dict:
         if os.name != "nt":
             return {
@@ -1108,11 +1360,7 @@ class OpenClawProcessService:
             detail_parts.extend(existing_dirs)
 
         installed = bool(version or existing_dirs)
-        redist_candidates = [
-            os.path.join(self.paths.base_path, "redist", "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"),
-            os.path.join(self.paths.base_path, "_up_", "redist", "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"),
-        ]
-        redist = next((path for path in redist_candidates if os.path.isfile(path)), "")
+        redist = self._webview2_redist_path()
         if redist:
             detail_parts.append(f"offline installer: {redist}")
         return {
@@ -1149,6 +1397,7 @@ class OpenClawProcessService:
                 [python_exe, "-c", "import fastapi, uvicorn; print('ok')"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=12,
                 env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -1373,7 +1622,7 @@ class OpenClawProcessService:
                 "id": "runtime_context",
                 "label": "Runtime Context",
                 "status": "warn",
-                "message": "runtime-context.json 尚未生成；启动核心服务时会自动写入",
+                "message": "runtime-context.json 尚未生成；启动运行环境时会自动写入",
                 "detail": path,
                 "repairable": False,
             }
@@ -1607,7 +1856,7 @@ class OpenClawProcessService:
 
     def _kill_port_processes(self, port: int) -> int:
         try:
-            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
             return 0
         pids: set[str] = set()
@@ -1642,13 +1891,14 @@ class OpenClawProcessService:
             ["schtasks", "/End", "/TN", "OpenClaw Gateway"],
             capture_output=True,
             text=True,
+            errors="replace",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return 1 if completed.returncode == 0 else 0
 
     def _port_listeners(self, port: int) -> list[dict[str, str]]:
         try:
-            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
             return []
         pids: set[str] = set()
@@ -1664,7 +1914,7 @@ class OpenClawProcessService:
     def _port_range_listeners(self, start: int, end: int, exclude_pids: set[str] | None = None) -> list[dict[str, str]]:
         exclude_pids = exclude_pids or set()
         try:
-            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
             return []
         pids: set[str] = set()
@@ -1691,6 +1941,7 @@ class OpenClawProcessService:
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception:
@@ -1711,6 +1962,7 @@ class OpenClawProcessService:
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception:
@@ -1735,6 +1987,7 @@ class OpenClawProcessService:
                     ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             except Exception:
@@ -1780,6 +2033,7 @@ class OpenClawProcessService:
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception:
@@ -1804,6 +2058,7 @@ class OpenClawProcessService:
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception:
@@ -1822,6 +2077,7 @@ class OpenClawProcessService:
             ["taskkill", "/F", "/T", "/PID", str(pid)],
             capture_output=True,
             text=True,
+            errors="replace",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return completed.returncode == 0
@@ -1851,7 +2107,7 @@ class OpenClawProcessService:
         except OSError:
             pass
         try:
-            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            result = subprocess.run(["netstat", "-aon"], capture_output=True, text=True, errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
             return False
         marker = f":{port}"

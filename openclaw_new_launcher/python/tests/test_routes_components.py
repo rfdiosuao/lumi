@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
+
+
+PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PYTHON_DIR not in sys.path:
+    sys.path.insert(0, PYTHON_DIR)
+
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
+
+from api.routes_components import register_component_routes, _resolve_component_for_action
+from api.routes_jobs import register_job_routes
+from services.jobs import JobManager
+
+
+class ComponentRouteResolutionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._env_patch = patch.dict(os.environ, {"LOOM_RELEASE_MANIFEST_DISABLE_DEFAULTS": "1"})
+        self._env_patch.start()
+
+    def tearDown(self) -> None:
+        self._env_patch.stop()
+
+    def test_dry_run_can_use_fallback_component_when_manifest_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            component, error = _resolve_component_for_action(
+                os.path.join(temp_dir, "release-manifest.json"),
+                "codex-desktop",
+                allow_fallback=True,
+            )
+
+            self.assertIsNotNone(component)
+            self.assertEqual(component.component_id, "codex-desktop")
+            self.assertIsNotNone(error)
+            self.assertIn("release-manifest.json", error or "")
+
+    def test_real_action_resolution_requires_formal_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            component, error = _resolve_component_for_action(
+                os.path.join(temp_dir, "release-manifest.json"),
+                "codex-desktop",
+                allow_fallback=False,
+            )
+
+            self.assertIsNone(component)
+            self.assertIsNotNone(error)
+            self.assertIn("release-manifest.json", error or "")
+
+    def test_dry_run_install_route_returns_persistent_job_progress_for_page_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_component_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            response = client.post(
+                "/api/components/install",
+                json={"componentId": "codex-desktop", "mode": "simulate", "dryRun": True},
+            )
+
+            self.assertEqual(response.status_code, 202)
+            submitted = response.json()
+            self.assertTrue(submitted["jobId"].startswith("job_"))
+            self.assertEqual(submitted["state"]["status"], "resolving_manifest")
+
+            job = _wait_for_job(client, submitted["jobId"])
+
+            self.assertEqual(job["status"], "succeeded")
+            self.assertEqual(job["kind"], "component.install.simulate")
+            self.assertEqual(job["result"]["state"]["status"], "simulation_ready")
+            self.assertEqual(job["result"]["catalog"]["components"][0]["status"], "simulation_ready")
+            self.assertEqual(job["progress"]["componentId"], "codex-desktop")
+            self.assertGreaterEqual(len(job["progress"]["history"]), 6)
+            self.assertIn("codex-desktop", "".join(logs))
+
+            listed = client.get("/api/jobs/list?limit=5").json()["jobs"]
+            listed_job = next(item for item in listed if item["id"] == submitted["jobId"])
+            self.assertEqual(listed_job["status"], "succeeded")
+            self.assertEqual(listed_job["result"]["state"]["status"], "simulation_ready")
+
+    def test_real_install_route_requires_confirmation_before_manifest_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_component_routes(app, ctx)
+            client = TestClient(app)
+
+            response = client.post("/api/components/install", json={"componentId": "codex-desktop"})
+
+            self.assertEqual(response.status_code, 403)
+            self.assertIn("安装组件需要确认", response.json()["error"])
+
+    def test_rollback_route_runs_through_job_manager(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rollback_dir = os.path.join(temp_dir, "data", ".installer", "rollback", "codex-desktop")
+            os.makedirs(rollback_dir, exist_ok=True)
+            with open(os.path.join(rollback_dir, "restored.txt"), "w", encoding="utf-8") as handle:
+                handle.write("previous")
+
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_component_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            response = client.post(
+                "/api/components/rollback",
+                json={"componentId": "codex-desktop", "confirmed": True},
+            )
+
+            self.assertEqual(response.status_code, 202)
+            submitted = response.json()
+            self.assertTrue(submitted["jobId"].startswith("job_"))
+            self.assertEqual(submitted["job"]["kind"], "component.rollback")
+            self.assertEqual(submitted["state"]["status"], "rolling_back")
+
+            job = _wait_for_job(client, submitted["jobId"])
+
+            self.assertEqual(job["status"], "succeeded")
+            self.assertEqual(job["result"]["state"]["status"], "ready")
+            self.assertTrue(os.path.isfile(os.path.join(temp_dir, "agents", "codex-desktop", "restored.txt")))
+            self.assertEqual(job["progress"]["phase"], "rollback")
+
+    def test_rollback_route_requires_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_component_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            response = client.post("/api/components/rollback", json={"componentId": "codex-desktop"})
+
+            self.assertEqual(response.status_code, 403)
+            self.assertIn("确认", response.json()["error"])
+
+
+def _test_context(base_path: str, job_mgr: JobManager, logs: list[str]) -> SimpleNamespace:
+    async def body(request):
+        payload = await request.json()
+        return payload if isinstance(payload, dict) else {}
+
+    def fastapi_json(data: dict, status_code: int = 200):
+        payload = dict(data)
+        payload["_meta"] = {"ok": 200 <= status_code < 400 and "error" not in payload, "status": status_code}
+        return JSONResponse(status_code=status_code, content=payload)
+
+    return SimpleNamespace(
+        append_log=logs.append,
+        auth_error=lambda _request: None,
+        body=body,
+        fastapi_json=fastapi_json,
+        get_job_mgr=lambda: job_mgr,
+        paths=SimpleNamespace(base_path=base_path),
+    )
+
+
+def _wait_for_job(client: TestClient, job_id: str, timeout: float = 2.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = client.get(f"/api/jobs/{job_id}")
+        if response.status_code == 200:
+            job = response.json()["job"]
+            if job.get("status") in {"succeeded", "failed"}:
+                return job
+        time.sleep(0.02)
+    raise AssertionError(f"job did not finish: {job_id}")
+
+
+if __name__ == "__main__":
+    unittest.main()

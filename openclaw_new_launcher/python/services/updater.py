@@ -48,6 +48,7 @@ class OpenClawUpdater:
                 command,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 cwd=self.paths.base_path,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 timeout=30,

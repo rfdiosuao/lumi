@@ -33,7 +33,10 @@ fn webview2_runtime_present() -> bool {
         r"HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
         r"HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
     ];
-    if registry_keys.iter().any(|key| reg_key_has_webview2_version(key)) {
+    if registry_keys
+        .iter()
+        .any(|key| reg_key_has_webview2_version(key))
+    {
         return true;
     }
 
@@ -45,7 +48,10 @@ fn webview2_runtime_present() -> bool {
     }
 
     roots.iter().any(|root| {
-        let app_dir = root.join("Microsoft").join("EdgeWebView").join("Application");
+        let app_dir = root
+            .join("Microsoft")
+            .join("EdgeWebView")
+            .join("Application");
         std::fs::read_dir(app_dir)
             .ok()
             .into_iter()
@@ -64,12 +70,17 @@ fn find_bundled_webview2_installer() -> Option<std::path::PathBuf> {
 
     let mut candidates = Vec::new();
     for root in [exe_dir, current_dir].into_iter().flatten() {
-        candidates.push(root.join("redist").join("MicrosoftEdgeWebView2RuntimeInstallerX64.exe"));
         candidates.push(
-            root.join("OpenClawFiles")
-                .join("redist")
+            root.join("redist")
                 .join("MicrosoftEdgeWebView2RuntimeInstallerX64.exe"),
         );
+        for payload_dir in ["LOOMFiles", "OpenClawFiles"] {
+            candidates.push(
+                root.join(payload_dir)
+                    .join("redist")
+                    .join("MicrosoftEdgeWebView2RuntimeInstallerX64.exe"),
+            );
+        }
         candidates.push(
             root.join("_up_")
                 .join("redist")
@@ -110,10 +121,10 @@ fn ensure_webview2_before_tauri() {
         MessageBoxW, IDYES, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MB_YESNO,
     };
 
-    let title = wide_null("OpenClaw 启动环境缺失");
+    let title = wide_null("LOOM 启动环境缺失");
     if let Some(installer) = find_bundled_webview2_installer() {
         let message = wide_null(
-            "当前系统缺少 Microsoft Edge WebView2 Runtime，启动器界面可能白屏或无法打开。\n\n已在离线包中找到 WebView2 安装器。是否现在安装？安装完成后请重新打开 OpenClaw。",
+            "当前系统缺少 Microsoft Edge WebView2 Runtime，启动器界面可能白屏或无法打开。\n\n已在离线包中找到 WebView2 安装器。是否现在安装？安装完成后请重新打开 LOOM。",
         );
         let result = unsafe {
             MessageBoxW(
@@ -128,7 +139,7 @@ fn ensure_webview2_before_tauri() {
         }
     } else {
         let message = wide_null(
-            "当前系统缺少 Microsoft Edge WebView2 Runtime，启动器界面可能白屏或无法打开。\n\n请安装 Microsoft Edge WebView2 Evergreen Runtime 后重新打开 OpenClaw。离线交付包应包含 redist\\MicrosoftEdgeWebView2RuntimeInstallerX64.exe。",
+            "当前系统缺少 Microsoft Edge WebView2 Runtime，启动器界面可能白屏或无法打开。\n\n请安装 Microsoft Edge WebView2 Evergreen Runtime 后重新打开 LOOM。离线交付包应包含 redist\\MicrosoftEdgeWebView2RuntimeInstallerX64.exe。",
         );
         unsafe {
             MessageBoxW(

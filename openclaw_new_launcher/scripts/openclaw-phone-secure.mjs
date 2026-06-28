@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+﻿import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,7 @@ export async function readLauncherPhoneConfig() {
 export async function readLauncherPhoneStore() {
   const candidates = [
     path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agents.json'),
+    path.join(PROJECT_ROOT, 'LOOMFiles', 'data', '.openclaw', 'launcher', 'phone-agents.json'),
     path.join(PROJECT_ROOT, 'OpenClawFiles', 'data', '.openclaw', 'launcher', 'phone-agents.json'),
   ];
 
@@ -76,6 +77,7 @@ export async function readLauncherPhoneConfigByDevice(deviceId = '') {
 
   const candidates = [
     path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agent.json'),
+    path.join(PROJECT_ROOT, 'LOOMFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
     path.join(PROJECT_ROOT, 'OpenClawFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
   ];
 
@@ -133,7 +135,7 @@ export async function pairLumiLauncher(config) {
     };
   }
 
-  const launcherId = config.lumiLauncherId || `openclaw-cli-${crypto.randomUUID()}`;
+  const launcherId = config.lumiLauncherId || `loom-cli-${crypto.randomUUID()}`;
   const response = await fetchWithTimeout(`${normalizePhoneUrl(config.phoneUrl)}/api/lumi/security/pair`, {
     method: 'POST',
     headers: {
@@ -143,8 +145,8 @@ export async function pairLumiLauncher(config) {
     },
     body: JSON.stringify({
       launcherId,
-      launcherName: 'OpenClaw CLI',
-      clientVersion: 'openclaw-cli',
+      launcherName: 'LOOM CLI',
+      clientVersion: 'loom-cli',
     }),
   }, 30_000);
   const payload = await parseJsonResponse(response, 'Phone pairing returned non-JSON response');
@@ -208,7 +210,7 @@ export async function uploadMediaBuffer(config, bytes, filename, mime, endpoint)
   const dataUrl = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
   const payload = await signedJsonRequest(config, 'POST', endpoint, {
     dataUrl,
-    album: config.album || 'OpenClaw',
+    album: config.album || 'LOOM',
     filename,
   }, 120_000);
   return payload.data || payload;

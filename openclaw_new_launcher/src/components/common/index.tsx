@@ -9,7 +9,7 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 export const Button: React.FC<ButtonProps> = ({ variant = 'default', children, className = '', ...props }) => {
   const base = 'px-4 py-2 rounded-xl font-semibold transition-all cursor-pointer text-sm disabled:opacity-50 disabled:cursor-not-allowed';
   const variants: Record<string, string> = {
-    primary: 'bg-accent hover:bg-accent-hover text-accent-ink shadow-[0_14px_34px_rgba(214,180,106,0.18)]',
+    primary: 'border border-[#0B4A3E]/45 bg-[#0B4A3E] text-[#F5FFF9] shadow-[0_12px_28px_rgba(8,60,49,0.20)] hover:border-[#146650]/60 hover:bg-[#12604F]',
     danger: 'bg-status-danger/12 hover:bg-status-danger/22 text-status-danger border border-status-danger/35',
     success: 'bg-status-success/14 hover:bg-status-success/24 text-status-success border border-status-success/35 shadow-[0_0_18px_rgba(63,224,143,0.16)]',
     quiet: 'bg-surface-alt/70 hover:bg-hover text-text-muted hover:text-text border border-border',
@@ -62,7 +62,7 @@ export const Modal: React.FC<{
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/70 backdrop-blur-md" />
       <div
-        className="relative mx-4 max-h-[82vh] w-full max-w-lg overflow-auto rounded-2xl border border-border bg-surface/95 p-6 shadow-[0_28px_90px_rgba(0,0,0,0.56),0_0_34px_rgba(214,180,106,0.12)]"
+        className="relative mx-4 max-h-[82vh] w-full max-w-lg overflow-auto rounded-2xl border border-border bg-surface/95 p-6 shadow-[0_28px_90px_rgba(0,0,0,0.56),0_0_34px_rgba(11,74,62,0.12)]"
         onClick={(event) => event.stopPropagation()}
       >
         {title && (
@@ -134,7 +134,7 @@ export const ToastContainer: React.FC = () => {
   const colors: Record<string, string> = {
     success: 'bg-status-success text-[#04140D]',
     error: 'bg-status-danger text-white',
-    info: 'bg-accent text-accent-ink',
+    info: 'border border-[#0B4A3E]/35 bg-[#0B4A3E] text-[#F5FFF9]',
   };
   return (
     <div className="pointer-events-none fixed right-5 top-5 z-[100] flex w-[min(560px,calc(100vw-2.5rem))] flex-col gap-2">
@@ -186,7 +186,7 @@ export const BrandLogo: React.FC<{
 
 export const Loading: React.FC<{ text?: string }> = ({ text = '加载中...' }) => (
   <div className="flex flex-col items-center justify-center gap-3 py-12">
-    <div className="h-8 w-8 animate-spin rounded-full border-4 border-accent border-t-transparent" />
+    <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#0B4A3E] border-t-transparent" />
     <span className="text-sm text-text-muted">{text}</span>
   </div>
 );

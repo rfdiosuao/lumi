@@ -31,7 +31,7 @@ function parseArgs(argv) {
     deviceId: '',
     phoneUrl: process.env.OPENCLAW_PHONE_BASE_URL || '',
     phoneToken: process.env.OPENCLAW_PHONE_TOKEN || '',
-    phoneAlbum: process.env.OPENCLAW_PHONE_ALBUM || 'OpenClaw',
+    phoneAlbum: process.env.OPENCLAW_PHONE_ALBUM || 'LOOM',
     probe: false,
     write: false,
     json: false,
@@ -168,7 +168,7 @@ async function readPublishConfig(root) {
   return {
     platformId: hasText(publishConfig?.platformId) ? String(publishConfig.platformId).trim() : 'xiaohongshu',
     transportMode: hasText(publishConfig?.transportMode) ? String(publishConfig.transportMode).trim() : 'direct',
-    album: hasText(publishConfig?.phoneAlbum) ? String(publishConfig.phoneAlbum).trim() : 'OpenClaw Publish',
+    album: hasText(publishConfig?.phoneAlbum) ? String(publishConfig.phoneAlbum).trim() : 'LOOM Publish',
     selectedDeviceId: hasText(publishConfig?.selectedDeviceId) ? String(publishConfig.selectedDeviceId).trim() : '',
     reverseRelayUrl: hasText(publishConfig?.reverseRelayUrl) ? String(publishConfig.reverseRelayUrl).trim() : '',
     reverseChannelId: hasText(publishConfig?.reverseChannelId) ? String(publishConfig.reverseChannelId).trim() : '',
@@ -241,7 +241,7 @@ async function buildContext(args) {
   const desktopFileConfig = await readDesktopConfig(root);
   const publishFileConfig = await readPublishConfig(root);
   const phoneUrl = args.phoneUrl || phoneFileConfig.baseUrl;
-  const phoneAlbum = args.phoneAlbum || phoneFileConfig.album || 'OpenClaw';
+  const phoneAlbum = args.phoneAlbum || phoneFileConfig.album || 'LOOM';
   const tokenAvailable = hasText(args.phoneToken) || phoneFileConfig.tokenAvailable;
   const phoneProbe = args.probe ? await probePhone(phoneUrl, args.phoneToken) : null;
   const phoneProfile = args.probe ? await probePhoneProfile(phoneUrl, args.phoneToken) : null;
@@ -251,7 +251,7 @@ async function buildContext(args) {
     schema: 'openclaw.launcher.runtime-context.v1',
     updatedAt: new Date().toISOString(),
     launcher: {
-      name: 'OpenClaw Portable Launcher',
+      name: 'LOOM Portable Launcher',
       version: String(launcherRuntime?.version || (packageJson?.name === 'openclaw-new-launcher' ? packageJson?.version : '') || 'unknown'),
       mode: 'usb-portable',
       root,

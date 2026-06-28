@@ -71,7 +71,7 @@ class MemberManager:
                 method=method,
                 headers={
                     "Content-Type": "application/json",
-                    "User-Agent": "OpenClaw-Launcher/2.0",
+                    "User-Agent": "LOOM-Launcher/2.0",
                 },
             )
             try:
@@ -201,7 +201,11 @@ class MemberManager:
                 member.get("gatewayImageModel") if isinstance(member, dict) else "",
                 gateway.get("imageModel") if isinstance(gateway, dict) else "",
             ) or None,
-            "gatewayVideoModel": self._pick_text(
+            "gatewayVideoDraftModel": self._pick_text(
+                data.get("gatewayVideoDraftModel"),
+                license_data.get("gatewayVideoDraftModel") if isinstance(license_data, dict) else "",
+                member.get("gatewayVideoDraftModel") if isinstance(member, dict) else "",
+                gateway.get("videoDraftModel") if isinstance(gateway, dict) else "",
                 data.get("gatewayVideoModel"),
                 license_data.get("gatewayVideoModel") if isinstance(license_data, dict) else "",
                 member.get("gatewayVideoModel") if isinstance(member, dict) else "",
@@ -270,6 +274,13 @@ class MemberManager:
         if not session["memberName"]:
             session["memberName"] = session["memberId"] or "会员"
 
+        session.pop("gatewayVideoModel", None)
+        if isinstance(session.get("gateway"), dict):
+            session["gateway"].pop("gatewayVideoModel", None)
+            session["gateway"].pop("videoModel", None)
+            if session.get("gatewayVideoDraftModel"):
+                session["gateway"]["videoDraftModel"] = session["gatewayVideoDraftModel"]
+
         return session
 
     def _read_session_file(self) -> dict[str, Any] | None:
@@ -309,7 +320,13 @@ class MemberManager:
             return None
         gateway_default_model = self._pick_text(provider.get("gatewayDefaultModel"), provider.get("defaultModel"), provider.get("model"))
         gateway_image_model = self._pick_text(provider.get("gatewayImageModel"), provider.get("imageModel"), provider.get("image_model"))
-        gateway_video_model = self._pick_text(provider.get("gatewayVideoModel"), provider.get("videoModel"), provider.get("video_model"))
+        gateway_video_draft_model = self._pick_text(
+            provider.get("gatewayVideoDraftModel"),
+            provider.get("videoDraftModel"),
+            provider.get("gatewayVideoModel"),
+            provider.get("videoModel"),
+            provider.get("video_model"),
+        )
         gateway_models = provider.get("gatewayModels") if isinstance(provider.get("gatewayModels"), list) else provider.get("models")
         if not isinstance(gateway_models, list):
             gateway_models = []
@@ -330,7 +347,7 @@ class MemberManager:
                 "gatewayVideoAccessToken": self._pick_text(provider.get("gatewayVideoAccessToken"), provider.get("gatewayVideoToken")),
                 "gatewayDefaultModel": gateway_default_model,
                 "gatewayImageModel": gateway_image_model,
-                "gatewayVideoModel": gateway_video_model,
+                "gatewayVideoDraftModel": gateway_video_draft_model,
                 "gatewayModels": gateway_models,
                 "features": provider.get("features") or [],
                 "usage": provider.get("usage") or {},
@@ -344,7 +361,7 @@ class MemberManager:
                     "videoAccessToken": self._pick_text(provider.get("gatewayVideoAccessToken"), provider.get("gatewayVideoToken"), token),
                     "defaultModel": gateway_default_model,
                     "imageModel": gateway_image_model,
-                    "videoModel": gateway_video_model,
+                    "videoDraftModel": gateway_video_draft_model,
                     "models": gateway_models,
                 },
                 "source": "profiles",

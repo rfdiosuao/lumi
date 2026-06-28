@@ -55,7 +55,6 @@ impl LicenseStatus {
             device_bound: false,
         }
     }
-
 }
 
 pub fn check_license(base_path: &Path) -> LicenseStatus {
@@ -261,8 +260,9 @@ fn device_id_candidates_for_serial(serial: &str) -> Vec<String> {
         serial
     ))];
     candidates.extend(
-        ('A'..='Z')
-            .map(|letter| hash_device_payload(&format!("{}:\\|{}|openclaw-launcher", letter, serial))),
+        ('A'..='Z').map(|letter| {
+            hash_device_payload(&format!("{}:\\|{}|openclaw-launcher", letter, serial))
+        }),
     );
     candidates.sort();
     candidates.dedup();

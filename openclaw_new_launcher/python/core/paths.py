@@ -129,8 +129,24 @@ class AppPaths:
         return os.path.join(self.base_path, "video_config.json")
 
     @property
+    def videoapi_config(self) -> str:
+        return os.path.join(self.base_path, "videoapi_config.json")
+
+    @property
     def member_session_file(self) -> str:
         return os.path.join(self.launcher_dir, "member-session.json")
+
+    @property
+    def wire_current(self) -> str:
+        return os.path.join(self.launcher_dir, "wire-current.json")
+
+    @property
+    def wire_last_good(self) -> str:
+        return os.path.join(self.launcher_dir, "wire-last-good.json")
+
+    @property
+    def jobs_state(self) -> str:
+        return os.path.join(self.launcher_dir, "jobs-state.json")
 
     @property
     def storyboard_dir(self) -> str:

@@ -6,6 +6,7 @@ param(
     [switch]$SkipSourceText,
     [switch]$SkipWorkspaceHygiene,
     [switch]$SkipDistSelftest,
+    [switch]$SkipInstallerManifest,
     [switch]$SkipAdminConsole,
     [switch]$SkipLicenseFlowTests
 )
@@ -15,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 
 function Resolve-LauncherDir {
-    $candidates = @("openclaw_ui_integration", "openclaw_new_launcher")
+    $candidates = @("openclaw_new_launcher")
     foreach ($candidate in $candidates) {
         $path = Join-Path $Root $candidate
         if (
@@ -25,7 +26,7 @@ function Resolve-LauncherDir {
             return $path
         }
     }
-    throw "No launcher project found. Expected openclaw_ui_integration or openclaw_new_launcher."
+    throw "No launcher project found. Expected openclaw_new_launcher."
 }
 
 $LauncherDir = Resolve-LauncherDir
@@ -35,6 +36,7 @@ $VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
 $VerifyVersionScript = Join-Path $PSScriptRoot "verify-version-consistency.ps1"
 $VerifyAdminConsoleScript = Join-Path $PSScriptRoot "verify-admin-console.ps1"
 $WorkspaceHygieneScript = Join-Path $PSScriptRoot "check-workspace-hygiene.ps1"
+$VerifyInstallerManifestScript = Join-Path $PSScriptRoot "verify-installer-manifest.ps1"
 
 function Invoke-Step {
     param(
@@ -127,6 +129,12 @@ if (-not $SkipDistSelftest) {
         Invoke-Step "Distribution layer self-test" {
             Invoke-Native node $distSelftest
         }
+    }
+}
+
+if (-not $SkipInstallerManifest -and (Test-Path -LiteralPath $VerifyInstallerManifestScript)) {
+    Invoke-Step "Installer manifest contract" {
+        & powershell -ExecutionPolicy Bypass -File $VerifyInstallerManifestScript
     }
 }
 

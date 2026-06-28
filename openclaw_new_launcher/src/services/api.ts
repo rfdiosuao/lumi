@@ -14,6 +14,59 @@ function getErrorMessage(error: unknown): string {
   return '';
 }
 
+export function parseErrorText(value: unknown): string {
+  const text = getErrorMessage(value).trim();
+  if (!text) return '';
+  const jsonStart = text.indexOf('{');
+  if (jsonStart >= 0) {
+    const candidate = text.slice(jsonStart);
+    try {
+      const payload = JSON.parse(candidate) as Record<string, any>;
+      const metaMessage = payload?._meta?.error?.message;
+      if (typeof metaMessage === 'string' && metaMessage.trim()) return friendlyErrorText(metaMessage.trim());
+      if (typeof payload.error === 'string' && payload.error.trim()) return friendlyErrorText(payload.error.trim());
+      if (typeof payload.message === 'string' && payload.message.trim()) return friendlyErrorText(payload.message.trim());
+    } catch {
+      // Keep the original text below.
+    }
+  }
+  return friendlyErrorText(text.replace(/^\[\d+\]\s*/, '').trim());
+}
+
+function friendlyErrorText(text: string): string {
+  if (/cannot read properties of undefined \(reading 'invoke'\)/i.test(text) || /__tauri(_internals)?__/i.test(text)) {
+    return '当前不在 LOOM 桌面运行环境中，无法连接本地 Bridge。请使用桌面应用运行，或打开诊断查看 Bridge 状态。';
+  }
+  if (/ipc.*not.*available/i.test(text) || /tauri.*not.*available/i.test(text)) {
+    return '桌面通信通道不可用，请使用 LOOM 桌面应用运行。';
+  }
+  if (/username or password is incorrect/i.test(text)) {
+    return '邮箱或密码错误，或账号已被禁用';
+  }
+  if (/^newapi_network_error:/i.test(text)) {
+    return '无法连接中转站，请检查网络、中转站地址或稍后重试';
+  }
+  if (/launcher_token_bridge_no_key/i.test(text)) {
+    return '中转站未返回可用的 API Key，请在中转站确认账号权限或手动提供 API Token';
+  }
+  if (/bind ticket is required/i.test(text)) {
+    return '请输入网站绑定码';
+  }
+  if (/bind_ticket_no_key/i.test(text)) {
+    return '网站绑定成功但未返回可用 API Key，请重新生成绑定码后再试';
+  }
+  if (/not_logged_in/i.test(text)) {
+    return '尚未登录中转站账号';
+  }
+  if (/invalid parameters?/i.test(text)) {
+    return '请求参数无效，请检查邮箱、密码和中转站地址';
+  }
+  if (/unauthorized, not logged in/i.test(text)) {
+    return '未登录或访问令牌无效';
+  }
+  return text;
+}
+
 function isTransientStatusReadError(error: unknown): boolean {
   const message = getErrorMessage(error).toLowerCase();
   if (!message) return false;
@@ -88,15 +141,15 @@ export async function api<T = unknown>(path: string, method: string = 'GET', bod
   try {
     const result = await proxyRequest(path, method, body);
     if (result && typeof result === 'object' && 'error' in result) {
-      throw { error: (result as any).error };
+      throw { error: parseErrorText((result as any).error || result) };
     }
     return result as T;
   } catch (e: any) {
     if (e && typeof e === 'object' && 'error' in e) {
-      throw e;
+      throw { ...e, error: parseErrorText(e) || e.error };
     }
     const msg = typeof e === 'string' ? e : (e?.message || '未知错误');
-    const cleanMsg = msg.replace(/^\[\d+\]\s*/, '');
+    const cleanMsg = parseErrorText(msg) || '未知错误';
     throw { error: cleanMsg };
   }
 }
@@ -155,7 +208,7 @@ export async function waitForProcessReady(options: WaitForProcessReadyOptions = 
     }
 
     if (status.startupState === 'failed' || (!status.processAlive && !status.starting && status.startupError)) {
-      throw { error: status.startupError || 'OpenClaw 启动失败' };
+      throw { error: status.startupError || '核心服务启动失败' };
     }
 
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -165,7 +218,7 @@ export async function waitForProcessReady(options: WaitForProcessReadyOptions = 
     return lastStatus;
   }
 
-  throw { error: 'OpenClaw 启动超时，进程没有保持运行，请导出诊断包查看失败快照' };
+  throw { error: '核心服务启动超时，进程没有保持运行，请导出诊断包查看失败快照' };
 }
 
 // === Log API ===
@@ -204,6 +257,16 @@ export const imageApi = {
     files?: Array<{ path: string; directory: string; filename: string; size: number; mime?: string }>;
   }> =>
     api('/api/image/generate', 'POST', params),
+  submit: (params: {
+    baseUrl?: string;
+    apiKey?: string;
+    prompt: string;
+    size: string;
+    count?: number;
+    model?: string;
+    editImagePath?: string;
+  }): Promise<{ jobId: string; job: BridgeJob }> =>
+    api('/api/image/generate/submit', 'POST', params),
 };
 
 // === Video API ===
@@ -221,6 +284,19 @@ export const videoApi = {
     imagePath?: string;
   }): Promise<{ video: string; mime?: string; size?: number; path?: string; directory?: string; filename?: string }> =>
     api('/api/video/generate', 'POST', params),
+  submit: (params: {
+    providerId?: import('../types').VideoProviderId;
+    apiBase?: string;
+    model?: string;
+    dashKey?: string;
+    prompt: string;
+    mode: string;
+    resolution: string;
+    duration: number;
+    ratio: string;
+    imagePath?: string;
+  }): Promise<{ jobId: string; job: BridgeJob }> =>
+    api('/api/video/generate/submit', 'POST', params),
 };
 
 // === Update API ===
@@ -309,126 +385,319 @@ export interface DiagnosticExportResult {
 export const diagnosticsApi = {
   run: (): Promise<DiagnosticReport> => api('/api/diagnostics/run'),
   bridgeStartupReport: (): Promise<DiagnosticReport> => invoke<DiagnosticReport>('bridge_startup_report'),
-  repair: (): Promise<DiagnosticRepairResult> => api('/api/diagnostics/repair', 'POST'),
+  repair: (params: { confirmed?: boolean } = {}): Promise<DiagnosticRepairResult> =>
+    api('/api/diagnostics/repair', 'POST', params),
   export: (): Promise<DiagnosticExportResult> => api('/api/diagnostics/export', 'POST'),
 };
 
-// === Desktop Agent API ===
-export interface DesktopAgentConfig {
-  enabled: boolean;
-  agentDir: string;
-  resolvedAgentDir?: string;
-  port: number;
-  tokenAvailable?: boolean;
-  tokenPreview?: string;
-  appType: 'weixin' | 'wework' | string;
-  autoStartHttpApi: boolean;
-  policy?: {
-    allowScreenshot: boolean;
-    allowClick: boolean;
-    allowType: boolean;
-    allowWechatSend: boolean;
-    requireConfirmForClick: boolean;
-    requireConfirmForType: boolean;
-    requireConfirmForSend: boolean;
-    blockedWindowKeywords: string[];
+// === Account / NewAPI ===
+export interface AccountSnapshot {
+  loggedIn: boolean;
+  source?: string;
+  account?: string;
+  memberId?: string;
+  plan?: string;
+  status?: string;
+  baseUrl?: string;
+  gatewayBaseUrl?: string;
+  tokenMasked?: string;
+  models?: {
+    text?: string[];
+    image?: string[];
+    video?: string[];
   };
-  capture?: {
-    format: string;
-    quality: number;
-    maxWidth: number;
+  selectedModels?: {
+    text?: string;
+    image?: string;
+    videoDraft?: string;
   };
-  action?: {
-    clickDelayMs: number;
-    typeDelayMs: number;
-    timeoutMs: number;
-  };
-  wechat?: {
-    sendMode: string;
-    detectUnreadMode: string;
-  };
-  configPath?: string;
+  usage?: Record<string, unknown>;
+  offline?: boolean;
+  stale?: boolean;
+  lastOnlineAt?: string;
+  graceExpiresAt?: string;
+  syncResults?: Array<{ target?: string; ok?: boolean; error?: string }>;
 }
 
-export interface DesktopAgentStatus {
-  configured: boolean;
-  present: boolean;
-  running: boolean;
-  pid: number | null;
-  apiReady: boolean;
-  health?: Record<string, unknown>;
-  command?: string[];
-  config: DesktopAgentConfig;
-}
-
-export const desktopAgentApi = {
-  status: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/status'),
-  config: (config: Partial<DesktopAgentConfig>): Promise<{ config: DesktopAgentConfig }> =>
-    api('/api/desktop-agent/config', 'POST', config as Record<string, unknown>),
-  installLayer: (layerId = 'luminode-desktop'): Promise<void> =>
-    invoke<void>('install_distribution_layer', { layerId }),
-  start: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/start', 'POST'),
-  stop: (): Promise<DesktopAgentStatus> => api('/api/desktop-agent/stop', 'POST'),
-  health: (): Promise<Record<string, unknown>> => api('/api/desktop-agent/health'),
-  screenshot: (): Promise<{ success?: boolean; screenshot?: string; error?: string }> =>
-    api('/api/desktop-agent/screenshot', 'POST'),
-  click: (x: number, y: number, confirmed = false): Promise<Record<string, unknown>> =>
-    api('/api/desktop-agent/click', 'POST', { x, y, confirmed }),
-  type: (text: string, confirmed = false): Promise<Record<string, unknown>> =>
-    api('/api/desktop-agent/type', 'POST', { text, confirmed }),
-  wechatUnread: (): Promise<Record<string, unknown>> =>
-    api('/api/desktop-agent/wechat/unread', 'POST'),
-  wechatSend: (text: string, confirmed = false): Promise<Record<string, unknown>> =>
-    api('/api/desktop-agent/wechat/send', 'POST', { text, confirmed }),
+export const accountApi = {
+  current: (): Promise<{ account: AccountSnapshot }> => api('/api/account/current'),
+  sendEmailCode: (params: { email: string; baseUrl?: string }): Promise<{ sent: boolean; email?: string; maskedEmail?: string; retryAfter?: number; expiresIn?: number; message?: string }> =>
+    api('/api/account/email-code/send', 'POST', params),
+  loginWithEmailCode: (params: { email: string; code: string; baseUrl?: string }): Promise<{ account: AccountSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
+    api('/api/account/email-code/login', 'POST', params),
+  login: (params: { email?: string; username?: string; password: string; baseUrl?: string; apiToken?: string }): Promise<{ account: AccountSnapshot }> =>
+    api('/api/account/login', 'POST', params),
+  bindTicket: (params: { ticket: string; baseUrl?: string }): Promise<{ account: AccountSnapshot }> =>
+    api('/api/account/bind-ticket', 'POST', params),
+  sync: (): Promise<{ account: AccountSnapshot }> => api('/api/account/sync', 'POST'),
+  selectModels: (params: { textModel?: string; imageModel?: string; videoModel?: string }): Promise<{ account: AccountSnapshot }> =>
+    api('/api/account/models/select', 'POST', params),
+  logout: (): Promise<{ account: AccountSnapshot; loggedOut?: boolean }> => api('/api/account/logout', 'POST'),
 };
 
-// === Skills API ===
-export interface SkillDirectory {
-  key: string;
-  label: string;
-  path: string;
-  writable: boolean;
+// === Jobs ===
+export interface BridgeJob<T = unknown> {
+  id: string;
+  kind?: string;
+  label?: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | string;
+  message?: string;
+  result?: T;
+  error?: string;
+  progress?: {
+    message?: string;
+    tone?: string;
+    history?: Array<{ message?: string; tone?: string; updatedAt?: number }>;
+  };
 }
 
-export interface SkillSite {
-  name: string;
-  url: string;
+function isJobDone(status: string): boolean {
+  return ['succeeded', 'success', 'completed', 'complete'].includes(status.toLowerCase());
 }
 
-export interface SkillItem {
+function isJobFailed(status: string): boolean {
+  return ['failed', 'error', 'cancelled', 'canceled'].includes(status.toLowerCase());
+}
+
+export const jobApi = {
+  get: (jobId: string): Promise<{ job: BridgeJob }> => api(`/api/jobs/${encodeURIComponent(jobId)}`),
+  list: (limit = 30): Promise<{ jobs: BridgeJob[] }> => api(`/api/jobs/list?limit=${Math.max(1, limit)}`),
+};
+
+export async function waitForJob<T = unknown>(
+  jobId: string,
+  options: { timeoutMs?: number; intervalMs?: number; onProgress?: (job: BridgeJob<T>) => void } = {},
+): Promise<BridgeJob<T>> {
+  const timeoutMs = options.timeoutMs ?? 60 * 60 * 1000;
+  const intervalMs = options.intervalMs ?? 1500;
+  const deadline = Date.now() + timeoutMs;
+  let lastJob: BridgeJob<T> | null = null;
+
+  while (Date.now() < deadline) {
+    const { job } = await jobApi.get(jobId) as { job: BridgeJob<T> };
+    lastJob = job;
+    options.onProgress?.(job);
+    if (isJobDone(String(job.status || ''))) return job;
+    if (isJobFailed(String(job.status || ''))) {
+      throw { error: job.error || job.message || `任务失败: ${jobId}` };
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw { error: lastJob?.progress?.message || lastJob?.message || `任务超时: ${jobId}` };
+}
+
+// === Components / Agent installer ===
+export interface ComponentSummary {
   id: string;
   name: string;
   version: string;
-  description: string;
+  installedVersion?: string | null;
+  previousVersion?: string | null;
+  status: string;
+  jobId?: string | null;
+  platform: string;
+  arch: string;
+  type: string;
+  size: number;
+  entry?: string | null;
+  installPath: string;
+  installCommand?: string[];
+  uninstallCommand?: string[];
+  commandTimeoutMs?: number;
   category: string;
-  runtime: string;
-  icon: string;
-  source: string;
-  sourceLabel: string;
-  path: string;
-  installed: boolean;
-  enabled: boolean;
-  writable: boolean;
-  hasReadme?: boolean;
-  installedAt?: string;
+  officialUrl?: string | null;
+  description?: string | null;
+  urls: string[];
+  updatedAt?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
 }
 
-export interface SkillsListResponse {
-  skills: SkillItem[];
-  directories: SkillDirectory[];
-  sites: SkillSite[];
-  statePath?: string;
+export interface ComponentSnapshot {
+  manifest: {
+    schemaVersion: number;
+    product: string;
+    channel: string;
+    version: string;
+    publishedAt: string;
+    minLauncherVersion: string;
+  } | null;
+  components: ComponentSummary[];
+  error?: string | null;
+  warning?: string | null;
+  manifestErrorCode?: string | null;
 }
 
-export const skillsApi = {
-  list: (): Promise<SkillsListResponse> => api('/api/skills/list'),
-  installZip: (filename: string, data: string): Promise<{ skill: SkillItem }> =>
-    api('/api/skills/install_zip', 'POST', { filename, data }),
-  setEnabled: (id: string, enabled: boolean): Promise<{ skill: SkillItem }> =>
-    api('/api/skills/enable', 'POST', { id, enabled }),
-  uninstall: (id: string): Promise<{ status: string; id: string }> =>
-    api('/api/skills/uninstall', 'POST', { id }),
-  readme: (id: string): Promise<{ id: string; path: string; content: string }> =>
-    api('/api/skills/readme', 'POST', { id }),
-  paths: (): Promise<{ directories: SkillDirectory[]; sites: SkillSite[] }> => api('/api/skills/paths'),
+export const componentApi = {
+  status: (): Promise<ComponentSnapshot> => api('/api/components/status'),
+  install: async (
+    componentId: string,
+    options: { simulate?: boolean; confirmed?: boolean; onProgress?: (job: BridgeJob<{ catalog?: ComponentSnapshot }>) => void } = {},
+  ): Promise<ComponentSnapshot> => {
+    const submitted = await api<{
+      jobId?: string;
+      job?: BridgeJob<{ catalog?: ComponentSnapshot }>;
+      catalog?: ComponentSnapshot;
+    }>('/api/components/install', 'POST', {
+      componentId,
+      ...(options.simulate ? { mode: 'simulate', dryRun: true } : {}),
+      ...(options.confirmed ? { confirmed: true } : {}),
+    });
+    const jobId = submitted.jobId || submitted.job?.id;
+    if (jobId) {
+      const job = await waitForJob<{ catalog?: ComponentSnapshot }>(jobId, { onProgress: options.onProgress });
+      return job.result?.catalog || submitted.catalog || componentApi.status();
+    }
+    return submitted.catalog || componentApi.status();
+  },
+  rollback: async (
+    componentId: string,
+    options: { onProgress?: (job: BridgeJob<{ catalog?: ComponentSnapshot }>) => void } = {},
+  ): Promise<ComponentSnapshot> => {
+    const submitted = await api<{
+      jobId?: string;
+      job?: BridgeJob<{ catalog?: ComponentSnapshot }>;
+      catalog?: ComponentSnapshot;
+    }>('/api/components/rollback', 'POST', { componentId, confirmed: true });
+    const jobId = submitted.jobId || submitted.job?.id;
+    if (jobId) {
+      const job = await waitForJob<{ catalog?: ComponentSnapshot }>(jobId, { onProgress: options.onProgress });
+      return job.result?.catalog || submitted.catalog || componentApi.status();
+    }
+    return submitted.catalog || componentApi.status();
+  },
+  uninstall: async (
+    componentId: string,
+    options: { onProgress?: (job: BridgeJob<{ catalog?: ComponentSnapshot }>) => void } = {},
+  ): Promise<ComponentSnapshot> => {
+    const submitted = await api<{
+      jobId?: string;
+      job?: BridgeJob<{ catalog?: ComponentSnapshot }>;
+      catalog?: ComponentSnapshot;
+    }>('/api/components/uninstall', 'POST', { componentId, confirmed: true });
+    const jobId = submitted.jobId || submitted.job?.id;
+    if (jobId) {
+      const job = await waitForJob<{ catalog?: ComponentSnapshot }>(jobId, { onProgress: options.onProgress });
+      return job.result?.catalog || submitted.catalog || componentApi.status();
+    }
+    return submitted.catalog || componentApi.status();
+  },
+  detect: async (
+    componentId: string,
+    options: { onProgress?: (job: BridgeJob<{ catalog?: ComponentSnapshot }>) => void } = {},
+  ): Promise<ComponentSnapshot> => {
+    const submitted = await api<{
+      jobId?: string;
+      job?: BridgeJob<{ catalog?: ComponentSnapshot }>;
+      catalog?: ComponentSnapshot;
+    }>('/api/components/detect', 'POST', { componentId });
+    const jobId = submitted.jobId || submitted.job?.id;
+    if (jobId) {
+      const job = await waitForJob<{ catalog?: ComponentSnapshot }>(jobId, { onProgress: options.onProgress });
+      return job.result?.catalog || submitted.catalog || componentApi.status();
+    }
+    return submitted.catalog || componentApi.status();
+  },
+  start: async (
+    componentId: string,
+    options: { onProgress?: (job: BridgeJob<{ catalog?: ComponentSnapshot }>) => void } = {},
+  ): Promise<ComponentSnapshot> => {
+    const submitted = await api<{
+      jobId?: string;
+      job?: BridgeJob<{ catalog?: ComponentSnapshot }>;
+      catalog?: ComponentSnapshot;
+    }>('/api/components/start', 'POST', { componentId, confirmed: true });
+    const jobId = submitted.jobId || submitted.job?.id;
+    if (jobId) {
+      const job = await waitForJob<{ catalog?: ComponentSnapshot }>(jobId, { onProgress: options.onProgress });
+      return job.result?.catalog || submitted.catalog || componentApi.status();
+    }
+    return submitted.catalog || componentApi.status();
+  },
+};
+
+// === CLI capability gateway ===
+export interface CliCommandSummary {
+  id: string;
+  title: string;
+  examples: string[];
+}
+
+export const cliApi = {
+  catalog: (): Promise<{ commands: CliCommandSummary[] }> => api('/api/cli/catalog'),
+  run: (params: { command: string; args?: string[]; confirmed?: boolean; timeoutSec?: number }): Promise<{ jobId: string; job: BridgeJob }> =>
+    api('/api/cli/run', 'POST', params),
+};
+
+// === Phone demo API ===
+export interface PhoneDeviceSummary {
+  id: string;
+  name: string;
+  baseUrl: string;
+  tokenAvailable: boolean;
+  paired?: boolean;
+  album?: string;
+  lastSeenAt?: string;
+}
+
+export interface PhoneConfigSnapshot {
+  selectedDeviceId: string;
+  configured: boolean;
+  devices: PhoneDeviceSummary[];
+}
+
+export const phoneApi = {
+  config: (): Promise<PhoneConfigSnapshot> => api('/api/phone/config'),
+  saveDevice: (params: {
+    id?: string;
+    deviceId?: string;
+    name?: string;
+    baseUrl: string;
+    token?: string;
+    selectedDeviceId?: string;
+  }): Promise<PhoneConfigSnapshot> => api('/api/phone/config/device', 'POST', params),
+  syncModel: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/sync-model', 'POST'),
+  devices: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/devices', 'POST'),
+  status: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/status', 'POST'),
+  screenshot: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/screenshot', 'POST'),
+  read: (params: { prompt: string }): Promise<{ jobId: string; job: BridgeJob }> =>
+    api('/api/phone/read', 'POST', params),
+  history: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/history', 'POST'),
+};
+
+// === Runtime wire API ===
+export interface WireSnapshot {
+  ok?: boolean;
+  managedBy?: string;
+  provider?: string;
+  tokenMasked?: string;
+  models?: {
+    text?: string;
+    phone?: string;
+    image?: string;
+    video?: string;
+  };
+  targets?: Record<string, boolean>;
+  updatedAt?: string;
+}
+
+export const wireApi = {
+  current: (): Promise<{ wire: WireSnapshot }> => api('/api/wire/current'),
+  sync: (): Promise<{ wire: WireSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
+    api('/api/wire/sync', 'POST'),
+  custom: (params: {
+    provider?: string;
+    baseUrl: string;
+    apiKey: string;
+    textModel: string;
+    imageModel?: string;
+    phoneModel?: string;
+    videoModel?: string;
+  }): Promise<{ wire: WireSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
+    api('/api/wire/custom', 'POST', params),
+  verify: (): Promise<{ ok: boolean; wire?: WireSnapshot; targets?: Record<string, { ok?: boolean; error?: string }> }> =>
+    api('/api/wire/verify', 'POST'),
+  rollback: (): Promise<{ wire: WireSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
+    api('/api/wire/rollback', 'POST'),
 };

@@ -81,8 +81,11 @@ export const useAppStore = create<AppState>((set) => ({
     set({ isLicenseChecking: true });
     try {
       const resp = await licenseApi.current();
+      const gatewayProfile = (resp as any).gatewayProfile;
       if (resp.license && typeof resp.license === 'object') {
         set({ isAuthorized: true, licenseInfo: resp.license as License, isLicenseChecking: false });
+      } else if (gatewayProfile && typeof gatewayProfile === 'object') {
+        set({ isAuthorized: true, licenseInfo: gatewayProfile as License, isLicenseChecking: false });
       } else {
         set({ isAuthorized: false, licenseInfo: null, isLicenseChecking: false });
         try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }

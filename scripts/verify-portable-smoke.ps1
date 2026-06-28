@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$Path
 )
@@ -13,11 +13,15 @@ function Resolve-PayloadRoot {
         throw "Smoke verification expects an extracted portable directory, not a zip: $InputPath"
     }
 
-    $openClawFiles = Join-Path $item.FullName "OpenClawFiles"
-    if (Test-Path -LiteralPath $openClawFiles) {
-        return $openClawFiles
+    $legacyFiles = Join-Path $item.FullName "OpenClawFiles"
+    if (Test-Path -LiteralPath $legacyFiles) {
+        throw "Legacy OpenClawFiles payload is not allowed in a LOOM portable package: $legacyFiles"
     }
-    return $item.FullName
+    $loomFiles = Join-Path $item.FullName "LOOMFiles"
+    if (Test-Path -LiteralPath $loomFiles) {
+        return $loomFiles
+    }
+    throw "LOOMFiles payload is missing: $($item.FullName)"
 }
 
 function Assert-File {
@@ -31,6 +35,18 @@ function Assert-File {
         throw "Missing required file: $RelativePath"
     }
     return $full
+}
+
+function Assert-Missing {
+    param(
+        [string]$Root,
+        [string]$RelativePath
+    )
+
+    $full = Join-Path $Root $RelativePath
+    if (Test-Path -LiteralPath $full) {
+        throw "Forbidden legacy artifact included: $RelativePath"
+    }
 }
 
 function Invoke-Checked {
@@ -48,7 +64,7 @@ $payloadRoot = Resolve-PayloadRoot -InputPath $Path
 Write-Host "Portable smoke target: $payloadRoot"
 
 Invoke-Checked "Required file layout" {
-    Assert-File -Root (Split-Path -Parent $payloadRoot) -RelativePath "OpenClaw.exe" | Out-Null
+    Assert-File -Root (Split-Path -Parent $payloadRoot) -RelativePath "LOOM.exe" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "node\node.exe" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "start.js" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "node_modules\openclaw\openclaw.mjs" | Out-Null
@@ -62,6 +78,17 @@ Invoke-Checked "Required file layout" {
     Assert-File -Root $payloadRoot -RelativePath "data\.openclaw\workspace\SOUL.md" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "data\.openclaw\workspace\TOOLS.md" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "data\.openclaw\workspace\CAPABILITIES.md" | Out-Null
+    foreach ($legacy in @(
+        "scripts\bot-plugin-helper.mjs",
+        "scripts\openclaw-publish-phone.mjs",
+        "scripts\openclaw-publish-relay.mjs",
+        "scripts\openclaw-publish-relay-check.mjs",
+        "scripts\openclaw-publish-relay-smoke.mjs",
+        "scripts\package-mac-complete.mjs",
+        "scripts\package-mac-online.mjs"
+    )) {
+        Assert-Missing -Root $payloadRoot -RelativePath $legacy
+    }
 }
 
 Invoke-Checked "Bundled Python imports" {

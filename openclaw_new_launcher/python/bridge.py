@@ -25,13 +25,16 @@ from core.storage import read_json, write_json, update_json
 from core.license_manager import LicenseManager
 from core.member_manager import MemberManager
 from core.newapi_account_manager import NewApiAccountManager
+from core.openclaw_model_sync import sync_openclaw_models
 from core.theme_manager import ThemeManager
+from core.wire_config import WireService
 from services.process import OpenClawProcessService
 from services.desktop_agent import DesktopAgentService
 from services.image_api import ImageApiClient
 from services.video_api import DashScopeVideoClient
 from services.updater import OpenClawUpdater
 from services.skills import SkillService
+from services.jobs import JobManager
 
 paths = AppPaths.discover()
 log_buffer: list[str] = []
@@ -67,8 +70,19 @@ _image_client: ImageApiClient | None = None
 _video_client: DashScopeVideoClient | None = None
 _theme_mgr: ThemeManager | None = None
 _skill_svc: SkillService | None = None
+_job_mgr: JobManager | None = None
+_wire_svc: WireService | None = None
 
-PROTECTED_PATHS = {"/api/process/start", "/api/image/generate", "/api/video/generate"}
+DEFAULT_OPENCLAW_TEXT_MODEL = "qwen3.7-plus"
+MANAGED_ACCOUNT_SOURCES = {"newapi_account", "heang_account"}
+
+PROTECTED_PATHS = {
+    "/api/process/start",
+    "/api/image/generate",
+    "/api/image/generate/submit",
+    "/api/video/generate",
+    "/api/video/generate/submit",
+}
 
 def _get_license_mgr() -> LicenseManager:
     global _license_mgr
@@ -130,6 +144,18 @@ def _get_skill_svc() -> SkillService:
         _skill_svc = SkillService(paths)
     return _skill_svc
 
+def _get_job_mgr() -> JobManager:
+    global _job_mgr
+    if _job_mgr is None:
+        _job_mgr = JobManager(append_log, state_path=paths.jobs_state)
+    return _job_mgr
+
+def _get_wire_svc() -> WireService:
+    global _wire_svc
+    if _wire_svc is None:
+        _wire_svc = WireService(paths, append_log)
+    return _wire_svc
+
 
 def _provider_id_from_base_url(base_url: str, fallback: str) -> str:
     parsed = urlparse(base_url if "://" in base_url else f"https://{base_url}")
@@ -161,25 +187,71 @@ def _model_definition(model_id: str) -> dict:
     }
 
 
+def _looks_like_non_text_model(model_id: str) -> bool:
+    text = model_id.lower()
+    markers = (
+        "image",
+        "dall-e",
+        "gpt-image",
+        "flux",
+        "midjourney",
+        "mj-",
+        "stable-diffusion",
+        "sd-",
+        "imagen",
+        "seedream",
+        "video",
+        "veo",
+        "sora",
+        "seedance",
+        "kling",
+        "wan",
+        "hailuo",
+        "runway",
+        "pika",
+        "luma",
+        "happyhorse",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _text_model_ids(raw_models: list, default_model: str = "") -> list[str]:
+    model_ids: list[str] = []
+    for item in raw_models:
+        model_id = item.get("id") if isinstance(item, dict) else item
+        if isinstance(model_id, str):
+            model_id = model_id.strip()
+            if model_id and not _looks_like_non_text_model(model_id) and model_id not in model_ids:
+                model_ids.append(model_id)
+    default_model = default_model.strip()
+    if default_model and not _looks_like_non_text_model(default_model):
+        model_ids = [default_model] + [model_id for model_id in model_ids if model_id != default_model]
+    if DEFAULT_OPENCLAW_TEXT_MODEL in model_ids:
+        model_ids = [DEFAULT_OPENCLAW_TEXT_MODEL] + [model_id for model_id in model_ids if model_id != DEFAULT_OPENCLAW_TEXT_MODEL]
+    elif not model_ids:
+        model_ids = [DEFAULT_OPENCLAW_TEXT_MODEL]
+    return model_ids
+
+
 def _sync_openclaw_models_from_api_profiles() -> None:
     """Keep launcher API settings compatible with OpenClaw 2026.5+ model config."""
+    sync_openclaw_models(paths, _get_license_mgr().current_gateway_profile())
+    return
+
     gateway_profile = _get_license_mgr().current_gateway_profile()
     if gateway_profile:
         base_url = str(gateway_profile.get("baseUrl") or "").strip().rstrip("/")
         api_key = str(gateway_profile.get("apiKey") or "").strip()
-        model_ids = [
-            str(item).strip()
-            for item in (gateway_profile.get("models") or [])
-            if str(item).strip()
-        ]
         default_model = str(gateway_profile.get("defaultModel") or "").strip()
-        if default_model:
-            model_ids = [default_model] + [model_id for model_id in model_ids if model_id != default_model]
+        model_ids = _text_model_ids(gateway_profile.get("models") or [], default_model)
         if not base_url or not api_key or not model_ids:
             return
 
         provider_id = _provider_id_from_base_url(base_url, "member")
         primary_model = default_model or model_ids[0]
+        if primary_model not in model_ids:
+            primary_model = model_ids[0]
+        managed_by = str(gateway_profile.get("source") or gateway_profile.get("managedBy") or "").strip()
         model_ref = f"{provider_id}/{primary_model}"
         provider_config = {
             "baseUrl": base_url,
@@ -187,6 +259,8 @@ def _sync_openclaw_models_from_api_profiles() -> None:
             "api": "openai-completions",
             "models": [_model_definition(model_id) for model_id in model_ids],
         }
+        if managed_by in MANAGED_ACCOUNT_SOURCES:
+            provider_config["managedBy"] = managed_by
 
         agent_dir = os.path.dirname(paths.auth_profiles)
         models_path = os.path.join(agent_dir, "models.json")
@@ -207,7 +281,6 @@ def _sync_openclaw_models_from_api_profiles() -> None:
             "name": "会员托管",
             "authMode": "member",
             "mode": "member",
-            "managedBy": str(gateway_profile.get("source") or gateway_profile.get("managedBy") or ""),
             "providerId": provider_id,
             "baseUrl": base_url,
             "apiKey": api_key,
@@ -216,8 +289,9 @@ def _sync_openclaw_models_from_api_profiles() -> None:
             "defaultModel": primary_model,
             "gatewayDefaultModel": primary_model,
             "gatewayImageModel": str(gateway_profile.get("imageModel") or "").strip(),
-            "gatewayVideoModel": str(gateway_profile.get("videoModel") or "").strip(),
         }
+        if managed_by in MANAGED_ACCOUNT_SOURCES:
+            profiles["models"]["providers"]["member_gateway"]["managedBy"] = managed_by
         profiles["models"]["primary"] = "member_gateway"
         write_json(paths.auth_profiles, profiles)
 
@@ -258,12 +332,8 @@ def _sync_openclaw_models_from_api_profiles() -> None:
         return
 
     raw_models = provider.get("models") if isinstance(provider.get("models"), list) else []
-    model_ids: list[str] = []
-    for item in raw_models:
-        model_id = item.get("id") if isinstance(item, dict) else item
-        if isinstance(model_id, str) and model_id.strip() and model_id.strip() not in model_ids:
-            model_ids.append(model_id.strip())
-    for default_model in ("qwen3.6-plus", "claude-opus-4-7-medium", "kimi-k2.5", "gpt-4o"):
+    model_ids = _text_model_ids(raw_models, str(provider.get("defaultModel") or "").strip())
+    for default_model in (DEFAULT_OPENCLAW_TEXT_MODEL, "claude-opus-4-7-medium", "kimi-k2.5", "gpt-4o"):
         if default_model not in model_ids:
             model_ids.append(default_model)
     if not model_ids:
@@ -698,6 +768,7 @@ def _build_fastapi_context():
         fastapi_json=_fastapi_json,
         get_image_client=_get_image_client,
         get_desktop_agent_svc=_get_desktop_agent_svc,
+        get_job_mgr=_get_job_mgr,
         get_license_mgr=_get_license_mgr,
         get_member_mgr=_get_member_mgr,
         get_newapi_account_mgr=_get_newapi_account_mgr,
@@ -706,6 +777,7 @@ def _build_fastapi_context():
         get_theme_mgr=_get_theme_mgr,
         get_updater=_get_updater,
         get_video_client=_get_video_client,
+        get_wire_svc=_get_wire_svc,
         log_buffer=log_buffer,
         log_lock=log_lock,
         paths=paths,

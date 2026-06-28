@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$Path,
     [switch]$AllowPhoneAgentApk
@@ -9,11 +9,10 @@ $allowPhoneAgentApkEnv = if ([string]::IsNullOrWhiteSpace($env:OPENCLAW_ALLOW_PH
 $allowPhoneAgentApkEffective = $AllowPhoneAgentApk.IsPresent -or @('1', 'true', 'yes', 'on') -contains $allowPhoneAgentApkEnv
 
 $requiredFiles = @(
-    "OpenClaw.exe",
+    "LOOM.exe",
     "node/node.exe",
     "node_modules/openclaw/openclaw.mjs",
     "start.js",
-    "scripts/bot-plugin-helper.mjs",
     "scripts/openclaw-context.mjs",
     "scripts/openclaw-image-phone.mjs",
     "scripts/openclaw-phone-agent.mjs",
@@ -23,7 +22,17 @@ $requiredFiles = @(
     "scripts/openclaw-phone-video.mjs",
     "scripts/openclaw-phone-vision.mjs",
     "scripts/verify-phone-agent.ps1",
+    "release-manifest.json",
+    "release-public-key.txt",
     "_up_/python/bridge.py",
+    "_up_/python/api/routes_components.py",
+    "_up_/python/api/routes_jobs.py",
+    "_up_/python/core/component_catalog.py",
+    "_up_/python/core/component_installer.py",
+    "_up_/python/core/component_state.py",
+    "_up_/python/core/release_manifest.py",
+    "_up_/python/core/reliability.py",
+    "_up_/python/services/jobs.py",
     "_up_/python-runtime/python.exe",
     "data/.openclaw/openclaw.json",
     "data/.openclaw/workspace/AGENTS.md",
@@ -40,14 +49,12 @@ $requiredFiles = @(
     "data/themes/default/logo.png",
     "redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
     "imgapi_config.json",
-    "video_config.json",
-    "node_modules/@larksuite/openclaw-lark/package.json",
-    "node_modules/@tencent-weixin/openclaw-weixin/package.json"
+    "video_config.json"
 )
 
 $allowedTopLevelEntries = @(
-    "OpenClaw.exe",
-    "OpenClawFiles"
+    "LOOM.exe",
+    "LOOMFiles"
 )
 
 $forbiddenPatterns = @(
@@ -56,9 +63,12 @@ $forbiddenPatterns = @(
     "(?i)(^|/)data/\.openclaw/launcher/phone-agent\.json$",
     "(?i)(^|/)data/\.openclaw/launcher/phone-agents\.json$",
     "(?i)(^|/)data/theme\.json$",
-    "(?i)(^|/)OpenClawFiles/(Lumi|YongHao|yonghao_tech)(/|$)",
-    "(?i)(^|/)OpenClawFiles/agents/sightflow-desktop(/|$)",
-    "(?i)(^|/)OpenClawFiles/agents/sightflow-desktop-agent(/|$)",
+    "(?i)(^|/)LOOMFiles/(Lumi|YongHao|yonghao_tech)(/|$)",
+    "(?i)(^|/)LOOMFiles/agents/sightflow-desktop(/|$)",
+    "(?i)(^|/)LOOMFiles/agents/sightflow-desktop-agent(/|$)",
+    "(?i)(^|/)LOOMFiles/scripts/bot-plugin-helper\.mjs$",
+    "(?i)(^|/)LOOMFiles/scripts/openclaw-publish-(phone|relay|relay-check|relay-smoke)\.mjs$",
+    "(?i)(^|/)LOOMFiles/scripts/package-mac-(complete|online)\.mjs$",
     "(?i)(^|/)__pycache__(/|$)",
     "(?i)\.pyc$",
     "(?i)(^|/)\.npm-cache-update(/|$)",
@@ -68,13 +78,14 @@ $forbiddenPatterns = @(
 
 if (-not $allowPhoneAgentApkEffective) {
     $forbiddenPatterns += @(
-        "(?i)(^|/)OpenClawFiles/releases/agent-phone/.*\.apk$",
+        "(?i)(^|/)LOOMFiles/releases/agent-phone/.*\.apk$",
         "(?i)(^|/)releases/agent-phone/.*\.apk$"
     )
 }
 
 $contentScanSuffixes = @(
     "/.npmrc",
+    "/release-manifest.json",
     "/README-离线包.txt",
     "/_up_/python/bridge.py",
     "/data/.openclaw/openclaw.json",
@@ -87,13 +98,15 @@ $contentScanSuffixes = @(
     "/data/launcher_runtime.json",
     "/imgapi_config.json",
     "/video_config.json",
+    "/videoapi_config.json",
     "/package.json",
     "/start.js"
 )
 
 $emptyJsonConfigSuffixes = @(
     "/imgapi_config.json",
-    "/video_config.json"
+    "/video_config.json",
+    "/videoapi_config.json"
 )
 
 $openClawRuntimeConfigSuffix = "/data/.openclaw/openclaw.json"
@@ -110,6 +123,17 @@ $sensitiveContentPattern = '(?i)\b(sk-[A-Za-z0-9_\-]{24,}|(?:OPENAI|DASHSCOPE|AN
 function Convert-ToPortablePath {
     param([string]$Value)
     return $Value.Replace("\", "/").TrimStart("/")
+}
+
+function Get-AdjacentPublicKeyPortablePath {
+    param([string]$ManifestPortablePath)
+
+    $normalized = Convert-ToPortablePath $ManifestPortablePath
+    $lastSlash = $normalized.LastIndexOf("/")
+    if ($lastSlash -ge 0) {
+        return $normalized.Substring(0, $lastSlash + 1) + "release-public-key.txt"
+    }
+    return "release-public-key.txt"
 }
 
 function Test-RequiredPath {
@@ -169,8 +193,8 @@ function Get-PayloadRelativePaths {
 
     if (
         $topSegments.Count -eq 1 -and
-        $topSegments[0] -ne "OpenClaw.exe" -and
-        $topSegments[0] -ne "OpenClawFiles"
+        $topSegments[0] -ne "LOOM.exe" -and
+        $topSegments[0] -ne "LOOMFiles"
     ) {
         $prefix = "$($topSegments[0])/"
         $candidate = @($normalized |
@@ -182,7 +206,7 @@ function Get-PayloadRelativePaths {
             ForEach-Object { ($_ -split "/")[0] } |
             Sort-Object -Unique)
 
-        if ($candidateTopSegments -contains "OpenClaw.exe" -or $candidateTopSegments -contains "OpenClawFiles") {
+        if ($candidateTopSegments -contains "LOOM.exe" -or $candidateTopSegments -contains "LOOMFiles") {
             return $candidate
         }
     }
@@ -322,7 +346,7 @@ function Add-ContentFindings {
         }
     }
 
-    if ($RelativePath -ieq "OpenClawFiles/package.json") {
+    if ($RelativePath -ieq "LOOMFiles/package.json") {
         try {
             $json = $Content | ConvertFrom-Json
             $version = [string]$json.version
@@ -338,7 +362,7 @@ function Add-ContentFindings {
         }
     }
 
-    if ($RelativePath -ieq "OpenClawFiles/data/launcher_runtime.json") {
+    if ($RelativePath -ieq "LOOMFiles/data/launcher_runtime.json") {
         try {
             $json = $Content | ConvertFrom-Json
             $version = [string]$json.version
@@ -450,6 +474,103 @@ foreach ($required in $requiredFiles) {
     }
 }
 
+$manifestEntry = @($payloadPaths | Where-Object {
+    (Convert-ToPortablePath $_).EndsWith("release-manifest.json", [System.StringComparison]::OrdinalIgnoreCase)
+} | Select-Object -First 1)
+if ($manifestEntry.Count -gt 0) {
+    $manifestTempPath = $null
+    $publicKeyTempPath = $null
+    $manifestValidationRan = $false
+    try {
+        if ($item.PSIsContainer) {
+            $manifestPortablePath = Convert-ToPortablePath $manifestEntry[0]
+            $publicKeyPortablePath = Get-AdjacentPublicKeyPortablePath $manifestPortablePath
+            $manifestPath = Join-Path $item.FullName ($manifestPortablePath -replace "/", "\")
+            $publicKeyPath = Join-Path $item.FullName ($publicKeyPortablePath -replace "/", "\")
+            if (-not (Test-Path -LiteralPath $publicKeyPath -PathType Leaf)) {
+                $errors.Add("Installer manifest public key missing next to package manifest: $publicKeyPortablePath")
+            }
+            else {
+                & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "verify-installer-manifest.ps1") -ManifestPath $manifestPath -PublicKeyPath $publicKeyPath
+                $manifestValidationRan = $true
+            }
+        }
+        else {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($item.FullName)
+            try {
+                $manifestPortablePath = Convert-ToPortablePath $manifestEntry[0]
+                $publicKeyPortablePath = Get-AdjacentPublicKeyPortablePath $manifestPortablePath
+                $entry = $zip.Entries | Where-Object {
+                    $entryPath = Convert-ToPortablePath $_.FullName
+                    $entryPath -eq $manifestPortablePath -or
+                        $entryPath.EndsWith("/$manifestPortablePath", [System.StringComparison]::OrdinalIgnoreCase)
+                } | Select-Object -First 1
+                $publicKeyEntry = $zip.Entries | Where-Object {
+                    $entryPath = Convert-ToPortablePath $_.FullName
+                    $entryPath -eq $publicKeyPortablePath -or
+                        $entryPath.EndsWith("/$publicKeyPortablePath", [System.StringComparison]::OrdinalIgnoreCase)
+                } | Select-Object -First 1
+                if (-not $entry) {
+                    $errors.Add("Installer manifest entry could not be opened: $manifestPortablePath")
+                }
+                elseif (-not $publicKeyEntry) {
+                    $errors.Add("Installer manifest public key entry could not be opened: $publicKeyPortablePath")
+                }
+                else {
+                    $manifestTempPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-release-manifest-" + [System.Guid]::NewGuid().ToString("N") + ".json")
+                    $entryStream = $entry.Open()
+                    try {
+                        $fileStream = [System.IO.File]::Create($manifestTempPath)
+                        try {
+                            $entryStream.CopyTo($fileStream)
+                        }
+                        finally {
+                            $fileStream.Dispose()
+                        }
+                    }
+                    finally {
+                        $entryStream.Dispose()
+                    }
+                    $publicKeyTempPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-release-public-key-" + [System.Guid]::NewGuid().ToString("N") + ".txt")
+                    $publicKeyEntryStream = $publicKeyEntry.Open()
+                    try {
+                        $publicKeyFileStream = [System.IO.File]::Create($publicKeyTempPath)
+                        try {
+                            $publicKeyEntryStream.CopyTo($publicKeyFileStream)
+                        }
+                        finally {
+                            $publicKeyFileStream.Dispose()
+                        }
+                    }
+                    finally {
+                        $publicKeyEntryStream.Dispose()
+                    }
+                    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "verify-installer-manifest.ps1") -ManifestPath $manifestTempPath -PublicKeyPath $publicKeyTempPath
+                    $manifestValidationRan = $true
+                }
+            }
+            finally {
+                $zip.Dispose()
+            }
+        }
+        if ($manifestValidationRan -and $LASTEXITCODE -ne 0) {
+            $errors.Add("Installer manifest validation failed.")
+        }
+    }
+    catch {
+        $errors.Add("Installer manifest validation failed: $($_.Exception.Message)")
+    }
+    finally {
+        if ($manifestTempPath -and (Test-Path -LiteralPath $manifestTempPath)) {
+            Remove-Item -LiteralPath $manifestTempPath -Force
+        }
+        if ($publicKeyTempPath -and (Test-Path -LiteralPath $publicKeyTempPath)) {
+            Remove-Item -LiteralPath $publicKeyTempPath -Force
+        }
+    }
+}
+
 $brandProfileEntry = @($payloadPaths | Where-Object {
     (Convert-ToPortablePath $_).EndsWith($brandProfileSuffix.TrimStart("/"), [System.StringComparison]::OrdinalIgnoreCase)
 } | Select-Object -First 1)
@@ -515,7 +636,7 @@ if ($null -ne $script:LauncherRuntimePackageName) {
     if ($script:LauncherRuntimePackageName -ne $packageName) {
         $errors.Add("launcher_runtime.json packageName mismatch: launcher_runtime.json=$($script:LauncherRuntimePackageName), archive=$packageName")
     }
-    if ($packageName -match '^OpenClaw-Portable-v(?<version>\d+(?:\.\d+){1,3})-') {
+    if ($packageName -match '^LOOM-Portable-v(?<version>\d+(?:\.\d+){1,3})-') {
         $packageNameVersion = [string]$Matches.version
         if ($script:PackageJsonVersion -and $packageNameVersion -ne $script:PackageJsonVersion) {
             $errors.Add("Package name version mismatch: packageName=$packageName, package.json=$($script:PackageJsonVersion)")

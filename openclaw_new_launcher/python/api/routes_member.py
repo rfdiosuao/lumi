@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from api.safe_payload import public_safe_payload
 from core.member_manager import MemberError
 
 
@@ -14,11 +15,11 @@ def register_member_routes(app, ctx) -> None:
             return error
         member = ctx.get_member_mgr().current()
         usage = ctx.get_member_mgr().current_usage()
-        return ctx.fastapi_json({
+        return ctx.fastapi_json(public_safe_payload({
             "member": member,
             "lease": member,
             "usage": usage,
-        })
+        }))
 
     @app.post("/api/member/activate")
     async def member_activate(request: Request):
@@ -31,11 +32,11 @@ def register_member_routes(app, ctx) -> None:
         try:
             session = ctx.get_member_mgr().activate(code)
             ctx.sync_openclaw_models_from_api_profiles()
-            return ctx.fastapi_json({
+            return ctx.fastapi_json(public_safe_payload({
                 "member": session,
                 "lease": session,
                 "usage": session.get("usage") if isinstance(session, dict) else None,
-            })
+            }))
         except MemberError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)
 
@@ -46,11 +47,11 @@ def register_member_routes(app, ctx) -> None:
         try:
             session = ctx.get_member_mgr().refresh()
             ctx.sync_openclaw_models_from_api_profiles()
-            return ctx.fastapi_json({
+            return ctx.fastapi_json(public_safe_payload({
                 "member": session,
                 "lease": session,
                 "usage": session.get("usage") if isinstance(session, dict) else None,
-            })
+            }))
         except MemberError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)
 
@@ -61,10 +62,10 @@ def register_member_routes(app, ctx) -> None:
         try:
             usage = ctx.get_member_mgr().usage()
             session = ctx.get_member_mgr().current()
-            return ctx.fastapi_json({
+            return ctx.fastapi_json(public_safe_payload({
                 "member": session,
                 "lease": session,
                 "usage": usage,
-            })
+            }))
         except MemberError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)

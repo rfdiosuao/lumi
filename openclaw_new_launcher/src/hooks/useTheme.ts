@@ -50,7 +50,7 @@ export function useTheme() {
   };
 
   const toggleTheme = () => {
-    switchThemeMode(themeMode === 'dark' ? 'light' : 'dark');
+    switchThemeMode('light');
   };
 
   const resetTheme = () => {

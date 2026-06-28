@@ -29,6 +29,7 @@ export interface License {
   gatewayVideoToken?: string;
   gatewayDefaultModel?: string;
   gatewayImageModel?: string;
+  gatewayVideoDraftModel?: string;
   gatewayVideoModel?: string;
   activationCodeLabel?: string;
   activationCodeLast8?: string;
@@ -82,44 +83,6 @@ export interface VideoGenerationParams {
   duration?: number;
   ratio?: string;
   image_path?: string;
-}
-
-// === Storyboard ===
-export interface SceneCheck {
-  productStable: boolean;
-  logoClear: boolean;
-  sellingPoint: boolean;
-  frameFlowGood: boolean;
-  cropReady: boolean;
-}
-
-export interface Scene {
-  id: string;
-  title: string;
-  sellingPoint: string;
-  duration: string;
-  ratio: string;
-  camera: string;
-  prompt: string;
-  negative: string;
-  candidatePrompt: string;
-  referenceImage: string | null;
-  firstFrame: string | null;
-  lastFrame: string | null;
-  video: string | null;
-  checks: SceneCheck;
-  productViews: {
-    front: string | null;
-    side: string | null;
-    back: string | null;
-  };
-  candidates: string[];
-}
-
-export interface StoryboardProject {
-  scenes: Scene[];
-  productName: string;
-  productDescription: string;
 }
 
 // === Provider ===

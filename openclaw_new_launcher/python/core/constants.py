@@ -1,4 +1,4 @@
-"""Shared constants for the OpenClaw launcher.
+"""Shared constants for the LOOM launcher.
 
 Theme constants are now sourced from theme_manager.DEFAULT_THEME for
 single-source-of-truth.  The module-level COLORS / FONTS / BRAND dicts
@@ -13,7 +13,7 @@ from typing import Any
 
 from core.theme_manager import DEFAULT_THEME
 
-APP_NAME = "OpenClaw"
+APP_NAME = "LOOM"
 APP_PORT = 18790
 HELP_URL = "https://heang.top/docs.html"
 FEISHU_APP_URL = "https://open.feishu.cn/app"

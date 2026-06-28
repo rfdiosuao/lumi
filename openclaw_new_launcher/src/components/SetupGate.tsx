@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 
 // First-run download overlay. Listens for the `dist://*` events the Rust
 // bootstrap emits while it downloads + verifies the runtime layers. Renders
@@ -48,7 +48,7 @@ export function SetupGate() {
             setDone(true);
             window.setTimeout(() => setActive(false), 900);
           }),
-          listen('dist://error', (e) => setError((e.payload as { message?: string }).message || 'download_failed')),
+          listen('dist://error', () => setError('组件下载失败')),
         ]);
         if (cancelled) {
           subs.forEach((u) => u());
@@ -73,43 +73,46 @@ export function SetupGate() {
   const overlay: React.CSSProperties = {
     position: 'fixed', inset: 0, zIndex: 99999,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: 'rgba(5,5,16,0.86)', backdropFilter: 'blur(6px)',
+    background: 'rgba(7,27,36,0.90)', backdropFilter: 'blur(8px)',
   };
   const card: React.CSSProperties = {
-    width: 'min(460px, 86vw)', padding: '28px 30px', borderRadius: 8,
-    background: '#11151f', border: '1px solid rgba(255,255,255,0.08)',
-    boxShadow: '0 24px 70px rgba(0,0,0,0.5)', color: '#e6edf3',
+    width: 'min(420px, 86vw)', padding: '26px 28px', borderRadius: 14,
+    background: '#fffaf0', border: '1px solid rgba(8,35,48,0.12)',
+    boxShadow: '0 24px 70px rgba(0,0,0,0.34)', color: '#1b211e',
     fontFamily: '-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif',
   };
-  const bar: React.CSSProperties = { height: 8, borderRadius: 6, background: 'rgba(255,255,255,0.08)', overflow: 'hidden', marginTop: 14 };
-  const fill: React.CSSProperties = { height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#58a6ff,#3fb950)', transition: 'width .2s ease' };
+  const bar: React.CSSProperties = { height: 8, borderRadius: 999, background: 'rgba(8,35,48,0.10)', overflow: 'hidden', marginTop: 14 };
+  const fill: React.CSSProperties = { height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#0B4A3E,#37D5A3)', transition: 'width .2s ease' };
 
   return (
     <div style={overlay}>
       <div style={card}>
-        <div style={{ fontSize: 17, fontWeight: 800 }}>正在安装 OpenClaw 组件</div>
-        <div style={{ marginTop: 6, fontSize: 13, color: '#8b949e' }}>
-          正在下载并校验组件文件，请保持联网；已安装的组件不会重复下载。
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {!done && !error ? <span className="loom-activity-ring" style={{ color: '#0B4A3E' }} /> : null}
+          <div style={{ fontSize: 17, fontWeight: 900 }}>{done ? '组件已就绪' : error ? '组件安装受阻' : '正在准备 LOOM'}</div>
+        </div>
+        <div style={{ marginTop: 6, fontSize: 13, color: '#6b6357' }}>
+          首次启动需要补齐运行组件，完成后会自动进入启动器。
         </div>
         {error ? (
-          <div style={{ marginTop: 18, fontSize: 13, color: '#ff7b72', lineHeight: 1.6 }}>
+          <div style={{ marginTop: 18, fontSize: 13, color: '#c84b5f', lineHeight: 1.6 }}>
             下载失败：{error}
             <br />请检查网络后重启启动器，或改用全量离线包。
           </div>
         ) : done ? (
-          <div style={{ marginTop: 18, fontSize: 14, color: '#3fb950', fontWeight: 700 }}>组件已就绪，正在启动…</div>
+          <div style={{ marginTop: 18, fontSize: 14, color: '#0B8C6E', fontWeight: 800 }}>正在进入 LOOM...</div>
         ) : prog ? (
           <>
             <div style={{ marginTop: 18, fontSize: 13, fontWeight: 700 }}>
               [{prog.index}/{prog.count}] {prog.title} · {phaseLabel}
             </div>
-            <div style={bar}><div style={fill} /></div>
-            <div style={{ marginTop: 8, fontSize: 12, color: '#8b949e' }}>
+            <div className="loom-scan-line" style={bar}><div style={fill} /></div>
+            <div style={{ marginTop: 8, fontSize: 12, color: '#756b5b' }}>
               {prog.total > 0 ? `${fmtMB(prog.downloaded)} / ${fmtMB(prog.total)}（${pct}%）` : phaseLabel}
             </div>
           </>
         ) : (
-          <div style={{ marginTop: 18, fontSize: 13 }}>准备下载 {layers.length} 个组件…</div>
+          <div style={{ marginTop: 18, fontSize: 13 }}>准备 {layers.length} 个组件...</div>
         )}
       </div>
     </div>

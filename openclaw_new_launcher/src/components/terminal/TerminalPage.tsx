@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button, showToast } from '../common';
 import { useLogStore } from '../../stores/logStore';
 import { useTheme } from '../../hooks/useTheme';
-import { logApi } from '../../services/api';
+import { logApi, parseErrorText } from '../../services/api';
 
 export const TerminalPage: React.FC = () => {
   const lines = useLogStore((state) => state.lines);
@@ -33,9 +33,9 @@ export const TerminalPage: React.FC = () => {
       return <span className="text-[#FF6E86]">{line}</span>;
     }
     if (line.includes('[WARN]') || line.includes('[Warning]') || lowered.includes('warning')) {
-      return <span className="text-[#FFB454]">{line}</span>;
+      return <span className="text-status-warning">{line}</span>;
     }
-    if (line.includes('[OpenClaw]') || line.includes('[Bridge]')) {
+    if (line.includes('[Lumi]') || line.includes('[Bridge]') || line.includes('[Core]')) {
       return <span className="text-terminal-text">{line}</span>;
     }
     return <span className="text-slate-100">{line}</span>;
@@ -52,7 +52,7 @@ export const TerminalPage: React.FC = () => {
       setLastExportPath(path);
       showToast(`日志已导出：${path}`, 'success');
     } catch (error: any) {
-      showToast(`导出日志失败：${error?.error || error}`, 'error');
+      showToast(`导出日志失败：${parseErrorText(error) || '无法导出日志，请检查写入权限。'}`, 'error');
     } finally {
       setExporting(false);
     }
@@ -68,17 +68,18 @@ export const TerminalPage: React.FC = () => {
       await invoke('open_path', { path: directory });
       showToast(`已打开目录：${directory}`, 'info');
     } catch (error: any) {
-      showToast(`打开目录失败：${error?.error || error}`, 'error');
+      showToast(`打开目录失败：${parseErrorText(error) || '无法打开日志目录。'}`, 'error');
     }
   };
 
   const handleClearLogs = async () => {
+    if (!confirm('确定要清空当前日志吗？已导出的诊断包不会受影响。')) return;
     clearLogs();
     window.dispatchEvent(new Event('openclaw:logs-cleared'));
     try {
       await logApi.clear();
     } catch (error: any) {
-      showToast(`清空后端日志失败：${error?.error || error}`, 'error');
+      showToast(`清空后端日志失败：${parseErrorText(error) || '后端日志清理失败。'}`, 'error');
     }
   };
 
@@ -88,7 +89,7 @@ export const TerminalPage: React.FC = () => {
         <div className="flex items-center">
           <div className="mr-5 flex items-center gap-2">
             <div className="h-3 w-3 rounded-full bg-status-danger shadow-[0_0_10px_rgba(255,77,109,0.65)]" />
-            <div className="h-3 w-3 rounded-full bg-status-warning shadow-[0_0_10px_rgba(255,180,84,0.55)]" />
+            <div className="h-3 w-3 rounded-full bg-status-warning shadow-[0_0_10px_rgba(79,112,95,0.45)]" />
             <div className="h-3 w-3 rounded-full bg-status-success shadow-[0_0_10px_rgba(63,224,143,0.55)]" />
           </div>
           <span className="text-lg font-black tracking-wide text-text">{theme.brand.terminal_header}</span>

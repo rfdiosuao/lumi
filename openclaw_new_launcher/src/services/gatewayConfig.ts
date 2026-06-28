@@ -11,7 +11,7 @@ export interface GatewayDefaults {
   videoApiKey: string;
   defaultModel: string;
   imageModel: string;
-  videoModel: string;
+  videoDraftModel: string;
   hasGateway: boolean;
 }
 
@@ -158,9 +158,13 @@ export async function readMemberGatewayDefaults(): Promise<GatewayDefaults> {
     gateways[index].gatewayImageModel,
     gateways[index].imageModel,
   ]));
-  const videoModel = firstText(...sources.flatMap((source, index) => [
+  const videoDraftModel = firstText(...sources.flatMap((source, index) => [
+    source.gatewayVideoDraftModel,
+    source.videoDraftModel,
     source.gatewayVideoModel,
     source.videoModel,
+    gateways[index].gatewayVideoDraftModel,
+    gateways[index].videoDraftModel,
     gateways[index].gatewayVideoModel,
     gateways[index].videoModel,
   ]));
@@ -174,7 +178,7 @@ export async function readMemberGatewayDefaults(): Promise<GatewayDefaults> {
     videoApiKey,
     defaultModel,
     imageModel,
-    videoModel,
+    videoDraftModel,
     hasGateway: Boolean(baseUrl && apiKey),
   };
 }

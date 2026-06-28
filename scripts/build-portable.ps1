@@ -1,8 +1,8 @@
-param(
+﻿param(
     [string]$Version = "",
     [string]$PackageName = "",
     [string]$SeedPortableDir = "",
-    [string]$BrandProfile = "openclaw",
+    [string]$BrandProfile = "loom",
     [string]$PhoneAgentVerifiedVersion = "",
     [int]$PhoneAgentVerifiedVersionCode = 0,
     [switch]$SkipBuild,
@@ -21,6 +21,11 @@ $VerifyScript = Join-Path $PSScriptRoot "verify-release.ps1"
 $SmokeVerifyScript = Join-Path $PSScriptRoot "verify-portable-smoke.ps1"
 $VerifySourceTextScript = Join-Path $PSScriptRoot "verify-source-text.ps1"
 $OpenClawRuntimeVersion = "2026.6.5"
+$ProductName = "LOOM"
+$PackagePrefix = "LOOM-Portable"
+$LauncherExeName = "LOOM.exe"
+$PrimaryPayloadDirName = "LOOMFiles"
+$LegacyPayloadDirName = "OpenClawFiles"
 
 function Invoke-Step {
     param(
@@ -51,7 +56,7 @@ function Get-ResolvedPathOrNull {
 function Get-LauncherVersion {
     $packageJsonPath = Join-Path $LauncherDir "package.json"
     if (Test-Path -LiteralPath $packageJsonPath) {
-        $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
+        $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if (-not [string]::IsNullOrWhiteSpace([string]$packageJson.version)) {
             return [string]$packageJson.version
         }
@@ -59,7 +64,7 @@ function Get-LauncherVersion {
 
     $tauriConfigPath = Join-Path $TauriDir "tauri.conf.json"
     if (Test-Path -LiteralPath $tauriConfigPath) {
-        $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
+        $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if (-not [string]::IsNullOrWhiteSpace([string]$tauriConfig.version)) {
             return [string]$tauriConfig.version
         }
@@ -75,11 +80,11 @@ function Assert-SourceVersionConsistency {
     $tauriVersion = $null
 
     if (Test-Path -LiteralPath $packageJsonPath) {
-        $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
+        $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $packageVersion = [string]$packageJson.version
     }
     if (Test-Path -LiteralPath $tauriConfigPath) {
-        $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
+        $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $tauriVersion = [string]$tauriConfig.version
     }
 
@@ -106,7 +111,7 @@ function Assert-PackageNameVersionConsistency {
         throw "PackageName is empty"
     }
 
-    if ($ResolvedPackageName -notmatch '^OpenClaw-Portable-v(?<version>\d+(?:\.\d+){1,3})-') {
+    if ($ResolvedPackageName -notmatch '^LOOM-Portable-v(?<version>\d+(?:\.\d+){1,3})-') {
         throw "PackageName must encode the launcher version: $ResolvedPackageName"
     }
 
@@ -195,7 +200,8 @@ function Test-SeedPortableDir {
 
     $candidateRoots = @(
         $Path,
-        (Join-Path $Path "OpenClawFiles")
+        (Join-Path $Path $PrimaryPayloadDirName),
+        (Join-Path $Path $LegacyPayloadDirName)
     )
 
     foreach ($rootPath in $candidateRoots) {
@@ -317,13 +323,13 @@ const child = spawn(process.execPath, [
 
 child.on('exit', (code, signal) => {
   if (signal) {
-    console.log(`[OpenClaw] gateway stopped by ${signal}`);
+    console.log(`[LOOM] gateway stopped by ${signal}`);
   }
   process.exit(code ?? 0);
 });
 
 child.on('error', (error) => {
-  console.error('[OpenClaw] failed to start gateway:', error);
+  console.error('[LOOM] failed to start gateway:', error);
   process.exit(1);
 });
 "@
@@ -341,8 +347,6 @@ function Write-PortableRuntimePackageJson {
             start = "node start.js"
         }
         dependencies = [ordered]@{
-            "@larksuite/openclaw-lark" = "2026.5.20"
-            "@tencent-weixin/openclaw-weixin" = "2.4.4"
             openclaw = $OpenClawRuntimeVersion
         }
     }
@@ -364,8 +368,6 @@ function Install-PortableRuntimeNodeModules {
 
     foreach ($required in @(
         "node_modules\openclaw\openclaw.mjs",
-        "node_modules\@larksuite\openclaw-lark\package.json",
-        "node_modules\@tencent-weixin\openclaw-weixin\package.json",
         "package-lock.json"
     )) {
         $path = Join-Path $PackageDir $required
@@ -393,37 +395,18 @@ function Initialize-PortableBootstrap {
 
 function Find-TauriExe {
     if ($SkipBuild -and -not [string]::IsNullOrWhiteSpace($seedDir)) {
-        $seedExe = Join-Path $seedDir "OpenClaw.exe"
+        $seedExe = Join-Path $seedDir $LauncherExeName
         if (Test-Path -LiteralPath $seedExe) {
             return $seedExe
         }
     }
 
-    $candidatePaths = @(
-        (Join-Path $TauriDir "target\release\app.exe"),
-        (Join-Path $TauriDir "target\release\OpenClaw.exe")
-    )
-
-    $candidateExe = $candidatePaths |
-        Where-Object { Test-Path -LiteralPath $_ } |
-        ForEach-Object { Get-Item -LiteralPath $_ } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-
-    if ($candidateExe) {
-        return $candidateExe.FullName
+    $expectedExe = Join-Path $TauriDir "target\release\$LauncherExeName"
+    if (Test-Path -LiteralPath $expectedExe) {
+        return $expectedExe
     }
 
-    $exe = Get-ChildItem -LiteralPath (Join-Path $TauriDir "target\release") -Filter "*.exe" -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.DirectoryName -eq (Join-Path $TauriDir "target\release") } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-
-    if (-not $exe) {
-        throw "Could not find built Tauri exe under src-tauri\target\release"
-    }
-
-    return $exe.FullName
+    throw "Expected Tauri release executable not found: $expectedExe. Refusing to rename app.exe, OpenClaw.exe, or any other executable to $LauncherExeName."
 }
 
 function Get-PhoneAgentVersionCodeFromVersion {
@@ -469,7 +452,7 @@ function Resolve-PhoneAgentVersionInfo {
 
     if ([string]::IsNullOrWhiteSpace($resolvedVersion)) {
         if (Test-Path -LiteralPath $sourceRuntimeContext) {
-            $sourceContext = Get-Content -LiteralPath $sourceRuntimeContext -Raw | ConvertFrom-Json
+            $sourceContext = Get-Content -LiteralPath $sourceRuntimeContext -Raw -Encoding UTF8 | ConvertFrom-Json
             $sourcePhoneAgent = $sourceContext.capabilities.phoneAgent
             $resolvedVersion = [string]$sourcePhoneAgent.verifiedVersion
             if ($resolvedCode -le 0) {
@@ -552,7 +535,7 @@ function Write-CleanRuntimeConfig {
     $brandProfile | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $dataDir "brand_profile.json") -Encoding UTF8
 
     $launcherRuntime = [ordered]@{
-        name = "OpenClaw Portable Launcher"
+        name = "LOOM Portable"
         version = $Version
         packageName = $PackageName
     }
@@ -568,7 +551,7 @@ function Write-CleanRuntimeConfig {
         schema = "openclaw.launcher.runtime-context.v1"
         updatedAt = $null
         launcher = [ordered]@{
-            name = "OpenClaw Portable Launcher"
+            name = "LOOM Portable"
             version = $Version
             mode = "usb-portable"
             root = "."
@@ -611,8 +594,8 @@ function Write-CleanRuntimeConfig {
                 videoDownloadDir = "data/phone-videos"
                 videoCli = "npm run phone:video"
                 gameModeCli = "npm run phone:game"
-                defaultAlbum = "OpenClaw"
-                galleryPath = "Pictures/OpenClaw"
+                defaultAlbum = "LOOM"
+                galleryPath = "Pictures/LOOM"
                 verifiedVersion = $phoneAgentVersionInfo.Version
                 verifiedVersionCode = $phoneAgentVersionInfo.VersionCode
                 maxRoundsPerTask = 60
@@ -662,13 +645,13 @@ function Write-CleanRuntimeConfig {
 function Resolve-BrandProfile {
     param([string]$Profile)
 
-    $normalized = if ([string]::IsNullOrWhiteSpace($Profile)) { "openclaw" } else { $Profile.Trim() }
+    $normalized = if ([string]::IsNullOrWhiteSpace($Profile)) { "loom" } else { $Profile.Trim() }
     switch -Regex ($normalized.ToLowerInvariant()) {
         "^(openclaw|launcher|default)$" {
             return [pscustomobject]@{ Profile = "openclaw"; ThemeId = "default"; Edition = "openclaw" }
         }
-        "^(lumi|personal|private)$" {
-            return [pscustomobject]@{ Profile = "lumi"; ThemeId = "lumi"; Edition = "personal" }
+        "^(loom|lumi|personal|private)$" {
+            return [pscustomobject]@{ Profile = "loom"; ThemeId = "loom"; Edition = "personal" }
         }
         "^(customer|delivery|yonghao|yonghao_tech)$" {
             return [pscustomobject]@{ Profile = "customer"; ThemeId = "yonghao_tech"; Edition = "delivery" }
@@ -730,6 +713,22 @@ function Remove-NodeCacheDirectories {
         ForEach-Object {
             Remove-SafePath $_.FullName
         }
+}
+
+function Remove-LegacyScriptArtifacts {
+    param([string]$PackageDir)
+
+    foreach ($relative in @(
+        "scripts\bot-plugin-helper.mjs",
+        "scripts\openclaw-publish-phone.mjs",
+        "scripts\openclaw-publish-relay.mjs",
+        "scripts\openclaw-publish-relay-check.mjs",
+        "scripts\openclaw-publish-relay-smoke.mjs",
+        "scripts\package-mac-complete.mjs",
+        "scripts\package-mac-online.mjs"
+    )) {
+        Remove-SafePath (Join-Path $PackageDir $relative)
+    }
 }
 
 function Install-PythonBridgeDependencies {
@@ -879,7 +878,7 @@ function Copy-DesktopAgentSidecar {
         Select-Object -First 1
 
     if (-not $sourceRoot) {
-        Write-Warning "Luminode Desktop Agent source not found; portable package will not include desktop sidecar."
+        Write-Warning "LOOM desktop RPA sidecar source not found; portable package will not include the desktop sidecar."
         return
     }
 
@@ -889,7 +888,7 @@ function Copy-DesktopAgentSidecar {
     )
     $source = $unpackedCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $source) {
-        Write-Warning "Luminode win-unpacked output not found. Run npm run build:unpack in $sourceRoot before packaging."
+        Write-Warning "LOOM desktop RPA sidecar win-unpacked output not found. Run npm run build:unpack in $sourceRoot before packaging."
         return
     }
 
@@ -916,10 +915,44 @@ function Copy-DesktopAgentSidecar {
     }
 }
 
+function Copy-InstallerReleaseManifest {
+    param([string]$PackageDir)
+
+    $source = Join-Path $Root "release-manifest.json"
+    $publicKeySource = Join-Path $Root "release-public-key.txt"
+    $target = Join-Path $PackageDir "release-manifest.json"
+    $publicKeyTarget = Join-Path $PackageDir "release-public-key.txt"
+    Remove-SafePath $target
+    Remove-SafePath $publicKeyTarget
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Installer release manifest is missing. Expected signed release-manifest.json at repository root. The examples manifest is not a release source."
+    }
+    if (-not (Test-Path -LiteralPath $publicKeySource)) {
+        throw "Installer release public key is missing. Expected release-public-key.txt at repository root."
+    }
+
+    Copy-Item -LiteralPath $source -Destination $target -Force
+    Copy-Item -LiteralPath $publicKeySource -Destination $publicKeyTarget -Force
+}
+
+function Assert-InstallerReleaseManifestInputs {
+    $source = Join-Path $Root "release-manifest.json"
+    $publicKeySource = Join-Path $Root "release-public-key.txt"
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Installer release manifest is missing. Expected signed release-manifest.json at repository root. The examples manifest is not a release source."
+    }
+    if (-not (Test-Path -LiteralPath $publicKeySource)) {
+        throw "Installer release public key is missing. Expected release-public-key.txt at repository root."
+    }
+}
+
 function Expand-PortablePayloadForBuild {
     param([string]$PackageDir)
 
-    $payloadDir = Join-Path $PackageDir "OpenClawFiles"
+    $payloadDir = Join-Path $PackageDir $LegacyPayloadDirName
+    if (-not (Test-Path -LiteralPath $payloadDir)) {
+        $payloadDir = Join-Path $PackageDir $PrimaryPayloadDirName
+    }
     if (-not (Test-Path -LiteralPath $payloadDir)) {
         return
     }
@@ -929,6 +962,8 @@ function Expand-PortablePayloadForBuild {
 
     Get-ChildItem -LiteralPath $payloadDir -Force |
         ForEach-Object {
+            $target = Join-Path $PackageDir $_.Name
+            Remove-SafePath $target
             Move-Item -LiteralPath $_.FullName -Destination $PackageDir -Force
         }
     Remove-SafePath $payloadDir
@@ -953,12 +988,12 @@ function Remove-LegacyNestedLaunchers {
 function Move-PortablePayload {
     param([string]$PackageDir)
 
-    $payloadDir = Join-Path $PackageDir "OpenClawFiles"
+    $payloadDir = Join-Path $PackageDir $PrimaryPayloadDirName
     Remove-SafePath $payloadDir
     New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
 
     Get-ChildItem -LiteralPath $PackageDir -Force |
-        Where-Object { $_.Name -ne "OpenClaw.exe" -and $_.Name -ne "OpenClawFiles" } |
+        Where-Object { $_.Name -ne $LauncherExeName -and $_.Name -ne $PrimaryPayloadDirName -and $_.Name -ne $LegacyPayloadDirName } |
         ForEach-Object {
             Move-Item -LiteralPath $_.FullName -Destination $payloadDir -Force
         }
@@ -979,17 +1014,17 @@ function Write-PortableReadme {
     }
 
     $content = @"
-OpenClaw offline portable package
+LOOM offline portable package
 
 1. Copy this whole folder to a USB drive or local disk.
-2. Run OpenClaw.exe.
-3. Activate with a valid license code on first use.
-4. Configure API settings in the launcher before using image/video features.
+2. Run LOOM.exe.
+3. Sign in or activate with a valid license code on first use.
+4. Sync models from your account before using agent, image, video, phone, or desktop capabilities.
 $phoneAgentLine
-This package includes the launcher, bundled Node.js, OpenClaw runtime, Python bridge, workspace, themes, and scripts.
+This package includes the launcher, bundled Node.js, compatibility runtime, Python bridge, workspace, themes, and scripts.
 
 Bundled Node.js: $NodeVersion
-Bundled OpenClaw: $OpenClawVersion
+Bundled compatibility runtime: $OpenClawVersion
 "@
 
     Set-Content -LiteralPath (Join-Path $PackageDir "README-PORTABLE.txt") -Value $content -Encoding UTF8
@@ -1011,7 +1046,7 @@ function Get-OpenClawVersion {
     $pkgPath = Join-Path $PackageDir "node_modules\openclaw\package.json"
     if (Test-Path -LiteralPath $pkgPath) {
         try {
-            $pkg = Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json
+            $pkg = Get-Content -LiteralPath $pkgPath -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($pkg.version) {
                 return [string]$pkg.version
             }
@@ -1036,7 +1071,7 @@ function Set-JsonProperty {
     }
 }
 
-function Install-BundledBotPlugins {
+function Ensure-BundledRuntimeDependencies {
     param([string]$PackageDir)
 
     $nodeDir = Join-Path $PackageDir "node"
@@ -1048,10 +1083,10 @@ function Install-BundledBotPlugins {
         throw "Bundled npm not found: $npmCmd"
     }
     if ($openclawVersion -eq "unknown") {
-        throw "Cannot read bundled OpenClaw version before installing bot plugins."
+        throw "Cannot read bundled OpenClaw runtime version."
     }
 
-    $pkg = Get-Content -LiteralPath $pkgJsonPath -Raw | ConvertFrom-Json
+    $pkg = Get-Content -LiteralPath $pkgJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Set-JsonProperty -Object $pkg -Name "version" -Value $Version
     if (-not $pkg.dependencies) {
         Set-JsonProperty -Object $pkg -Name "dependencies" -Value ([pscustomobject]@{})
@@ -1063,22 +1098,19 @@ function Install-BundledBotPlugins {
     Push-Location $PackageDir
     try {
         $env:Path = "$nodeDir;$oldPath"
-        & $npmCmd install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "openclaw@$OpenClawRuntimeVersion" "@larksuite/openclaw-lark@latest" "@tencent-weixin/openclaw-weixin@latest"
+        & $npmCmd install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "openclaw@$OpenClawRuntimeVersion"
         if ($LASTEXITCODE -ne 0) {
-            throw "npm install bot plugins failed with exit code $LASTEXITCODE"
+            throw "npm install runtime dependencies failed with exit code $LASTEXITCODE"
         }
     } finally {
         Pop-Location
         $env:Path = $oldPath
     }
 
-    $required = @(
-        "node_modules\@larksuite\openclaw-lark\package.json",
-        "node_modules\@tencent-weixin\openclaw-weixin\package.json"
-    )
+    $required = @("node_modules\openclaw\openclaw.mjs")
     foreach ($item in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $item))) {
-            throw "Bundled bot plugin missing after install: $item"
+            throw "Bundled runtime dependency missing after install: $item"
         }
     }
 }
@@ -1095,7 +1127,7 @@ else {
 
 if ([string]::IsNullOrWhiteSpace($PackageName)) {
     $date = Get-Date -Format "yyyy.MM.dd"
-    $PackageName = "OpenClaw-Portable-v$Version-$date"
+    $PackageName = "$PackagePrefix-v$Version-$date"
 }
 else {
     Assert-PackageNameVersionConsistency -ResolvedVersion $Version -ResolvedPackageName $PackageName
@@ -1116,6 +1148,8 @@ $hashPath = Join-Path $ReleaseDir "$PackageName.zip.sha256.txt"
 Write-Host "Package name: $PackageName"
 Write-Host "Seed portable dir: $seedDir"
 Write-Host "Brand profile: $($brand.Profile) -> theme $($brand.ThemeId) [$($brand.Edition)]"
+
+Assert-InstallerReleaseManifestInputs
 
 Invoke-Step "Clean source workspace" {
     & powershell -ExecutionPolicy Bypass -File $CleanScript
@@ -1168,7 +1202,9 @@ Invoke-Step "Create portable directory" {
     }
     Expand-PortablePayloadForBuild -PackageDir $packageDir
     Remove-LegacyNestedLaunchers -PackageDir $packageDir
-    Copy-Item -LiteralPath $tauriExe -Destination (Join-Path $packageDir "OpenClaw.exe") -Force
+    Copy-Item -LiteralPath $tauriExe -Destination (Join-Path $packageDir $LauncherExeName) -Force
+    Remove-SafePath (Join-Path $packageDir "OpenClaw.exe")
+    Remove-SafePath (Join-Path $packageDir "app.exe")
 
     Remove-SafePath (Join-Path $packageDir "data")
     Remove-SafePath (Join-Path $packageDir "_up_\python")
@@ -1178,7 +1214,7 @@ Invoke-Step "Create portable directory" {
     Copy-Directory `
         -Source (Join-Path $LauncherDir "python") `
         -Destination (Join-Path $packageDir "_up_\python") `
-        -ExcludeDirs @("__pycache__") `
+        -ExcludeDirs @("__pycache__", "tests") `
         -ExcludeFiles @("*.pyc", "*.pyo")
 
     Copy-PythonRuntime -PackageDir $packageDir
@@ -1194,12 +1230,14 @@ Invoke-Step "Create portable directory" {
     Copy-Directory `
         -Source (Join-Path $LauncherDir "scripts") `
         -Destination (Join-Path $packageDir "scripts")
+    Remove-LegacyScriptArtifacts -PackageDir $packageDir
 
     Copy-PhoneAgentApks -PackageDir $packageDir
     Copy-WebView2Redist -PackageDir $packageDir
     Copy-DesktopAgentSidecar -PackageDir $packageDir
+    Copy-InstallerReleaseManifest -PackageDir $packageDir
 
-    Install-BundledBotPlugins -PackageDir $packageDir
+    Ensure-BundledRuntimeDependencies -PackageDir $packageDir
     Remove-OpenClawKnowledgeArtifacts -PackageDir $packageDir
     Remove-NodeCacheDirectories -PackageDir $packageDir
 
@@ -1214,6 +1252,7 @@ Invoke-Step "Create portable directory" {
         Remove-Item -Force
 
     Remove-PythonCacheFiles -PackageDir $packageDir
+    Remove-SafePath (Join-Path $packageDir $LegacyPayloadDirName)
     Move-PortablePayload -PackageDir $packageDir
 }
 
@@ -1232,7 +1271,7 @@ Invoke-Step "Smoke verify portable runtime" {
 }
 
 Invoke-Step "Clean runtime cache after smoke" {
-    $payloadDir = Join-Path $packageDir "OpenClawFiles"
+    $payloadDir = Join-Path $packageDir $PrimaryPayloadDirName
     if (Test-Path -LiteralPath $payloadDir) {
         Remove-PythonCacheFiles -PackageDir $payloadDir
     } else {

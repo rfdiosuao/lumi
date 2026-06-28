@@ -4,10 +4,9 @@
 // verify -> extract -> atomic swap -> marker. Runs in the Rust shell because
 // `node` itself is a downloaded layer (can't use Node to fetch Node).
 //
-// SAFE BY DESIGN: does nothing unless OPENCLAW_DIST_MANIFEST_URL is set AND a
-// required layer is actually missing. A full/offline package (all layers
-// preinstalled) is detected as present and skipped, so this is inert for the
-// current portable build.
+// SAFE BY DESIGN: does nothing unless LOOM_DIST_MANIFEST_URL is set AND a
+// required layer is actually missing. A full/offline package with all layers
+// preinstalled is detected as present and skipped.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -15,6 +14,10 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
+
+const PRIMARY_PAYLOAD_DIR: &str = "LOOMFiles";
+const LEGACY_PAYLOAD_DIR: &str = "OpenClawFiles";
+const PAYLOAD_DIR_CANDIDATES: [&str; 2] = [PRIMARY_PAYLOAD_DIR, LEGACY_PAYLOAD_DIR];
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -99,7 +102,7 @@ fn emit_progress(app: &AppHandle, meta: &ProgressMeta, phase: &str, downloaded: 
     );
 }
 
-/// Resolve the install root (the directory that contains `OpenClawFiles/`).
+/// Resolve the install root (the directory that contains the payload folder).
 pub fn install_root() -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         return std::env::current_dir().map_err(|e| format!("cwd failed: {e}"));
@@ -114,7 +117,7 @@ pub fn install_root() -> Result<PathBuf, String> {
 
     #[cfg(target_os = "macos")]
     {
-        // <install>/OpenClaw.app/Contents/MacOS/OpenClaw -> <install>
+        // <install>/LOOM.app/Contents/MacOS/LOOM -> <install>
         if let Some(contents_dir) = exe_dir.parent() {
             if contents_dir.file_name().and_then(|n| n.to_str()) == Some("Contents") {
                 if let Some(app_dir) = contents_dir.parent() {
@@ -131,8 +134,10 @@ pub fn install_root() -> Result<PathBuf, String> {
     candidates.push(exe_dir.clone());
 
     for candidate in &candidates {
-        if candidate.join("OpenClawFiles").is_dir() {
-            return Ok(candidate.clone());
+        for payload_dir in PAYLOAD_DIR_CANDIDATES {
+            if candidate.join(payload_dir).is_dir() {
+                return Ok(candidate.clone());
+            }
         }
     }
 
@@ -143,8 +148,11 @@ fn marker_path(install_root: &Path, layer: &Layer) -> PathBuf {
     install_root.join(&layer.install_path).join(".layer.json")
 }
 
-/// Present = marker sha matches, OR the target dir already exists with content
-/// (a preinstalled / offline-delivered layer — never clobber it).
+/// Present = marker sha matches, OR a known layer sentinel exists.
+///
+/// A plain "target directory is non-empty" check is too weak for online builds:
+/// `LOOMFiles/node_modules` can exist before the openclaw dependency layer is
+/// installed, causing first-run bootstrap to skip `openclaw-deps`.
 fn is_present(install_root: &Path, layer: &Layer) -> bool {
     if let Ok(raw) = std::fs::read_to_string(marker_path(install_root, layer)) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
@@ -154,7 +162,17 @@ fn is_present(install_root: &Path, layer: &Layer) -> bool {
         }
     }
     let target = install_root.join(&layer.install_path);
-    target.is_dir() && std::fs::read_dir(&target).map(|mut d| d.next().is_some()).unwrap_or(false)
+    match layer.id.as_str() {
+        "node" => target.join("node.exe").is_file(),
+        "openclaw-deps" => target.join("openclaw").join("openclaw.mjs").is_file(),
+        "python-runtime" => target.join("python.exe").is_file(),
+        _ => {
+            target.is_dir()
+                && std::fs::read_dir(&target)
+                    .map(|mut d| d.next().is_some())
+                    .unwrap_or(false)
+        }
+    }
 }
 
 fn client() -> Result<reqwest::Client, String> {
@@ -173,8 +191,16 @@ fn split_manifest_sources(raw: &str) -> Vec<String> {
 
 fn manifest_sources() -> Vec<String> {
     let candidates = [
+        std::env::var("LOOM_DIST_MANIFEST_URLS").ok(),
+        std::env::var("LOOM_DIST_MANIFEST_URL").ok(),
+        std::env::var("LUMI_AGENT_DIST_MANIFEST_URLS").ok(),
+        std::env::var("LUMI_AGENT_DIST_MANIFEST_URL").ok(),
         std::env::var("OPENCLAW_DIST_MANIFEST_URLS").ok(),
         std::env::var("OPENCLAW_DIST_MANIFEST_URL").ok(),
+        option_env!("LOOM_DIST_MANIFEST_URLS").map(str::to_string),
+        option_env!("LOOM_DIST_MANIFEST_URL").map(str::to_string),
+        option_env!("LUMI_AGENT_DIST_MANIFEST_URLS").map(str::to_string),
+        option_env!("LUMI_AGENT_DIST_MANIFEST_URL").map(str::to_string),
         option_env!("OPENCLAW_DIST_MANIFEST_URLS").map(str::to_string),
         option_env!("OPENCLAW_DIST_MANIFEST_URL").map(str::to_string),
     ];
@@ -191,8 +217,13 @@ fn manifest_sources() -> Vec<String> {
 }
 
 fn manifest_cache_path(install_root: &Path) -> PathBuf {
+    let payload_dir = PAYLOAD_DIR_CANDIDATES
+        .iter()
+        .find(|dir| install_root.join(dir).exists())
+        .copied()
+        .unwrap_or(PRIMARY_PAYLOAD_DIR);
     install_root
-        .join("OpenClawFiles")
+        .join(payload_dir)
         .join("data")
         .join(".openclaw")
         .join("dist-cache")
@@ -200,18 +231,16 @@ fn manifest_cache_path(install_root: &Path) -> PathBuf {
 }
 
 fn default_required_layers_present(install_root: &Path) -> bool {
-    [
-        "OpenClawFiles/node",
-        "OpenClawFiles/node_modules",
-        "OpenClawFiles/_up_/python-runtime",
-    ]
-    .iter()
-    .all(|rel| {
-        let path = install_root.join(rel);
-        path.is_dir()
-            && std::fs::read_dir(&path)
-                .map(|mut entries| entries.next().is_some())
-                .unwrap_or(false)
+    PAYLOAD_DIR_CANDIDATES.iter().any(|payload_dir| {
+        ["node", "node_modules", "_up_/python-runtime"]
+            .iter()
+            .all(|rel| {
+                let path = install_root.join(payload_dir).join(rel);
+                path.is_dir()
+                    && std::fs::read_dir(&path)
+                        .map(|mut entries| entries.next().is_some())
+                        .unwrap_or(false)
+            })
     })
 }
 
@@ -268,7 +297,10 @@ async fn fetch_manifest(sources: &[String], cache_path: &Path) -> Result<Manifes
 
     match std::fs::read_to_string(cache_path) {
         Ok(text) => {
-            eprintln!("[bootstrap] manifest loaded from local cache {}", cache_path.display());
+            eprintln!(
+                "[bootstrap] manifest loaded from local cache {}",
+                cache_path.display()
+            );
             serde_json::from_str(&text).map_err(|e| format!("cached manifest parse: {e}"))
         }
         Err(cache_err) => Err(format!(
@@ -282,7 +314,12 @@ async fn fetch_manifest(sources: &[String], cache_path: &Path) -> Result<Manifes
 
 /// Stream `url` to `dest`, returning the lowercase hex sha256 of the bytes.
 /// Emits throttled `dist://progress` (phase "download") as bytes arrive.
-async fn download_verify(app: &AppHandle, meta: &ProgressMeta, url: &str, dest: &Path) -> Result<String, String> {
+async fn download_verify(
+    app: &AppHandle,
+    meta: &ProgressMeta,
+    url: &str,
+    dest: &Path,
+) -> Result<String, String> {
     let mut resp = client()?
         .get(url)
         .send()
@@ -291,14 +328,20 @@ async fn download_verify(app: &AppHandle, meta: &ProgressMeta, url: &str, dest: 
         .error_for_status()
         .map_err(|e| format!("status {url}: {e}"))?;
     let total = resp.content_length().unwrap_or(0);
-    let mut file = std::fs::File::create(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
+    let mut file =
+        std::fs::File::create(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
     let mut hasher = Sha256::new();
     let mut downloaded: u64 = 0;
     let mut last_emit = std::time::Instant::now();
     emit_progress(app, meta, "download", 0, total);
-    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("chunk {url}: {e}"))? {
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("chunk {url}: {e}"))?
+    {
         hasher.update(&chunk);
-        file.write_all(&chunk).map_err(|e| format!("write {}: {e}", dest.display()))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("write {}: {e}", dest.display()))?;
         downloaded += chunk.len() as u64;
         if last_emit.elapsed().as_millis() >= 200 {
             emit_progress(app, meta, "download", downloaded, total);
@@ -322,7 +365,8 @@ fn extract_targz(archive: &Path, dest_parent: &Path) -> Result<(), String> {
     let f = std::fs::File::open(archive).map_err(|e| format!("open {}: {e}", archive.display()))?;
     let dec = flate2::read::GzDecoder::new(f);
     let mut ar = tar::Archive::new(dec);
-    ar.unpack(dest_parent).map_err(|e| format!("unpack {}: {e}", archive.display()))
+    ar.unpack(dest_parent)
+        .map_err(|e| format!("unpack {}: {e}", archive.display()))
 }
 
 /// Rename with backoff retry. A freshly-extracted layer (especially
@@ -358,13 +402,22 @@ async fn install_layer(
     let mut verified = false;
     let mut last_err = String::new();
     for base in mirrors {
-        let url = format!("{}{}", base.trim_end_matches('/'), format!("/{}", layer.file));
+        let url = format!(
+            "{}{}",
+            base.trim_end_matches('/'),
+            format!("/{}", layer.file)
+        );
         match download_verify(app, meta, &url, &archive).await {
             Ok(sha) if sha == layer.sha256 => {
                 verified = true;
                 break;
             }
-            Ok(sha) => last_err = format!("sha mismatch from {url}: got {}…", &sha[..12.min(sha.len())]),
+            Ok(sha) => {
+                last_err = format!(
+                    "sha mismatch from {url}: got {}…",
+                    &sha[..12.min(sha.len())]
+                )
+            }
             Err(e) => last_err = e,
         }
     }
@@ -386,19 +439,25 @@ async fn install_layer(
             .filter(|p| p.exists())
             .unwrap_or_else(|| stage.clone());
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
         let backup = target.with_extension(format!("old-{}", std::process::id()));
         if target.exists() {
-            rename_with_retry(&target, &backup).map_err(|e| format!("backup {}: {e}", target.display()))?;
+            rename_with_retry(&target, &backup)
+                .map_err(|e| format!("backup {}: {e}", target.display()))?;
         }
-        rename_with_retry(&base, &target).map_err(|e| format!("swap into {}: {e}", target.display()))?;
+        rename_with_retry(&base, &target)
+            .map_err(|e| format!("swap into {}: {e}", target.display()))?;
         let marker = serde_json::json!({
             "id": layer.id, "version": layer.version, "sha256": layer.sha256,
             "installedAt": chrono::Utc::now().to_rfc3339(),
         });
-        std::fs::write(marker_path(install_root, layer), serde_json::to_vec_pretty(&marker).unwrap_or_default())
-            .map_err(|e| format!("marker: {e}"))?;
+        std::fs::write(
+            marker_path(install_root, layer),
+            serde_json::to_vec_pretty(&marker).unwrap_or_default(),
+        )
+        .map_err(|e| format!("marker: {e}"))?;
         if backup.exists() {
             let _ = std::fs::remove_dir_all(&backup);
         }
@@ -432,7 +491,9 @@ pub async fn ensure_layers(app: AppHandle, install_root: PathBuf) -> Result<(), 
         Ok(m) => m,
         Err(e) => {
             if default_required_layers_present(&install_root) {
-                eprintln!("[bootstrap] manifest unavailable ({e}); continuing with preinstalled layers");
+                eprintln!(
+                    "[bootstrap] manifest unavailable ({e}); continuing with preinstalled layers"
+                );
                 return Ok(());
             }
             return Err(e);
@@ -441,7 +502,7 @@ pub async fn ensure_layers(app: AppHandle, install_root: PathBuf) -> Result<(), 
     let cache = manifest_cache
         .parent()
         .map(|p| p.join("layers"))
-        .unwrap_or_else(|| std::env::temp_dir().join("openclaw-dist-cache"));
+        .unwrap_or_else(|| std::env::temp_dir().join("loom-dist-cache"));
 
     // Determine what's actually missing BEFORE announcing, so the overlay only
     // appears on a fresh install (and shows the right set + total).
@@ -464,7 +525,9 @@ pub async fn ensure_layers(app: AppHandle, install_root: PathBuf) -> Result<(), 
             count,
         };
         eprintln!("[bootstrap] installing layer {}…", layer.id);
-        if let Err(e) = install_layer(&app, &meta, &install_root, &manifest.mirrors, layer, &cache).await {
+        if let Err(e) =
+            install_layer(&app, &meta, &install_root, &manifest.mirrors, layer, &cache).await
+        {
             let _ = app.emit("dist://error", serde_json::json!({ "message": e }));
             return Err(e);
         }
@@ -477,7 +540,11 @@ pub async fn ensure_layers(app: AppHandle, install_root: PathBuf) -> Result<(), 
 /// Install one optional distribution layer on demand. This uses the same
 /// manifest, mirrors, sha256 verification, extraction, and marker logic as the
 /// first-run bootstrap path.
-pub async fn install_layer_by_id(app: AppHandle, install_root: PathBuf, layer_id: String) -> Result<(), String> {
+pub async fn install_layer_by_id(
+    app: AppHandle,
+    install_root: PathBuf,
+    layer_id: String,
+) -> Result<(), String> {
     let layer_id = layer_id.trim().to_string();
     if layer_id.is_empty() {
         return Err("distribution layer id is empty".to_string());
@@ -493,7 +560,7 @@ pub async fn install_layer_by_id(app: AppHandle, install_root: PathBuf, layer_id
     let cache = manifest_cache
         .parent()
         .map(|p| p.join("layers"))
-        .unwrap_or_else(|| std::env::temp_dir().join("openclaw-dist-cache"));
+        .unwrap_or_else(|| std::env::temp_dir().join("loom-dist-cache"));
 
     let layer = manifest
         .layers
@@ -515,7 +582,9 @@ pub async fn install_layer_by_id(app: AppHandle, install_root: PathBuf, layer_id
     };
 
     eprintln!("[bootstrap] installing optional layer {}", layer.id);
-    if let Err(e) = install_layer(&app, &meta, &install_root, &manifest.mirrors, layer, &cache).await {
+    if let Err(e) =
+        install_layer(&app, &meta, &install_root, &manifest.mirrors, layer, &cache).await
+    {
         let _ = app.emit("dist://error", serde_json::json!({ "message": e }));
         return Err(e);
     }

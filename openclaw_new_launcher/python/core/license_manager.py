@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from core.constants import LICENSE_SERVER_URL
 from core.paths import AppPaths
+from core.secret_store import unprotect_secret
 from core.storage import read_json, write_json
 
 LICENSE_PUBLIC_KEY_B64 = "njEIf3io24DAXRYVp37p2gIT5u2KZaWoGvBPD0JlTZ4="
@@ -249,13 +250,19 @@ class LicenseManager:
                 lease.get("gatewayImageModel"),
                 member.get("gatewayImageModel"),
             )
-            video_model = self._pick_text(
+            video_draft_model = self._pick_text(
+                source.get("gatewayVideoDraftModel"),
+                source.get("videoDraftModel"),
+                gateway.get("gatewayVideoDraftModel"),
+                gateway.get("videoDraftModel"),
+                lease.get("gatewayVideoDraftModel"),
+                lease.get("videoDraftModel"),
+                member.get("gatewayVideoDraftModel"),
+                member.get("videoDraftModel"),
                 source.get("gatewayVideoModel"),
                 source.get("videoModel"),
-                source.get("video_model"),
                 gateway.get("gatewayVideoModel"),
                 gateway.get("videoModel"),
-                gateway.get("video_model"),
                 lease.get("gatewayVideoModel"),
                 member.get("gatewayVideoModel"),
             )
@@ -269,7 +276,7 @@ class LicenseManager:
                 "videoApiKey": video_token or token,
                 "defaultModel": default_model,
                 "imageModel": image_model,
-                "videoModel": video_model,
+                "videoDraftModel": video_draft_model,
                 "models": models,
                 "features": features if isinstance(features, list) else (lease.get("features") if isinstance(lease.get("features"), list) else []),
                 "plan": str(source.get("plan") or source.get("edition") or fallback_name or "").strip(),
@@ -578,7 +585,7 @@ class LicenseManager:
                 data=request_body,
                 headers={
                     "Content-Type": "application/json",
-                    "User-Agent": "Lumi-Desktop/2.0",
+                    "User-Agent": "LOOM-Desktop/2.0",
                 },
                 method="POST",
             )
@@ -613,7 +620,7 @@ class LicenseManager:
     def client_config(self) -> dict[str, Any]:
         request = urllib.request.Request(
             f"{LICENSE_SERVER_URL.rstrip('/')}/api/client/config",
-            headers={"User-Agent": "Lumi-Desktop/2.0"},
+            headers={"User-Agent": "LOOM-Desktop/2.0"},
             method="GET",
         )
         try:
@@ -640,6 +647,13 @@ class LicenseManager:
         for value in values:
             if isinstance(value, str):
                 clean = value.strip()
+                if clean:
+                    return clean
+            if isinstance(value, dict):
+                try:
+                    clean = unprotect_secret(value).strip()
+                except Exception:
+                    clean = ""
                 if clean:
                     return clean
         return ""
