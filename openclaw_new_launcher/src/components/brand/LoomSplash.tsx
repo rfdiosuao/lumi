@@ -2,12 +2,15 @@ import React from 'react';
 import { LumingWordmarkImage } from './LoomBrand';
 
 const MIN_SPLASH_DURATION_MS = 4400;
-const MAX_SPLASH_DURATION_MS = 9000;
+const MAX_SPLASH_DURATION_MS = 10000;
+const MOTION_READY_EVENT = 'loom-motion-ready';
+const MOTION_READY_NONCE = 'loom-motion-20260629';
 
 export const LoomSplash: React.FC = () => {
-  const [logoReady, setLogoReady] = React.useState(false);
+  const [motionReady, setMotionReady] = React.useState(false);
   const [minElapsed, setMinElapsed] = React.useState(false);
   const [visible, setVisible] = React.useState(true);
+  const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
 
   React.useEffect(() => {
     const minTimer = window.setTimeout(() => setMinElapsed(true), MIN_SPLASH_DURATION_MS);
@@ -19,12 +22,29 @@ export const LoomSplash: React.FC = () => {
   }, []);
 
   React.useEffect(() => {
-    if (logoReady && minElapsed) {
+    const handleMotionReady = (event: MessageEvent) => {
+      if (
+        event.source === iframeRef.current?.contentWindow &&
+        event.data?.type === MOTION_READY_EVENT &&
+        event.data?.source === 'loom-motion-single' &&
+        event.data?.nonce === MOTION_READY_NONCE
+      ) {
+        setMotionReady(true);
+      }
+    };
+    window.addEventListener('message', handleMotionReady);
+    return () => {
+      window.removeEventListener('message', handleMotionReady);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (motionReady && minElapsed) {
       const timer = window.setTimeout(() => setVisible(false), 220);
       return () => window.clearTimeout(timer);
     }
     return undefined;
-  }, [logoReady, minElapsed]);
+  }, [motionReady, minElapsed]);
 
   if (!visible) return null;
 
@@ -38,11 +58,12 @@ export const LoomSplash: React.FC = () => {
         <div className="loom-splash-orbit relative h-[268px] w-[268px] rounded-[34px] bg-[#071b24] p-0 shadow-[0_34px_90px_rgba(0,0,0,0.34)]">
           <div className="h-full w-full overflow-hidden rounded-[34px] bg-[#071b24]">
             <iframe
+              ref={iframeRef}
               title="LOOM 麓鸣启动动画"
-              src="/loom-motion/logo_motion_single.html?embed=1&loop=1"
+              src={`/loom-motion/logo_motion_single.html?embed=1&loop=1&motion=calm&v=20260629&nonce=${MOTION_READY_NONCE}`}
               className="h-full w-full border-0"
               sandbox="allow-scripts"
-              onLoad={() => setLogoReady(true)}
+              loading="eager"
             />
           </div>
         </div>

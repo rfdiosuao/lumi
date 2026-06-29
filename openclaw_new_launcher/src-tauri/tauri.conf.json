@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "LOOM",
   "mainBinaryName": "LOOM",
-  "version": "2.1.23",
+  "version": "2.1.24",
   "identifier": "top.heang.loom",
   "build": {
     "frontendDist": "../dist",
@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "LOOM - 麓鸣多智能体安装器",
+        "title": "LOOM - 麓鸣智能体安装器",
         "width": 1200,
         "height": 800,
         "minWidth": 960,

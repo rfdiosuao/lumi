@@ -460,7 +460,7 @@ export const SettingsPage: React.FC = () => {
               <SettingRow title={copy.about.appTitle} desc={copy.about.appDesc}>
                 <div className="space-y-2 text-sm text-text-muted">
                   <div><span className="font-black text-text">{copy.about.name}</span>LOOM / 麓鸣</div>
-                  <div><span className="font-black text-text">{copy.about.version}</span>2.1.23</div>
+                  <div><span className="font-black text-text">{copy.about.version}</span>2.1.24</div>
                   <div><span className="font-black text-text">{copy.about.positioning}</span>{copy.about.positioningValue}</div>
                 </div>
               </SettingRow>

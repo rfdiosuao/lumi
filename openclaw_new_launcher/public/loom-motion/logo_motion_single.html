@@ -57,9 +57,19 @@
     }
     .wave-piece {
       z-index: 2;
-      transform-origin: 50% 50%;
+      transform-origin: 50% 56%;
+      transform: translate3d(0, 0, 0);
       will-change: transform;
-      animation: wave-pass 880ms cubic-bezier(0.16, 1, 0.3, 1) var(--delay) both;
+      backface-visibility: hidden;
+      contain: layout paint style;
+      animation: wave-breathe var(--motion-duration, 3200ms) cubic-bezier(0.34, 0, 0.2, 1) var(--delay, 0ms) infinite both;
+      animation-play-state: paused;
+    }
+    .motion-ready .wave-piece { animation-play-state: running; }
+    .motion-paused .wave-piece { animation-play-state: paused; }
+    .qa-mode .wave-piece {
+      animation-iteration-count: 1;
+      animation-play-state: paused;
     }
     .controls {
       display: flex;
@@ -135,11 +145,28 @@
     .qa-mode #logo-root { width: min(716px, 86vmin); }
     .embed-mode #logo-root { width: min(716px, 100vmin); }
 
-    @keyframes wave-pass {
-      0% { transform: translateY(0) scaleY(1); }
-      34% { transform: translateY(var(--rise)) scaleY(1.08); }
-      64% { transform: translateY(var(--fall)) scaleY(0.94); }
-      100% { transform: translateY(0) scaleY(1); }
+    @keyframes wave-breathe {
+      0%, 100% {
+        transform: translate3d(0, 0, 0);
+      }
+      28% {
+        transform: translate3d(var(--drift-a, 0.36px), var(--rise-a, -1.4px), 0);
+      }
+      52% {
+        transform: translate3d(var(--drift-b, 0.92px), var(--rise-b, -2.4px), 0);
+      }
+      76% {
+        transform: translate3d(var(--drift-c, 0.52px), var(--fall-a, 0.9px), 0);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .wave-piece {
+        animation-duration: 6400ms;
+      }
+      @keyframes wave-breathe {
+        0%, 100% { transform: translate3d(0, 0, 0); }
+        50% { transform: translate3d(0.3px, -0.7px, 0); }
+      }
     }
   </style>
 </head>
@@ -183,7 +210,8 @@
   </main>
   <footer>LOOM / 麓鸣 soundwave motion</footer>
   <script>
-    const DURATION = 2200;
+    const DURATION = 3200;
+    const READY_EVENT = "loom-motion-ready";
     const params = new URLSearchParams(location.search);
     const qaMode = params.has("t") || params.has("static") || params.has("qa");
     const loopMode = params.has("loop") && !params.has("static") && !params.has("t");
@@ -196,7 +224,6 @@
     const replay = document.getElementById("replay");
     const slow = document.getElementById("slow");
     let slowMode = false;
-    let loopTimer = 0;
 
     function mainAnimations() {
       return [...root.getAnimations({ subtree: true })].filter((animation) => animation.effect && animation.effect.target.classList.contains("wave-piece"));
@@ -205,6 +232,7 @@
       for (const animation of mainAnimations()) animation.playbackRate = rate;
     }
     function seek(ms) {
+      document.body.classList.remove("motion-ready");
       for (const animation of mainAnimations()) {
         animation.pause();
         animation.currentTime = Math.max(0, Math.min(DURATION, ms));
@@ -212,44 +240,79 @@
       updatePrinciples(ms);
     }
     function updatePrinciples(ms) {
-      const active = ms < 240 ? "staging" : ms < 1320 ? "overlap" : "solid";
+      const active = ms < 520 ? "staging" : ms < 2240 ? "overlap" : "solid";
       document.querySelectorAll(".principles span").forEach((pill) => {
         pill.classList.toggle("active", pill.dataset.phase === active || (active === "overlap" && pill.dataset.phase === "slow"));
       });
     }
     function applyDefaultSpeed() {
-      setRate(slowMode ? 0.25 : Number(speed.value));
-    }
-    function scheduleLoop() {
-      if (!loopMode) return;
-      window.clearTimeout(loopTimer);
-      loopTimer = window.setTimeout(() => {
-        replayMotion();
-        scheduleLoop();
-      }, DURATION + 560);
+      setRate(slowMode ? 0.42 : Number(speed ? speed.value : 0.78));
     }
     function replayMotion() {
+      document.body.classList.remove("motion-ready");
       for (const animation of mainAnimations()) {
         animation.cancel();
         animation.play();
       }
-      requestAnimationFrame(applyDefaultSpeed);
+      requestAnimationFrame(() => {
+        applyDefaultSpeed();
+        document.body.classList.add("motion-ready");
+      });
     }
-    replay.addEventListener("click", replayMotion);
-    slow.addEventListener("click", () => {
+    function tuneWavePieces() {
+      const pieces = [...root.querySelectorAll(".wave-piece")];
+      const last = Math.max(1, pieces.length - 1);
+      pieces.forEach((piece, index) => {
+        const progress = index / last;
+        const crest = Math.sin(progress * Math.PI);
+        const rise = 1.2 + crest * 2.8;
+        const drift = 0.28 + progress * 1.24;
+        piece.style.setProperty("--delay", `${Math.round(index * 78)}ms`);
+        piece.style.setProperty("--motion-duration", `${embedMode || loopMode ? 3200 : 3000}ms`);
+        piece.style.setProperty("--rise-a", `${-(rise * 0.56).toFixed(2)}px`);
+        piece.style.setProperty("--rise-b", `${-rise.toFixed(2)}px`);
+        piece.style.setProperty("--fall-a", `${(0.38 + crest * 0.82).toFixed(2)}px`);
+        piece.style.setProperty("--drift-a", `${(drift * 0.32).toFixed(2)}px`);
+        piece.style.setProperty("--drift-b", `${drift.toFixed(2)}px`);
+        piece.style.setProperty("--drift-c", `${(drift * 0.58).toFixed(2)}px`);
+      });
+    }
+    function notifyReady() {
+      window.__p2mReady = true;
+      window.dispatchEvent(new CustomEvent(READY_EVENT));
+      try {
+        window.parent.postMessage({
+          type: READY_EVENT,
+          source: "loom-motion-single",
+          nonce: params.get("nonce") || ""
+        }, "*");
+      } catch (error) {
+        // Parent windows can be cross-origin in previews; readiness is still local.
+      }
+    }
+    if (replay) replay.addEventListener("click", replayMotion);
+    if (slow) slow.addEventListener("click", () => {
       slowMode = !slowMode;
       slow.setAttribute("aria-pressed", String(slowMode));
       applyDefaultSpeed();
     });
-    speed.addEventListener("input", () => {
+    if (speed) speed.addEventListener("input", () => {
       if (!slowMode) applyDefaultSpeed();
     });
-    root.addEventListener("click", replayMotion);
+    if (!embedMode) root.addEventListener("click", replayMotion);
 
     function allImagesReady() {
       const imgs = [...root.querySelectorAll("img")];
-      return Promise.all(imgs.map((img) => img.complete ? Promise.resolve() : new Promise((resolve) => img.addEventListener("load", resolve, { once: true }))));
+      return Promise.all(imgs.map((img) => {
+        const decode = img.decode ? img.decode().catch(() => undefined) : Promise.resolve();
+        if (img.complete) return decode;
+        return new Promise((resolve) => {
+          img.addEventListener("load", resolve, { once: true });
+          img.addEventListener("error", resolve, { once: true });
+        }).then(() => decode);
+      }));
     }
+    tuneWavePieces();
     allImagesReady().then(() => {
       requestAnimationFrame(() => {
         if (params.has("static")) {
@@ -258,9 +321,9 @@
           seek(Number(params.get("t")) || 0);
         } else {
           applyDefaultSpeed();
-          scheduleLoop();
+          document.body.classList.add("motion-ready");
         }
-        window.__p2mReady = true;
+        notifyReady();
       });
     });
   </script>
