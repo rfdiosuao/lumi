@@ -169,7 +169,7 @@ export default function App() {
     const feature = getFeatureDefinition(key);
 
     if (feature?.requiresLicense && !isAuthorized) {
-      showToast('请先邮箱登录，或输入授权码完成授权', 'info');
+      showToast('请先登录中转站账号', 'info');
       setCurrentPage('license');
       return;
     }

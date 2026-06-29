@@ -240,7 +240,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           />
         ) : null}
         <UtilityButton label="系统设置" icon="settings" onClick={() => onNavigate('settings')} />
-        <UtilityButton label={isApiConfigured ? '模型账号' : '登录/注册'} icon="exit" onClick={() => onNavigate('license')} />
+        <UtilityButton label={isApiConfigured ? '模型账号' : '中转站登录'} icon="exit" onClick={() => onNavigate('license')} />
       </div>
     </aside>
   );

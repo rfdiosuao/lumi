@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  accountApi,
   jobApi,
   parseErrorText,
   phoneApi,
@@ -212,6 +213,7 @@ export const PhoneDemoPage: React.FC = () => {
   const [phoneUrl, setPhoneUrl] = React.useState('');
   const [phoneToken, setPhoneToken] = React.useState('');
   const [tokenAvailable, setTokenAvailable] = React.useState(false);
+  const [accountLoggedIn, setAccountLoggedIn] = React.useState(false);
   const canUsePhone = Boolean(phoneUrl.trim() && (tokenAvailable || phoneToken.trim()));
 
   const refreshJobs = React.useCallback(async () => {
@@ -246,12 +248,22 @@ export const PhoneDemoPage: React.FC = () => {
     }
   }, [applyPhoneConfig]);
 
+  const loadAccountStatus = React.useCallback(async () => {
+    try {
+      const resp = await accountApi.current();
+      setAccountLoggedIn(Boolean(resp.account?.loggedIn));
+    } catch {
+      setAccountLoggedIn(false);
+    }
+  }, []);
+
   React.useEffect(() => {
     void loadPhoneConfig();
+    void loadAccountStatus();
     void refreshJobs();
     const timer = window.setInterval(refreshJobs, 2200);
     return () => window.clearInterval(timer);
-  }, [loadPhoneConfig, refreshJobs]);
+  }, [loadAccountStatus, loadPhoneConfig, refreshJobs]);
 
   const runPhone = React.useCallback(async (
     key: string,
@@ -364,6 +376,10 @@ export const PhoneDemoPage: React.FC = () => {
   };
 
   const syncPhoneModel = async () => {
+    if (!accountLoggedIn) {
+      showToast('请先登录中转站账号，再同步手机模型。', 'info');
+      return;
+    }
     await runPhone('syncModel', () => phoneApi.syncModel(), (job) => {
       const model = job.result?.wire?.models?.phone;
       if (model) showToast(`手机模型已同步：${model}`, 'success');
@@ -488,11 +504,11 @@ export const PhoneDemoPage: React.FC = () => {
                   <div>
                     <div className="text-sm font-black text-text">模型同步</div>
                     <p className="mt-1 text-xs leading-5 text-text-muted">
-                      登录中转站或配置第三方 Provider 后，一键写入手机 Agent 模型配置。
+                      登录中转站后，一键写入手机 Agent 模型配置。
                     </p>
                   </div>
-                  <Button variant="primary" onClick={syncPhoneModel} disabled={Boolean(busy)}>
-                    {busy === 'syncModel' ? '同步中...' : '同步模型到手机'}
+                  <Button variant="primary" onClick={syncPhoneModel} disabled={Boolean(busy) || !accountLoggedIn}>
+                    {busy === 'syncModel' ? '同步中...' : accountLoggedIn ? '同步模型到手机' : '登录后同步'}
                   </Button>
                 </div>
               </section>
