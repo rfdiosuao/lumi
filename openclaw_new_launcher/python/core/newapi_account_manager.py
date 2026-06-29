@@ -915,7 +915,7 @@ class NewApiAccountManager:
         username = username.strip()
         password = password.strip()
         if not username or not password:
-            raise NewApiAccountError("请输入中转站邮箱和密码")
+            raise NewApiAccountError("请输入中转站用户名或邮箱和密码")
 
         base_url = self.normalize_base_url(base_url)
         cookie_jar = http.cookiejar.CookieJar()

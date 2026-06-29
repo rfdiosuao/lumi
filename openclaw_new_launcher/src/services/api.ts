@@ -41,7 +41,7 @@ function friendlyErrorText(text: string): string {
     return '桌面通信通道不可用，请使用 LOOM 桌面应用运行。';
   }
   if (/username or password is incorrect/i.test(text)) {
-    return '邮箱或密码错误，或账号已被禁用';
+    return '用户名、邮箱或密码错误，或账号已被禁用';
   }
   if (/^newapi_network_error:/i.test(text)) {
     return '无法连接中转站，请检查网络、中转站地址或稍后重试';
@@ -59,7 +59,7 @@ function friendlyErrorText(text: string): string {
     return '尚未登录中转站账号';
   }
   if (/invalid parameters?/i.test(text)) {
-    return '请求参数无效，请检查邮箱、密码和中转站地址';
+    return '请求参数无效，请检查用户名/邮箱、密码和中转站地址';
   }
   if (/unauthorized, not logged in/i.test(text)) {
     return '未登录或访问令牌无效';
