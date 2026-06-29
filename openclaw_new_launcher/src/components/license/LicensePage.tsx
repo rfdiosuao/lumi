@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { open } from '@tauri-apps/plugin-shell';
-import { BusyOverlay, Button, Input, showToast } from '../common';
+import { BusyOverlay, Button, Input, showConfirm, showToast } from '../common';
 import { accountApi, licenseApi, parseErrorText, wireApi, type AccountSnapshot } from '../../services/api';
 import { useAppStore } from '../../stores/appStore';
 
@@ -257,7 +257,13 @@ export const LicensePage: React.FC = () => {
   };
 
   const handleWireRollback = async () => {
-    if (!confirm('确定回滚到上一次模型同步配置吗？账号不会退出。')) return;
+    const ok = await showConfirm({
+      title: '回滚模型同步配置',
+      message: '账号不会退出，只会回到上一次可用的模型配置。确定继续吗？',
+      confirmText: '回滚配置',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     setWireStatus('正在回滚运行配置...');
     try {

@@ -18,6 +18,7 @@ const CapabilityCenterPage = lazyNamed(() => import('../components/capabilities/
 const LicensePage = lazyNamed(() => import('../components/license/LicensePage'), 'LicensePage');
 const ModelsPage = lazyNamed(() => import('../components/models/ModelsPage'), 'ModelsPage');
 const DiagnosticsPage = lazyNamed(() => import('../components/diagnostics/DiagnosticsPage'), 'DiagnosticsPage');
+const SettingsPage = lazyNamed(() => import('../components/settings/SettingsPage'), 'SettingsPage');
 
 const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
   dashboard: DashboardPage,
@@ -28,6 +29,7 @@ const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
   license: LicensePage,
   models: ModelsPage,
   diagnostics: DiagnosticsPage,
+  settings: SettingsPage,
 };
 
 export function getFeaturePage(key: string): React.ComponentType {

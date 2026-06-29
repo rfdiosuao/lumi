@@ -1,6 +1,6 @@
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { BusyOverlay, Button, showToast } from '../common';
+import { BusyOverlay, Button, showConfirm, showToast } from '../common';
 import {
   diagnosticsApi,
   parseErrorText,
@@ -147,7 +147,13 @@ export const DiagnosticsPage: React.FC = () => {
       showToast('当前没有可自动修复的检查项，请先重新诊断或导出诊断包。', 'info');
       return;
     }
-    if (!confirm('确定要执行环境修复吗？可能会停止残留进程并清理临时状态。')) return;
+    const ok = await showConfirm({
+      title: '执行环境修复',
+      message: '可能会停止残留进程并清理临时状态。确定继续吗？',
+      confirmText: '开始修复',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setRepairing(true);
     try {
       const result = await diagnosticsApi.repair({ confirmed: true });

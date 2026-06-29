@@ -77,6 +77,91 @@ export const Modal: React.FC<{
   );
 };
 
+type ConfirmTone = 'default' | 'danger';
+
+interface ConfirmOptions {
+  title?: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  tone?: ConfirmTone;
+}
+
+interface ConfirmRequest extends Required<ConfirmOptions> {
+  id: number;
+  resolve: (value: boolean) => void;
+}
+
+let confirmId = 0;
+
+const confirmStore = create<{
+  request: ConfirmRequest | null;
+  open: (options: ConfirmOptions) => Promise<boolean>;
+  settle: (value: boolean) => void;
+}>((set, get) => ({
+  request: null,
+  open: (options) => new Promise<boolean>((resolve) => {
+    const current = get().request;
+    if (current) current.resolve(false);
+    set({
+      request: {
+        id: ++confirmId,
+        title: options.title || '请确认',
+        message: options.message,
+        confirmText: options.confirmText || '确定',
+        cancelText: options.cancelText || '取消',
+        tone: options.tone || 'default',
+        resolve,
+      },
+    });
+  }),
+  settle: (value) => {
+    const current = get().request;
+    if (!current) return;
+    current.resolve(value);
+    set({ request: null });
+  },
+}));
+
+export function showConfirm(options: string | ConfirmOptions): Promise<boolean> {
+  const normalized = typeof options === 'string' ? { message: options } : options;
+  return confirmStore.getState().open(normalized);
+}
+
+export const ConfirmDialogHost: React.FC = () => {
+  const request = confirmStore((state) => state.request);
+  const settle = confirmStore((state) => state.settle);
+  if (!request) return null;
+
+  return (
+    <div className="fixed inset-0 z-[99970] flex items-center justify-center px-5" role="dialog" aria-modal="true" aria-labelledby={`confirm-title-${request.id}`}>
+      <button
+        type="button"
+        aria-label="取消"
+        className="absolute inset-0 h-full w-full bg-[#061017]/55 backdrop-blur-[2px]"
+        onClick={() => settle(false)}
+      />
+      <div className="relative w-full max-w-[440px] rounded-[18px] border border-border bg-surface/98 p-5 shadow-[0_30px_90px_rgba(5,25,22,0.28)]">
+        <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-full ${
+          request.tone === 'danger'
+            ? 'border border-status-danger/25 bg-status-danger/12 text-status-danger'
+            : 'border border-[#0B4A3E]/20 bg-[#0B4A3E]/10 text-[#0B4A3E]'
+        }`}>
+          <span className="text-lg font-black">{request.tone === 'danger' ? '!' : '?'}</span>
+        </div>
+        <h2 id={`confirm-title-${request.id}`} className="text-lg font-black text-text">{request.title}</h2>
+        <p className="mt-2 whitespace-pre-line text-sm leading-6 text-text-muted">{request.message}</p>
+        <div className="mt-5 flex justify-end gap-3">
+          <Button variant="quiet" onClick={() => settle(false)}>{request.cancelText}</Button>
+          <Button variant={request.tone === 'danger' ? 'danger' : 'primary'} onClick={() => settle(true)}>
+            {request.confirmText}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 let toastId = 0;
 const TOAST_TTL_MS = 3200;
 const TOAST_DEDUPE_WINDOW_MS = 1800;

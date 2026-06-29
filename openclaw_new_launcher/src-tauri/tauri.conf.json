@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "LOOM",
   "mainBinaryName": "LOOM",
-  "version": "2.1.20",
+  "version": "2.1.21",
   "identifier": "top.heang.loom",
   "build": {
     "frontendDist": "../dist",

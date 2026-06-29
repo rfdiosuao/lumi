@@ -3,7 +3,7 @@ import { open } from '@tauri-apps/plugin-shell';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { WindowTitlebar } from './components/window/WindowTitlebar';
-import { ToastContainer, showToast } from './components/common';
+import { ConfirmDialogHost, ToastContainer, showConfirm, showToast } from './components/common';
 import { useAppStore } from './stores/appStore';
 import { useLogStore } from './stores/logStore';
 import { processApi, logApi, parseErrorText, updateApi } from './services/api';
@@ -18,6 +18,7 @@ import { LoomSplash } from './components/brand/LoomSplash';
 const NAV_PARENT_BY_PAGE: Record<string, string> = {
   models: 'license',
   diagnostics: 'capabilities',
+  settings: 'settings',
   terminal: 'capabilities',
 };
 
@@ -183,7 +184,12 @@ export default function App() {
         const resp = await updateApi.check();
         if (resp.hasUpdate) {
           showToast(`发现新版本 ${resp.current} -> ${resp.latest}`, 'info');
-          if (confirm(`当前: ${resp.current}\n最新: ${resp.latest}\n是否更新？`)) {
+          const ok = await showConfirm({
+            title: '发现新版本',
+            message: `当前版本：${resp.current}\n最新版本：${resp.latest}\n是否现在更新？`,
+            confirmText: '立即更新',
+          });
+          if (ok) {
             appendLog('[更新] 开始更新...\n');
             const updateResp = await updateApi.do();
             showToast(updateResp.success ? `更新成功: ${updateResp.current_version}` : '更新失败', updateResp.success ? 'success' : 'error');
@@ -226,6 +232,7 @@ export default function App() {
         </div>
 
         <ToastContainer />
+        <ConfirmDialogHost />
         <LoomSplash />
         <SetupGate />
       </div>

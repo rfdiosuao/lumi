@@ -25,6 +25,7 @@ export const FEATURE_DEFINITIONS: FeatureDefinition[] = [
   { key: 'phone', label: '手机', desc: '连接 / 截图 / 读取', icon: 'PHN', group: GROUP_CORE, action: { type: 'page' } },
   { key: 'license', label: '模型账号', desc: '登录 / 模型', icon: 'ACC', group: GROUP_CORE, action: { type: 'page' } },
   { key: 'capabilities', label: '其他', desc: '暂未开放', icon: 'CAP', group: GROUP_CORE, action: { type: 'page' } },
+  { key: 'settings', label: '设置', desc: '系统设置', icon: 'SET', group: GROUP_CORE, action: { type: 'page' }, visible: false },
   { key: 'models', label: '模型', desc: '模型选择', icon: 'MDL', group: GROUP_CORE, action: { type: 'page' }, visible: false },
   { key: 'diagnostics', label: '诊断', desc: '环境 / 日志', icon: 'FIX', group: GROUP_CORE, action: { type: 'page' }, visible: false },
   { key: 'terminal', label: '日志', desc: '运行日志', icon: 'LOG', group: GROUP_CORE, action: { type: 'page' }, visible: false },

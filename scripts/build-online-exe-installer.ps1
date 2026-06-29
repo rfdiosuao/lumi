@@ -1,8 +1,8 @@
 param(
-    [string]$PackageUrl = "https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/rc/packages/LOOM-Online-v2.1.20-20260629-rc2.zip",
-    [string]$PackageSha256 = "018059BEAC8DED227353045355374BDC917510C40C7FD5240A9C19EB06C7722E",
-    [string]$PackageRootName = "LOOM-Online-v2.1.20-20260629-rc2",
-    [string]$Version = "2.1.20-20260629-rc2",
+    [string]$PackageUrl = "https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/rc/packages/LOOM-Online-v2.1.21-20260629-rc3.zip",
+    [string]$PackageSha256 = "744734BBA7542C49CF95C154D898B2B9D08596331DA8F306DAF3804D537CCB6D",
+    [string]$PackageRootName = "LOOM-Online-v2.1.21-20260629-rc3",
+    [string]$Version = "2.1.21-20260629-rc3",
     [string]$OutputPath = ""
 )
 
@@ -13,7 +13,7 @@ $ArtifactsDir = Join-Path $Root "artifacts\installer"
 $ReleaseDir = Join-Path $Root "release"
 $IconPath = Join-Path $Root "openclaw_new_launcher\src-tauri\icons\icon.ico"
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $ReleaseDir "LOOM-Online-Setup-v2.1.20-20260629-rc2.exe"
+    $OutputPath = Join-Path $ReleaseDir "LOOM-Online-Setup-v2.1.21-20260629-rc3.exe"
 }
 
 New-Item -ItemType Directory -Path $ArtifactsDir -Force | Out-Null
@@ -637,7 +637,7 @@ namespace LoomOnlineInstaller
             if (Directory.Exists(target))
             {
                 backup = NextBackupPath(target);
-                Directory.Move(target, backup);
+                MoveDirectorySafe(target, backup);
             }
             try
             {
@@ -652,7 +652,7 @@ namespace LoomOnlineInstaller
                 TryDelete(target);
                 if (!string.IsNullOrEmpty(backup) && Directory.Exists(backup))
                 {
-                    Directory.Move(backup, target);
+                    MoveDirectorySafe(backup, target);
                 }
                 throw;
             }
@@ -680,6 +680,38 @@ namespace LoomOnlineInstaller
                 }
             }
             throw new InvalidOperationException("\u65e0\u6cd5\u521b\u5efa\u5b89\u88c5\u5907\u4efd\u76ee\u5f55\uff1a" + target);
+        }
+
+        private static void MoveDirectorySafe(string source, string target)
+        {
+            try
+            {
+                Directory.Move(source, target);
+                return;
+            }
+            catch (IOException error)
+            {
+                if (!IsCrossVolumeMoveError(error))
+                {
+                    throw;
+                }
+            }
+            CopyDirectory(source, target);
+            TryDelete(source);
+        }
+
+        private static bool IsCrossVolumeMoveError(IOException error)
+        {
+            int lowWord = error.HResult & 0xFFFF;
+            if (lowWord == 17)
+            {
+                return true;
+            }
+            string message = error.Message ?? "";
+            return message.IndexOf("same root", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("\u76f8\u540c\u7684\u6839", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("\u5377\u4e4b\u95f4", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("between volumes", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void RestoreUserData(string backup, string target)

@@ -112,7 +112,7 @@ main > div {
 }
 
 .loom-splash-orbit {
-  animation: loom-breathe 1180ms ease-in-out infinite;
+  animation: none;
 }
 
 .loom-splash-dots span {

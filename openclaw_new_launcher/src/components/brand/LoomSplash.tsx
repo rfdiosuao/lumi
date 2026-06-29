@@ -1,8 +1,8 @@
 import React from 'react';
 import { LumingWordmarkImage } from './LoomBrand';
 
-const MIN_SPLASH_DURATION_MS = 2400;
-const MAX_SPLASH_DURATION_MS = 5200;
+const MIN_SPLASH_DURATION_MS = 4400;
+const MAX_SPLASH_DURATION_MS = 9000;
 
 export const LoomSplash: React.FC = () => {
   const [logoReady, setLogoReady] = React.useState(false);
@@ -35,11 +35,11 @@ export const LoomSplash: React.FC = () => {
       aria-label="LOOM 麓鸣启动中"
     >
       <div className="flex flex-col items-center">
-        <div className="loom-splash-orbit relative h-[232px] w-[232px] rounded-[32px] bg-[#071b24] p-1 shadow-[0_34px_90px_rgba(0,0,0,0.34)]">
-          <div className="h-full w-full overflow-hidden rounded-[28px] bg-[#071b24]">
+        <div className="loom-splash-orbit relative h-[268px] w-[268px] rounded-[34px] bg-[#071b24] p-0 shadow-[0_34px_90px_rgba(0,0,0,0.34)]">
+          <div className="h-full w-full overflow-hidden rounded-[34px] bg-[#071b24]">
             <iframe
               title="LOOM 麓鸣启动动画"
-              src="/loom-motion/logo_motion_single.html?qa=1"
+              src="/loom-motion/logo_motion_vector-v1.html?qa=1"
               className="h-full w-full border-0"
               sandbox="allow-scripts"
               onLoad={() => setLogoReady(true)}

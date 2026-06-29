@@ -7,10 +7,10 @@ const LUMING_WORDMARK_GOLD_SRC = '/loom-motion/luming-wordmark-gold.png';
 
 export const LoomLogoMark: React.FC<{ className?: string }> = ({ className = '' }) => (
   <span
-    className={`loom-logo-mark relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[8px] bg-[#071b24] ring-1 ring-white/[0.04] ${className}`}
+    className={`loom-logo-mark relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[8px] bg-[#071b24] ${className}`}
     aria-hidden="true"
   >
-    <img src={LOGO_SRC} alt="" className="h-[112%] w-[112%] max-w-none object-cover" draggable={false} />
+    <img src={LOGO_SRC} alt="" className="h-full w-full max-w-none object-contain" draggable={false} />
   </span>
 );
 

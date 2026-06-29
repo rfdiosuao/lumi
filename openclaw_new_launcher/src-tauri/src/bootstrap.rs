@@ -11,7 +11,7 @@
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 
@@ -271,8 +271,13 @@ async fn read_manifest_text(source: &str) -> Result<String, String> {
 
 async fn fetch_manifest_from_source(source: &str) -> Result<(Manifest, String), String> {
     let text = read_manifest_text(source).await?;
-    let manifest = serde_json::from_str(&text).map_err(|e| format!("manifest parse: {e}"))?;
+    let manifest = parse_manifest_text(&text)?;
     Ok((manifest, text))
+}
+
+fn parse_manifest_text(text: &str) -> Result<Manifest, String> {
+    let normalized = text.trim_start_matches('\u{feff}');
+    serde_json::from_str(normalized).map_err(|e| format!("manifest parse: {e}"))
 }
 
 async fn fetch_manifest(sources: &[String], cache_path: &Path) -> Result<Manifest, String> {
@@ -301,7 +306,7 @@ async fn fetch_manifest(sources: &[String], cache_path: &Path) -> Result<Manifes
                 "[bootstrap] manifest loaded from local cache {}",
                 cache_path.display()
             );
-            serde_json::from_str(&text).map_err(|e| format!("cached manifest parse: {e}"))
+            parse_manifest_text(&text).map_err(|e| format!("cached manifest parse: {e}"))
         }
         Err(cache_err) => Err(format!(
             "manifest unavailable; sources failed [{}]; cache {} failed: {}",
@@ -374,18 +379,70 @@ fn extract_targz(archive: &Path, dest_parent: &Path) -> Result<(), String> {
 /// held by Windows Defender's real-time scan, so moving the directory fails with
 /// ACCESS_DENIED (os error 5) until the scan finishes. Retrying after a short
 /// wait clears it; the final attempt propagates the real error if it persists.
-fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
+    move_path_with_retry(from, to, |source, target| std::fs::rename(source, target))
+}
+
+fn move_path_with_retry<F>(from: &Path, to: &Path, rename: F) -> io::Result<()>
+where
+    F: Fn(&Path, &Path) -> io::Result<()>,
+{
     let mut delay = std::time::Duration::from_millis(200);
     for _ in 0..6 {
-        match std::fs::rename(from, to) {
+        match rename(from, to) {
             Ok(()) => return Ok(()),
+            Err(error) if is_cross_volume_move_error(&error) => {
+                return copy_path_then_remove_source(from, to);
+            }
             Err(_) => {
                 std::thread::sleep(delay);
                 delay = (delay * 2).min(std::time::Duration::from_secs(2));
             }
         }
     }
-    std::fs::rename(from, to)
+    match rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(error) if is_cross_volume_move_error(&error) => copy_path_then_remove_source(from, to),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_cross_volume_move_error(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(17) | Some(18))
+}
+
+fn copy_path_then_remove_source(from: &Path, to: &Path) -> io::Result<()> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if from.is_dir() {
+        if let Err(error) = copy_dir_recursive(from, to) {
+            let _ = std::fs::remove_dir_all(to);
+            return Err(error);
+        }
+        std::fs::remove_dir_all(from)
+    } else {
+        if let Err(error) = std::fs::copy(from, to) {
+            let _ = std::fs::remove_file(to);
+            return Err(error);
+        }
+        std::fs::remove_file(from)
+    }
+}
+
+fn copy_dir_recursive(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let source = entry.path();
+        let target = to.join(entry.file_name());
+        if source.is_dir() {
+            copy_dir_recursive(&source, &target)?;
+        } else {
+            std::fs::copy(&source, &target)?;
+        }
+    }
+    Ok(())
 }
 
 async fn install_layer(
@@ -591,4 +648,43 @@ pub async fn install_layer_by_id(
     eprintln!("[bootstrap] optional layer {} installed", layer.id);
     let _ = app.emit("dist://done", serde_json::json!({ "count": 1 }));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{move_path_with_retry, parse_manifest_text};
+    use std::io;
+
+    #[test]
+    fn move_path_with_retry_copies_directory_when_rename_is_unavailable() {
+        let root = std::env::temp_dir().join(format!(
+            "loom-bootstrap-move-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let nested = source.join("nested");
+        let target = root.join("target");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("payload.txt"), b"ok").unwrap();
+
+        let result = move_path_with_retry(&source, &target, |_, _| Err(io::Error::from_raw_os_error(17)));
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read_to_string(target.join("nested").join("payload.txt")).unwrap(),
+            "ok"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parse_manifest_text_accepts_utf8_bom() {
+        let text = "\u{feff}{\"mirrors\":[\"https://example.invalid/\"],\"layers\":[]}";
+        let manifest = parse_manifest_text(text).unwrap();
+
+        assert_eq!(manifest.mirrors, vec!["https://example.invalid/"]);
+        assert!(manifest.layers.is_empty());
+    }
 }

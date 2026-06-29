@@ -1,5 +1,6 @@
 import React from 'react';
 import { LoomLogoMark } from '../brand/LoomBrand';
+import { showConfirm } from '../common';
 import { useTheme } from '../../hooks/useTheme';
 import { DEFAULT_NAV_ITEMS, normalizeNavItems } from '../../theme/default';
 import type { NavItem } from '../../types/theme';
@@ -14,7 +15,7 @@ interface SidebarProps {
   onStop: () => void;
 }
 
-type IconName = 'rocket' | 'box' | 'phone' | 'user' | 'capability' | 'model' | 'wrench' | 'exit';
+type IconName = 'rocket' | 'box' | 'phone' | 'user' | 'capability' | 'model' | 'wrench' | 'settings' | 'power' | 'exit';
 
 function iconFor(item: NavItem): IconName {
   const key = item.key;
@@ -86,6 +87,22 @@ const Icon: React.FC<{ name: IconName; className?: string }> = ({ name, classNam
       <svg {...common}>
         <path d="M14.8 6.2a4 4 0 0 0 4.9 4.9l-7.8 7.8a2.4 2.4 0 0 1-3.4-3.4l7.8-7.8Z" />
         <path d="m7.5 16.5-3.2 3.2" />
+      </svg>
+    );
+  }
+  if (name === 'settings') {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3.1V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
+      </svg>
+    );
+  }
+  if (name === 'power') {
+    return (
+      <svg {...common}>
+        <path d="M12 3v8" />
+        <path d="M8.2 5.4a8 8 0 1 0 7.6 0" />
       </svg>
     );
   }
@@ -205,14 +222,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
           title={serviceRunning ? '核心运行中' : isApiConfigured ? '配置已就绪' : isAuthorized ? '待启动' : '未登录'}
           className={`mb-1 h-2 w-2 rounded-full ${statusTone(serviceRunning, isAuthorized, isApiConfigured)}`}
         />
-        <UtilityButton
-          label="停止运行环境"
-          icon="exit"
-          disabled={!serviceRunning && serviceStatus !== 'starting'}
-          onClick={() => {
-            if (confirm('确定要停止运行环境吗？正在运行的任务可能中断。')) onStop();
-          }}
-        />
+        {(serviceRunning || serviceStatus === 'starting') ? (
+          <UtilityButton
+            label="停止运行环境"
+            icon="power"
+            onClick={() => {
+              void (async () => {
+                const ok = await showConfirm({
+                  title: '停止运行环境',
+                  message: '正在运行的任务可能中断，确定要停止 LOOM 本地运行环境吗？',
+                  confirmText: '停止',
+                  tone: 'danger',
+                });
+                if (ok) onStop();
+              })();
+            }}
+          />
+        ) : null}
+        <UtilityButton label="系统设置" icon="settings" onClick={() => onNavigate('settings')} />
+        <UtilityButton label={isApiConfigured ? '模型账号' : '登录/注册'} icon="exit" onClick={() => onNavigate('license')} />
       </div>
     </aside>
   );

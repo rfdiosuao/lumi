@@ -1,6 +1,6 @@
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Button, showToast } from '../common';
+import { Button, showConfirm, showToast } from '../common';
 import { useLogStore } from '../../stores/logStore';
 import { useTheme } from '../../hooks/useTheme';
 import { logApi, parseErrorText } from '../../services/api';
@@ -73,7 +73,13 @@ export const TerminalPage: React.FC = () => {
   };
 
   const handleClearLogs = async () => {
-    if (!confirm('确定要清空当前日志吗？已导出的诊断包不会受影响。')) return;
+    const ok = await showConfirm({
+      title: '清空当前日志',
+      message: '已导出的诊断包不会受影响。确定清空当前界面日志吗？',
+      confirmText: '清空',
+      tone: 'danger',
+    });
+    if (!ok) return;
     clearLogs();
     window.dispatchEvent(new Event('openclaw:logs-cleared'));
     try {

@@ -1078,6 +1078,20 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
             self.assertEqual(command, [node_exe, script])
 
+    def test_visible_launcher_keeps_windows_agent_terminal_open(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "agents", "codex", "codex.cmd")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            with open(entry, "w", encoding="utf-8") as handle:
+                handle.write("@echo off\n")
+
+            build_command = getattr(component_installer_module, "build_visible_launcher_command", lambda *_args, **_kwargs: [])
+            command = build_command(entry, os.path.dirname(entry), base_path=temp_dir, force_windows=True)
+
+            self.assertEqual(command[:5], ["cmd.exe", "/c", "start", "LOOM Agent - codex.cmd", "cmd.exe"])
+            self.assertEqual(command[5], "/k")
+            self.assertIn("codex.cmd", command[6])
+
     def test_launch_failure_marks_component_start_failed(self) -> None:
         component = make_component()
 

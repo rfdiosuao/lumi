@@ -258,7 +258,7 @@ class ComponentInstaller:
 
     def launch(self, component: ReleaseComponent, *, job_id: str | None = None) -> dict:
         state = self.state_store.load().get(component.component_id)
-        if state is None or state.status != "ready":
+        if state is None or state.status not in {"ready", "started"}:
             raise ComponentInstallError("组件尚未就绪，请先检测或安装")
         install_path = self._safe_install_path(component.install_path)
         entry_path = self._component_entry_path(component, install_path)
@@ -985,17 +985,36 @@ def build_launcher_command(executable: str, cwd: str, *, base_path: str | None =
     return [executable]
 
 
+def build_visible_launcher_command(
+    executable: str,
+    cwd: str,
+    *,
+    base_path: str | None = None,
+    force_windows: bool | None = None,
+) -> list[str]:
+    command = build_launcher_command(executable, cwd, base_path=base_path)
+    use_windows_terminal = os.name == "nt" if force_windows is None else force_windows
+    if not use_windows_terminal:
+        return command
+
+    command_line = subprocess.list2cmdline(command)
+    title = f"LOOM Agent - {os.path.basename(executable) or 'runtime'}"
+    return ["cmd.exe", "/c", "start", title, "cmd.exe", "/k", command_line]
+
+
 def _default_launcher(executable: str, cwd: str, *, base_path: str | None = None) -> dict:
+    command = build_visible_launcher_command(executable, cwd, base_path=base_path)
+    creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if os.name == "nt" else 0
     process = subprocess.Popen(
-        build_launcher_command(executable, cwd, base_path=base_path),
+        command,
         cwd=cwd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
         close_fds=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        creationflags=creationflags,
     )
-    return {"pid": process.pid}
+    return {"pid": process.pid, "visible": os.name == "nt", "command": subprocess.list2cmdline(command)}
 
 
 def _is_path_inside(path: str, root: str) -> bool:

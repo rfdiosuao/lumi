@@ -11,7 +11,7 @@ import {
   type DiagnosticReport,
   type DiagnosticStatus,
 } from '../../services/api';
-import { BusyOverlay, Button, showToast } from '../common';
+import { BusyOverlay, Button, showConfirm, showToast } from '../common';
 import { AgentLogo } from './AgentLogo';
 
 const PINNED_COMPONENT_IDS = [
@@ -182,12 +182,13 @@ function primaryAgentButtonLabel(component: ComponentSummary, busyId: string, bu
   const busy = busyId === component.id;
   if (busy) {
     if (busyAction === 'start') return '启动中...';
+    if (busyAction === 'prepare-start') return component.status === 'upgrade_available' ? '升级启动中...' : '安装启动中...';
     return component.status === 'upgrade_available' ? '升级中...' : '安装中...';
   }
   const action = primaryAgentAction(component);
   if (action === 'start') return '启动';
-  if (action === 'upgrade') return '升级';
-  return isFailedStatus(component.status) ? '重新安装' : '安装';
+  if (action === 'upgrade') return '升级并启动';
+  return isFailedStatus(component.status) ? '重新安装并启动' : '安装并启动';
 }
 
 function toneClass(tone: string): string {
@@ -530,9 +531,11 @@ export const AgentInstallerPage: React.FC = () => {
   }, []);
 
   const repairPreflight = React.useCallback(async () => {
-    const confirmPreflightRepair = confirm(
-      '安装/修复前置会检查并可能安装 Git、Node.js、Python、uv 或 WebView2，也可能处理 LOOM 本地运行环境。继续吗？',
-    );
+    const confirmPreflightRepair = await showConfirm({
+      title: '安装/修复前置环境',
+      message: 'LOOM 会检查并可能安装 Git、Node.js、Python、uv 或 WebView2，也可能处理本地运行环境。继续吗？',
+      confirmText: '继续处理',
+    });
     if (!confirmPreflightRepair) return;
     setPreflightRepairing(true);
     setPreflightError('');
@@ -619,9 +622,11 @@ export const AgentInstallerPage: React.FC = () => {
     const autoStart = options.autoStart ?? false;
     const shouldConfirm = options.confirmAction ?? true;
     if (shouldConfirm) {
-      const ok = confirm(
-        `${component.status === 'upgrade_available' ? '升级' : '安装'} ${component.name} 会先检测前置环境，缺失时会尝试补齐 Git/Node/Python 等工具，然后下载并安装组件。继续吗？`,
-      );
+      const ok = await showConfirm({
+        title: `${component.status === 'upgrade_available' ? '升级' : '安装'} ${component.name}`,
+        message: `${component.status === 'upgrade_available' ? '升级' : '安装'}前会先检测前置环境；缺失时会尝试补齐 Git / Node.js / Python 等工具，然后下载、安装并启动组件。继续吗？`,
+        confirmText: component.status === 'upgrade_available' ? '升级并启动' : '安装并启动',
+      });
       if (!ok) return;
     }
 
@@ -686,7 +691,11 @@ export const AgentInstallerPage: React.FC = () => {
   };
 
   const prepareAll = async () => {
-    const ok = confirm('全部安装会按顺序检测、下载并安装五个组件；不会批量启动进程。继续吗？');
+    const ok = await showConfirm({
+      title: '全部安装',
+      message: 'LOOM 会按顺序检测、下载并安装五个组件。为了避免一次打开多个终端，批量安装完成后不会批量启动进程。',
+      confirmText: '开始安装',
+    });
     if (!ok) return;
     for (const component of components) {
       await prepareComponent(component, { autoStart: false, confirmAction: false });
@@ -694,11 +703,17 @@ export const AgentInstallerPage: React.FC = () => {
   };
 
   const install = async (component: ComponentSummary) => {
-    await prepareComponent(component, { autoStart: false });
+    await prepareComponent(component, { autoStart: true });
   };
 
   const rollback = async (component: ComponentSummary) => {
-    if (!confirm(`确定要回滚 ${component.name} 吗？当前版本会被替换为上一版本。`)) return;
+    const ok = await showConfirm({
+      title: `回滚 ${component.name}`,
+      message: '当前版本会被替换为上一版本。确定继续吗？',
+      confirmText: '回滚',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusyId(component.id);
     setBusyAction('rollback');
     try {
@@ -719,7 +734,13 @@ export const AgentInstallerPage: React.FC = () => {
   };
 
   const uninstall = async (component: ComponentSummary) => {
-    if (!confirm(`确定要卸载 ${component.name} 吗？这会删除 LOOM 管理的组件目录；如果组件提供官方卸载命令，也会一并执行。`)) return;
+    const ok = await showConfirm({
+      title: `卸载 ${component.name}`,
+      message: '这会删除 LOOM 管理的组件目录；如果组件提供官方卸载命令，也会一并执行。确定继续吗？',
+      confirmText: '一键卸载',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusyId(component.id);
     setBusyAction('uninstall');
     try {
@@ -920,7 +941,7 @@ export const AgentInstallerPage: React.FC = () => {
                       </div>
                     ) : selected.status === 'upgrade_available' ? (
                       <div className="rounded-[16px] border border-status-success/35 bg-status-success/10 p-4 text-sm font-bold text-status-success">
-                        检测到可升级版本。点击下方绿色“升级”按钮即可更新到清单版本。
+                        检测到可升级版本。点击下方绿色“升级并启动”按钮即可更新到清单版本并拉起组件。
                       </div>
                     ) : selected.status === 'ready' || selected.status === 'started' ? (
                       <div className="rounded-[16px] border border-status-success/30 bg-status-success/10 p-4 text-sm text-status-success">
