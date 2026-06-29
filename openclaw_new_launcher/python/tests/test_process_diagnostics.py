@@ -93,6 +93,37 @@ class TestableProcessService(OpenClawProcessService):
 
 
 class ProcessDiagnosticsRepairTests(unittest.TestCase):
+    def test_portable_integrity_allows_online_package_without_openclaw_runtime_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            required_files = [
+                os.path.join("node", "node.exe"),
+                "start.js",
+                os.path.join("_up_", "python", "bridge.py"),
+                os.path.join("scripts", "openclaw-image-phone.mjs"),
+                os.path.join("scripts", "openclaw-phone-video.mjs"),
+                os.path.join("scripts", "openclaw-phone-vision.mjs"),
+                os.path.join("scripts", "verify-phone-agent.ps1"),
+                os.path.join("data", ".openclaw", "workspace", "AGENTS.md"),
+                os.path.join("data", ".openclaw", "workspace", "SOUL.md"),
+            ]
+            for relative_path in required_files:
+                full_path = os.path.join(temp_dir, relative_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as file:
+                    file.write(b"ok")
+
+            service = TestableProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+
+            result = service._portable_integrity_check()
+
+            self.assertEqual(result["status"], "ok")
+            self.assertNotIn("openclaw.mjs", result["detail"])
+
     def test_repair_runs_bundled_webview2_installer_when_missing(self) -> None:
         calls: list[list[str]] = []
 

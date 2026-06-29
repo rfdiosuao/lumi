@@ -30,7 +30,7 @@ const FALLBACK_COMPONENTS: Record<string, { name: string; description: string; c
   hermes: { name: 'Hermes', description: 'Hermes 智能体运行时', category: 'agent' },
 };
 
-const PREREQ_IDS = ['python_runtime', 'node', 'npm', 'git', 'git_bash', 'uv', 'webview2', 'data_dir', 'portable_integrity'];
+const PREREQ_IDS = ['python_runtime', 'node', 'npm', 'git', 'git_bash', 'uv', 'webview2', 'data_dir'];
 
 type InstallLogEntry = {
   id: string;

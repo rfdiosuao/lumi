@@ -11,7 +11,7 @@ import {
 } from '../../services/api';
 import { AgentLogo } from '../agents/AgentLogo';
 
-const PACKAGE_VERSION = '2.1.21';
+const PACKAGE_VERSION = '2.1.23';
 const REQUIRED_AGENT_IDS = ['codex-desktop', 'claude-code', 'opencode', 'openclaw-companion', 'hermes'];
 
 const FALLBACK_AGENTS: Record<string, { name: string; description: string }> = {

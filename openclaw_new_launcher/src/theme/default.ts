@@ -3,7 +3,7 @@ import { DEFAULT_FEATURE_NAV_ITEMS, normalizeFeatureNavItems } from '../features
 
 type ThemeColors = ThemeConfig['colors'];
 
-export type BuiltinThemeMode = 'light' | 'dark';
+export type BuiltinThemeMode = 'light' | 'dark' | 'system';
 
 export const THEME_MODE_STORAGE_KEY = 'loom_theme_mode_v2';
 const LEGACY_THEME_MODE_STORAGE_KEY = 'lumi_theme_mode';
@@ -102,7 +102,7 @@ export function getStoredThemeMode(): BuiltinThemeMode {
   if (typeof window === 'undefined') return 'light';
   try {
     const next = window.localStorage.getItem(THEME_MODE_STORAGE_KEY);
-    if (next === 'light' || next === 'dark') return next;
+    if (next === 'light' || next === 'dark' || next === 'system') return next;
     window.localStorage.removeItem(LEGACY_THEME_MODE_STORAGE_KEY);
     window.localStorage.removeItem('loom_theme_mode');
     return 'light';
@@ -111,31 +111,46 @@ export function getStoredThemeMode(): BuiltinThemeMode {
   }
 }
 
+export function resolveThemeMode(mode: BuiltinThemeMode): 'light' | 'dark' {
+  if (mode !== 'system') return mode;
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+export function applyThemeModeMeta(mode: BuiltinThemeMode): void {
+  if (typeof document === 'undefined') return;
+  const resolvedMode = resolveThemeMode(mode);
+  document.documentElement.dataset.themeMode = mode;
+  document.documentElement.dataset.effectiveThemeMode = resolvedMode;
+  document.documentElement.style.colorScheme = resolvedMode;
+}
+
 export function persistThemeMode(mode: BuiltinThemeMode): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(THEME_MODE_STORAGE_KEY, mode);
     window.localStorage.removeItem(LEGACY_THEME_MODE_STORAGE_KEY);
-    document.documentElement.dataset.themeMode = mode;
-    document.documentElement.style.colorScheme = mode;
+    applyThemeModeMeta(mode);
   } catch {
     // ignore storage failures
   }
 }
 
-export function getBuiltinTheme(_mode: BuiltinThemeMode): ThemeConfig {
-  return LIGHT_THEME;
+export function getBuiltinTheme(requestedMode: BuiltinThemeMode): ThemeConfig {
+  const mode = resolveThemeMode(requestedMode);
+  return mode === 'dark' ? DARK_THEME : LIGHT_THEME;
 }
 
 export function normalizeNavItems(items?: NavItem[]): NavItem[] {
   return normalizeFeatureNavItems(items);
 }
 
-export function buildRuntimeTheme(baseTheme: ThemeConfig | null | undefined, _mode: BuiltinThemeMode): ThemeConfig {
-  const palette = LIGHT_THEME;
+export function buildRuntimeTheme(baseTheme: ThemeConfig | null | undefined, mode: BuiltinThemeMode): ThemeConfig {
+  const resolvedMode = resolveThemeMode(mode);
+  const palette = resolvedMode === 'dark' ? DARK_THEME : LIGHT_THEME;
   const brand = baseTheme?.brand ? { ...palette.brand, ...baseTheme.brand } : palette.brand;
   const windowConfig = baseTheme?.window ? { ...palette.window, ...baseTheme.window } : palette.window;
-  const modeColors = baseTheme?.modes?.light;
+  const modeColors = baseTheme?.modes?.[resolvedMode];
   const colors = {
     ...palette.colors,
     ...(modeColors ?? {}),
@@ -198,7 +213,6 @@ export function applyThemeToCssVars(theme: ThemeConfig): void {
 export function bootstrapThemeFromStorage(): void {
   if (typeof document === 'undefined') return;
   const mode = getStoredThemeMode();
-  document.documentElement.dataset.themeMode = mode;
-  document.documentElement.style.colorScheme = mode;
+  applyThemeModeMeta(mode);
   applyThemeToCssVars(getBuiltinTheme(mode));
 }

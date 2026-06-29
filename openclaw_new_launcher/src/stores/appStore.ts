@@ -7,6 +7,11 @@ import {
   getBuiltinTheme,
   getStoredThemeMode,
 } from '../theme/default';
+import {
+  type AppLanguage,
+  getStoredAppLanguage,
+  persistAppLanguage,
+} from '../i18n/language';
 import { licenseApi } from '../services/api';
 
 interface AppState {
@@ -24,6 +29,7 @@ interface AppState {
   apiConfigured: boolean;
   themeConfig: ThemeConfig | null;
   themeMode: BuiltinThemeMode;
+  language: AppLanguage;
   navItems: NavItem[];
 
   setCurrentPage: (page: string) => void;
@@ -36,11 +42,13 @@ interface AppState {
   setLicenseChecking: (checking: boolean) => void;
   setThemeConfig: (config: ThemeConfig | null) => void;
   setThemeMode: (mode: BuiltinThemeMode) => void;
+  setLanguage: (language: AppLanguage) => void;
   setNavItems: (items: NavItem[]) => void;
   checkLicense: () => Promise<void>;
 }
 
 const initialThemeMode = getStoredThemeMode();
+const initialLanguage = getStoredAppLanguage();
 
 export const useAppStore = create<AppState>((set) => ({
   currentPage: 'dashboard',
@@ -57,6 +65,7 @@ export const useAppStore = create<AppState>((set) => ({
   apiConfigured: false,
   themeConfig: getBuiltinTheme(initialThemeMode),
   themeMode: initialThemeMode,
+  language: initialLanguage,
   navItems: DEFAULT_NAV_ITEMS,
 
   setCurrentPage: (currentPage) => set({ currentPage }),
@@ -75,6 +84,10 @@ export const useAppStore = create<AppState>((set) => ({
   setApiConfigured: (apiConfigured) => set({ apiConfigured }),
   setThemeConfig: (themeConfig) => set({ themeConfig }),
   setThemeMode: (themeMode) => set({ themeMode }),
+  setLanguage: (language: AppLanguage) => {
+    persistAppLanguage(language);
+    set({ language });
+  },
   setNavItems: (navItems) => set({ navItems }),
   setLicenseChecking: (val: boolean) => set({ isLicenseChecking: val }),
   checkLicense: async () => {

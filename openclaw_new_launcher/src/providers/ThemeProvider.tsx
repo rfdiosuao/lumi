@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import {
   DEFAULT_THEME,
+  applyThemeModeMeta,
   applyThemeToCssVars,
   buildRuntimeTheme,
   normalizeNavItems,
@@ -45,8 +46,24 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     if (loadedRef.current) {
+      applyThemeModeMeta(themeMode);
       applyModeTheme(sourceThemeRef.current);
     }
+  }, [themeMode, applyModeTheme]);
+
+  useEffect(() => {
+    if (themeMode !== 'system' || typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleSystemThemeChange = () => {
+      applyThemeModeMeta(themeMode);
+      applyModeTheme(sourceThemeRef.current);
+    };
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', handleSystemThemeChange);
+      return () => media.removeEventListener('change', handleSystemThemeChange);
+    }
+    media.addListener(handleSystemThemeChange);
+    return () => media.removeListener(handleSystemThemeChange);
   }, [themeMode, applyModeTheme]);
 
   (window as any).__reloadTheme = loadTheme;

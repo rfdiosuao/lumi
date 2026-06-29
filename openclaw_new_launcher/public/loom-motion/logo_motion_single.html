@@ -118,16 +118,22 @@
     }
     .qa-mode .controls,
     .qa-mode .principles,
-    .qa-mode footer { display: none; }
-    .qa-mode main {
+    .qa-mode footer,
+    .embed-mode .controls,
+    .embed-mode .principles,
+    .embed-mode footer { display: none; }
+    .qa-mode main,
+    .embed-mode main {
       width: 100vw;
       height: 100vh;
       padding: 0;
       display: grid;
       place-items: center;
     }
-    .qa-mode .stage { min-height: 100vh; }
+    .qa-mode .stage,
+    .embed-mode .stage { min-height: 100vh; }
     .qa-mode #logo-root { width: min(716px, 86vmin); }
+    .embed-mode #logo-root { width: min(716px, 100vmin); }
 
     @keyframes wave-pass {
       0% { transform: translateY(0) scaleY(1); }
@@ -180,13 +186,17 @@
     const DURATION = 2200;
     const params = new URLSearchParams(location.search);
     const qaMode = params.has("t") || params.has("static") || params.has("qa");
+    const loopMode = params.has("loop") && !params.has("static") && !params.has("t");
+    const embedMode = params.has("embed");
     if (qaMode) document.body.classList.add("qa-mode");
+    if (embedMode) document.body.classList.add("embed-mode");
 
     const root = document.getElementById("logo-root");
     const speed = document.getElementById("speed");
     const replay = document.getElementById("replay");
     const slow = document.getElementById("slow");
     let slowMode = false;
+    let loopTimer = 0;
 
     function mainAnimations() {
       return [...root.getAnimations({ subtree: true })].filter((animation) => animation.effect && animation.effect.target.classList.contains("wave-piece"));
@@ -209,6 +219,14 @@
     }
     function applyDefaultSpeed() {
       setRate(slowMode ? 0.25 : Number(speed.value));
+    }
+    function scheduleLoop() {
+      if (!loopMode) return;
+      window.clearTimeout(loopTimer);
+      loopTimer = window.setTimeout(() => {
+        replayMotion();
+        scheduleLoop();
+      }, DURATION + 560);
     }
     function replayMotion() {
       for (const animation of mainAnimations()) {
@@ -240,6 +258,7 @@
           seek(Number(params.get("t")) || 0);
         } else {
           applyDefaultSpeed();
+          scheduleLoop();
         }
         window.__p2mReady = true;
       });

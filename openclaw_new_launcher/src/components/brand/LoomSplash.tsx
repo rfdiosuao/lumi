@@ -39,7 +39,7 @@ export const LoomSplash: React.FC = () => {
           <div className="h-full w-full overflow-hidden rounded-[34px] bg-[#071b24]">
             <iframe
               title="LOOM 麓鸣启动动画"
-              src="/loom-motion/logo_motion_vector-v1.html?qa=1"
+              src="/loom-motion/logo_motion_single.html?embed=1&loop=1"
               className="h-full w-full border-0"
               sandbox="allow-scripts"
               onLoad={() => setLogoReady(true)}

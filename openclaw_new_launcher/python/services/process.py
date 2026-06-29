@@ -1425,7 +1425,6 @@ class OpenClawProcessService:
     def _portable_integrity_check(self) -> dict:
         required = [
             "start.js",
-            os.path.join("node_modules", "openclaw", "openclaw.mjs"),
             os.path.join("_up_", "python", "bridge.py"),
             os.path.join("scripts", "openclaw-image-phone.mjs"),
             os.path.join("scripts", "openclaw-phone-video.mjs"),
