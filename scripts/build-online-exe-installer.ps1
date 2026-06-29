@@ -1,8 +1,8 @@
 param(
-    [string]$PackageUrl = "https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/rc/packages/LOOM-Online-v2.1.20-20260629-rc1.zip",
-    [string]$PackageSha256 = "5B0FE98C572623BFD8AEC17D0835245ACE2B40728C5722B4B030661D17B66655",
-    [string]$PackageRootName = "LOOM-Online-v2.1.20-20260629-rc1",
-    [string]$Version = "2.1.20-20260629-rc1",
+    [string]$PackageUrl = "https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/rc/packages/LOOM-Online-v2.1.20-20260629-rc2.zip",
+    [string]$PackageSha256 = "018059BEAC8DED227353045355374BDC917510C40C7FD5240A9C19EB06C7722E",
+    [string]$PackageRootName = "LOOM-Online-v2.1.20-20260629-rc2",
+    [string]$Version = "2.1.20-20260629-rc2",
     [string]$OutputPath = ""
 )
 
@@ -13,7 +13,7 @@ $ArtifactsDir = Join-Path $Root "artifacts\installer"
 $ReleaseDir = Join-Path $Root "release"
 $IconPath = Join-Path $Root "openclaw_new_launcher\src-tauri\icons\icon.ico"
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $ReleaseDir "LOOM-Online-Setup-v2.1.20-20260629-rc1.exe"
+    $OutputPath = Join-Path $ReleaseDir "LOOM-Online-Setup-v2.1.20-20260629-rc2.exe"
 }
 
 New-Item -ItemType Directory -Path $ArtifactsDir -Force | Out-Null
@@ -625,10 +625,18 @@ namespace LoomOnlineInstaller
 
         private static void InstallFiles(string source, string target)
         {
+            target = Path.GetFullPath(target);
+            string parent = Path.GetDirectoryName(target);
+            if (string.IsNullOrEmpty(parent))
+            {
+                throw new InvalidOperationException("\u5b89\u88c5\u76ee\u5f55\u65e0\u6548\uff1a" + target);
+            }
+            Directory.CreateDirectory(parent);
+
             string backup = "";
             if (Directory.Exists(target))
             {
-                backup = Path.Combine(Path.GetTempPath(), "loom-install-backup-" + DateTime.Now.ToString("yyyyMMddHHmmss"));
+                backup = NextBackupPath(target);
                 Directory.Move(target, backup);
             }
             try
@@ -655,6 +663,23 @@ namespace LoomOnlineInstaller
                     TryDelete(backup);
                 }
             }
+        }
+
+        private static string NextBackupPath(string target)
+        {
+            string parent = Path.GetDirectoryName(target);
+            string name = Path.GetFileName(target.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            string stamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+            for (int i = 0; i < 50; i++)
+            {
+                string suffix = i == 0 ? "" : "-" + i.ToString();
+                string candidate = Path.Combine(parent, name + ".backup-" + stamp + suffix);
+                if (!Directory.Exists(candidate) && !File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+            throw new InvalidOperationException("\u65e0\u6cd5\u521b\u5efa\u5b89\u88c5\u5907\u4efd\u76ee\u5f55\uff1a" + target);
         }
 
         private static void RestoreUserData(string backup, string target)
