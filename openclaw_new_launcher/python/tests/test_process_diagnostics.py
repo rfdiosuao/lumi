@@ -92,7 +92,147 @@ class TestableProcessService(OpenClawProcessService):
         }
 
 
+class MinimalDiagnosticProcessService(OpenClawProcessService):
+    def _storage_health_check(self, *, write_test: bool = False) -> dict:
+        return {"id": "storage_health", "label": "storage", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _openclaw_config_check(self) -> dict:
+        return {"id": "openclaw_config", "label": "config", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _webview2_check(self) -> dict:
+        return {"id": "webview2", "label": "webview2", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _python_runtime_check(self) -> dict:
+        return {"id": "python_runtime", "label": "python", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _portable_integrity_check(self) -> dict:
+        return {"id": "portable_integrity", "label": "portable", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _security_software_block_check(self) -> dict:
+        return {"id": "security_software_block", "label": "security", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _runtime_context_check(self) -> dict:
+        return {"id": "runtime_context", "label": "runtime", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _phone_agent_apk_check(self) -> dict:
+        return {"id": "phone_agent_apk", "label": "apk", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _member_gateway_check(self) -> dict:
+        return {"id": "member_gateway", "label": "gateway", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _core_service_snapshot_check(self) -> dict:
+        return {"id": "core_service_snapshot", "label": "core", "status": "ok", "message": "ok", "detail": "ok", "repairable": False}
+
+    def _port_listeners(self, _port: int) -> list[dict]:
+        return []
+
+    def _port_range_listeners(self, _start_port: int, _end_port: int, *, exclude_pids=None) -> list[dict]:
+        return []
+
+    def _openclaw_gateway_processes(self) -> list[dict]:
+        return []
+
+    def _clawpanel_processes(self) -> list[dict]:
+        return []
+
+    def _detect_openclaw_version(self) -> str | None:
+        return "test"
+
+
 class ProcessDiagnosticsRepairTests(unittest.TestCase):
+    def test_diagnostics_use_system_node_and_npm_as_prerequisite_fallback(self) -> None:
+        import services.process as process_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MinimalDiagnosticProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+            fake_tools = {
+                "node": os.path.join(temp_dir, "system-node", "node.exe"),
+                "node.exe": os.path.join(temp_dir, "system-node", "node.exe"),
+                "npm": os.path.join(temp_dir, "system-node", "npm.cmd"),
+                "npm.cmd": os.path.join(temp_dir, "system-node", "npm.cmd"),
+            }
+
+            original_which = process_module.shutil.which
+            process_module.shutil.which = lambda name: fake_tools.get(name) or original_which(name)
+            try:
+                checks = {item["id"]: item for item in service.diagnose_environment()["checks"]}
+            finally:
+                process_module.shutil.which = original_which
+
+        self.assertEqual(checks["node"]["status"], "ok")
+        self.assertIn("system-node", checks["node"]["detail"])
+        self.assertEqual(checks["npm"]["status"], "ok")
+        self.assertIn("system-node", checks["npm"]["detail"])
+
+    def test_diagnostics_mark_node_and_npm_repairable_when_no_runtime_exists(self) -> None:
+        import services.process as process_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MinimalDiagnosticProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+
+            original_which = process_module.shutil.which
+            process_module.shutil.which = lambda name: None if name in {"node", "node.exe", "npm", "npm.cmd", "npm.exe"} else original_which(name)
+            try:
+                checks = {item["id"]: item for item in service.diagnose_environment()["checks"]}
+            finally:
+                process_module.shutil.which = original_which
+
+        self.assertEqual(checks["node"]["status"], "fail")
+        self.assertTrue(checks["node"]["repairable"])
+        self.assertEqual(checks["npm"]["status"], "fail")
+        self.assertTrue(checks["npm"]["repairable"])
+
+    def test_diagnostics_mark_git_git_bash_and_uv_repairable_for_blank_windows_user(self) -> None:
+        import services.process as process_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MinimalDiagnosticProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+
+            original_which = process_module.shutil.which
+            old_program_files = os.environ.get("ProgramFiles")
+            old_program_files_x86 = os.environ.get("ProgramFiles(x86)")
+            os.environ["ProgramFiles"] = os.path.join(temp_dir, "ProgramFiles")
+            os.environ["ProgramFiles(x86)"] = os.path.join(temp_dir, "ProgramFilesX86")
+            process_module.shutil.which = (
+                lambda name: None
+                if name in {"git", "git.exe", "bash", "bash.exe", "uv", "uv.exe"}
+                else original_which(name)
+            )
+            try:
+                checks = {item["id"]: item for item in service.diagnose_environment()["checks"]}
+            finally:
+                process_module.shutil.which = original_which
+                if old_program_files is None:
+                    os.environ.pop("ProgramFiles", None)
+                else:
+                    os.environ["ProgramFiles"] = old_program_files
+                if old_program_files_x86 is None:
+                    os.environ.pop("ProgramFiles(x86)", None)
+                else:
+                    os.environ["ProgramFiles(x86)"] = old_program_files_x86
+
+        self.assertEqual(checks["git"]["status"], "fail")
+        self.assertTrue(checks["git"]["repairable"])
+        self.assertEqual(checks["git_bash"]["status"], "fail")
+        self.assertTrue(checks["git_bash"]["repairable"])
+        self.assertEqual(checks["uv"]["status"], "warn")
+        self.assertTrue(checks["uv"]["repairable"])
+
     def test_portable_integrity_allows_online_package_without_openclaw_runtime_layer(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             required_files = [

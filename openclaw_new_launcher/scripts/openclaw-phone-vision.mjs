@@ -3,13 +3,21 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensurePhoneConfig, readLauncherPhoneConfigByDevice, signedJsonRequest } from './openclaw-phone-secure.mjs';
-import { inspectVisionActionPlan, minimalActionForPhone } from './lib/vision-safety.mjs';
+import {
+  authHeaders,
+  ensurePhoneConfig,
+  fetchWithTimeout,
+  normalizePhoneUrl,
+  readLauncherPhoneConfigByDevice,
+  signedJsonRequest,
+} from './openclaw-phone-secure.mjs';
+import { compactReadSelectors, inspectVisionActionPlan, minimalActionForPhone } from './lib/vision-safety.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_OUT_DIR = path.join(PROJECT_ROOT, 'data', 'phone-frames');
+const DEFAULT_CACHE_FRAME = path.join(DEFAULT_OUT_DIR, 'latest-fast-frame.jpg');
 
 function usage() {
   return `
@@ -17,11 +25,13 @@ OpenClaw phone vision/game-mode CLI
 
 Usage:
   npm run phone:vision -- status
+  npm run phone:vision -- read --prompt "读取当前页面"
   npm run phone:vision -- frame --out ./data/phone-frames/frame.jpg
   npm run phone:vision -- action --force-action --action-body "{\\"action\\":\\"tap\\",\\"gridCell\\":\\"C7\\",\\"targetLabel\\":\\"settings button\\",\\"reason\\":\\"open safe settings panel\\"}"
 
 Commands:
   status                      Read game/vision mode status and current hints
+  read                        Read screen tree/profile directly without starting APKClaw Agent
   frame                       Capture a signed vision frame with grid and coordinate mapping
   action                      Execute a visual coordinate action. Debug/fallback only; requires --force-action
 
@@ -30,6 +40,7 @@ Frame options:
   --format <jpeg|png>          Default: jpeg
   --quality <n>                JPEG quality, phone clamps to 45-95. Default: 82
   --max-long-side <n>          Phone-side image long edge. Default: 1600
+  --cache-ttl-ms <n>           Reuse the last fast frame if it is still fresh
   --grid-columns <n>           Default: 6
   --grid-rows <n>              Default: 12
   --no-grid                    Disable grid overlay
@@ -40,6 +51,8 @@ Action options:
   --allow-unknown-target        Debug only. Permit an action plan without targetLabel/reason metadata. Blacklisted labels still block.
 
 Common options:
+  --fast-path <name>           For read, try APKClaw fast read first. Default: observe_fast
+  --known-hash <hash>          For read, pass the previous screenHash for incremental observe_fast responses
   --device-id <id>             Optional. Select one configured APKClaw device from launcher
   --phone-url <url>            Optional. Defaults to launcher Phone Control config, then env
   --phone-token <token>        Optional. Defaults to launcher Phone Control config, then env
@@ -51,6 +64,7 @@ Common options:
 function parseArgs(argv) {
   const args = {
     command: '',
+    prompt: '',
     deviceId: '',
     phoneUrl: '',
     phoneToken: '',
@@ -58,12 +72,15 @@ function parseArgs(argv) {
     format: 'jpeg',
     quality: 82,
     maxLongSide: 1600,
+    cacheTtlMs: 0,
     gridColumns: 6,
     gridRows: 12,
     overlayGrid: true,
     actionBody: '',
     forceAction: false,
     allowUnknownTarget: false,
+    fastPath: 'observe_fast',
+    knownHash: '',
     json: false,
     help: false,
   };
@@ -96,6 +113,9 @@ function parseArgs(argv) {
       case '--phone-token':
         args.phoneToken = next();
         break;
+      case '--prompt':
+        args.prompt = next();
+        break;
       case '--out':
         args.out = path.resolve(next());
         break;
@@ -107,6 +127,9 @@ function parseArgs(argv) {
         break;
       case '--max-long-side':
         args.maxLongSide = nextInt();
+        break;
+      case '--cache-ttl-ms':
+        args.cacheTtlMs = Math.max(0, nextInt());
         break;
       case '--grid-columns':
         args.gridColumns = nextInt();
@@ -125,6 +148,13 @@ function parseArgs(argv) {
         break;
       case '--allow-unknown-target':
         args.allowUnknownTarget = true;
+        break;
+      case '--fast-path':
+        args.fastPath = next().toLowerCase();
+        break;
+      case '--known-hash':
+      case '--screen-hash':
+        args.knownHash = next();
         break;
       case '--json':
         args.json = true;
@@ -151,6 +181,9 @@ async function resolveConfig(args) {
     phoneUrl: firstNonEmpty(args.phoneUrl, process.env.OPENCLAW_PHONE_BASE_URL, process.env.APKCLAW_BASE_URL, runtime?.phone?.baseUrl, launcherPhone.phoneUrl),
     phoneToken: firstNonEmpty(args.phoneToken, process.env.OPENCLAW_PHONE_TOKEN, process.env.APKCLAW_TOKEN, launcherPhone.phoneToken),
     deviceId: args.deviceId || launcherPhone.id || runtime?.phone?.defaultDeviceId || '',
+    lumiLauncherId: firstNonEmpty(args.lumiLauncherId, process.env.LUMI_LAUNCHER_ID, launcherPhone.lumiLauncherId),
+    lumiLauncherSecret: firstNonEmpty(args.lumiLauncherSecret, process.env.LUMI_LAUNCHER_SECRET, launcherPhone.lumiLauncherSecret),
+    source: launcherPhone.source,
   };
 }
 
@@ -163,7 +196,7 @@ async function readRuntimeContext() {
     try {
       return JSON.parse(await fs.readFile(filePath, 'utf8'));
     } catch (error) {
-      if (error?.code !== 'ENOENT') throw new Error(`Failed to read ${filePath}: ${error.message}`);
+      if (error?.code !== 'ENOENT') return {};
     }
   }
   return {};
@@ -201,7 +234,142 @@ async function saveFrame(config, payload) {
   const out = config.out || path.join(DEFAULT_OUT_DIR, `vision-frame-${timestamp()}.${extension}`);
   await fs.mkdir(path.dirname(out), { recursive: true });
   await fs.writeFile(out, Buffer.from(image.base64, 'base64'));
+  if (config.cacheTtlMs > 0 && out !== DEFAULT_CACHE_FRAME) {
+    try {
+      await fs.copyFile(out, DEFAULT_CACHE_FRAME);
+    } catch {
+      // Screenshot cache is a speed hint, not required for correctness.
+    }
+  }
   return out;
+}
+
+async function cachedFrame(config) {
+  if (!config.cacheTtlMs || config.out) return null;
+  try {
+    const stat = await fs.stat(DEFAULT_CACHE_FRAME);
+    if (Date.now() - stat.mtimeMs > config.cacheTtlMs) return null;
+    return {
+      ok: true,
+      cached: true,
+      filePath: DEFAULT_CACHE_FRAME,
+      frame: {
+        cached: true,
+        imageOmitted: true,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function requestPhoneJson(config, endpoint, timeoutMs = 20_000) {
+  ensurePhoneConfig(config);
+  const response = await fetchWithTimeout(`${normalizePhoneUrl(config.phoneUrl)}${endpoint}`, {
+    headers: {
+      ...authHeaders(config),
+      Accept: 'application/json',
+    },
+  }, timeoutMs);
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Phone returned non-JSON response: HTTP ${response.status}`);
+  }
+  if (!response.ok || payload?.success === false) {
+    throw new Error(payload?.error || payload?.message || `Phone request failed: HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function readScreenDirect(config) {
+  const screenTree = await readScreenPayload(config);
+  const data = screenTree?.data || screenTree;
+  const texts = collectVisibleTexts(data).slice(0, 80);
+  const selectors = compactReadSelectors(data?.selectors || screenTree?.selectors || data?.keyNodes || screenTree?.keyNodes);
+  const unchanged = Boolean(data?.unchanged || screenTree?.unchanged);
+  const cacheHit = Boolean(data?.cacheHit || data?.metrics?.cacheHit || screenTree?.cacheHit || screenTree?.metrics?.cacheHit);
+  const backendSummary = data?.summary || screenTree?.summary || '';
+  return {
+    ok: true,
+    mode: data?.mode || screenTree?.mode || (screenTree?.fastPath === 'observe_fast' ? 'observe_fast' : 'direct_read'),
+    metrics: data?.metrics || screenTree?.metrics || undefined,
+    screenHash: data?.screenHash || screenTree?.screenHash || undefined,
+    currentPackage: data?.currentPackage || data?.screen?.currentPackage || undefined,
+    unchanged,
+    cacheHit,
+    backendSummary: backendSummary || undefined,
+    fastPath: screenTree?.fastPath || undefined,
+    promptPreview: promptPreview(config.prompt),
+    textCount: texts.length,
+    texts,
+    selectorCount: selectors.length,
+    selectors,
+    summary: texts.length
+      ? `读取完成：${texts.slice(0, 12).join(' / ')}`
+      : '读取完成：当前页面没有返回可见文本',
+  };
+}
+
+async function readScreenPayload(config) {
+  if (!config.fastPath || config.fastPath === 'observe_fast') {
+    try {
+      const knownHash = config.knownHash ? `&knownHash=${encodeURIComponent(config.knownHash)}` : '';
+      const payload = await signedJsonRequest(config, 'GET', `/api/lumi/agent/observe_fast?_lumi=1${knownHash}`, undefined, 12_000);
+      return { ...payload, fastPath: 'observe_fast' };
+    } catch {
+      // Older APKClaw builds do not expose observe_fast. Fall back compatibly.
+    }
+  }
+  try {
+    return await requestPhoneJson(config, '/api/tool/screen_tree', 12_000);
+  } catch (firstError) {
+    try {
+      return await signedJsonRequest(config, 'GET', '/api/lumi/device/profile?includeApps=false&appLimit=0', undefined, 12_000);
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+function collectVisibleTexts(value) {
+  const texts = [];
+  const seen = new Set();
+  const visit = (item, key = '') => {
+    if (item == null || texts.length >= 120) return;
+    if (typeof item === 'string' || typeof item === 'number') {
+      const normalized = String(item).replace(/\s+/g, ' ').trim();
+      const lowerKey = String(key || '').toLowerCase();
+      if (
+        normalized &&
+        normalized.length <= 120 &&
+        ['text', 'label', 'contentdescription', 'description', 'title', 'name'].some((token) => lowerKey.includes(token)) &&
+        !seen.has(normalized)
+      ) {
+        seen.add(normalized);
+        texts.push(normalized);
+      }
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const child of item) visit(child, key);
+      return;
+    }
+    if (typeof item === 'object') {
+      for (const [childKey, childValue] of Object.entries(item)) {
+        visit(childValue, childKey);
+      }
+    }
+  };
+  visit(value);
+  return texts;
+}
+
+function promptPreview(prompt) {
+  const clean = String(prompt || '').replace(/\s+/g, ' ').trim();
+  return clean.length > 160 ? `${clean.slice(0, 160)}...` : clean;
 }
 
 function print(config, payload, human) {
@@ -227,8 +395,19 @@ async function main() {
     return;
   }
 
+  if (config.command === 'read') {
+    const result = await readScreenDirect(config);
+    print(config, result, result.summary);
+    return;
+  }
+
   if (config.command === 'frame') {
-    const payload = await signedJsonRequest(config, 'GET', frameEndpoint(config), undefined, 60_000);
+    const cached = await cachedFrame(config);
+    if (cached) {
+      print(config, cached, `Using cached vision frame: ${cached.filePath}`);
+      return;
+    }
+    const payload = await signedJsonRequest(config, 'GET', frameEndpoint(config), undefined, 15_000);
     const filePath = await saveFrame(config, payload);
     const result = { ok: true, filePath, frame: payload.data };
     print(config, result, `Saved vision frame: ${filePath}`);
@@ -245,7 +424,8 @@ async function main() {
     if (!safety.allowed) {
       throw new Error(`Vision safety guard blocked action: ${safety.reason}`);
     }
-    const payload = await signedJsonRequest(config, 'POST', '/api/lumi/vision/action', minimalActionForPhone(body), 60_000);
+    const endpoint = config.fastPath === 'action_fast' ? '/api/lumi/agent/action_fast' : '/api/lumi/vision/action';
+    const payload = await signedJsonRequest(config, 'POST', endpoint, minimalActionForPhone(body), Math.min(25_000, config.actionTimeoutMs || 25_000));
     print(config, payload, `action=${payload?.data?.action || body.action} success=${payload?.success !== false} safety=${safety.category}`);
     return;
   }

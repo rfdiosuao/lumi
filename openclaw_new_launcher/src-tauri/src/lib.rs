@@ -281,6 +281,10 @@ fn is_packaged_bridge(py_path: &std::path::Path) -> bool {
     false
 }
 
+fn is_bare_command(path: &std::path::Path) -> bool {
+    path.components().count() == 1
+}
+
 fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     if !py_path.exists() {
         let message = format!("bridge.py 未找到: {}", py_path.display());
@@ -289,7 +293,7 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     }
 
     let python_exe = bridge_python_exe(py_path);
-    if is_packaged_bridge(py_path) && !python_exe.exists() {
+    if is_packaged_bridge(py_path) && !is_bare_command(&python_exe) && !python_exe.exists() {
         let message = format!(
             "Python 运行时未就绪：未找到 {}。请重新解压在线包，确认首启运行时下载完成，或改用包含 Python 运行时的新版在线包。",
             python_exe.display()

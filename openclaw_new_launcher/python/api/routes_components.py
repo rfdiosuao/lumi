@@ -8,6 +8,7 @@ from core.component_catalog import ComponentCatalog, default_component_state_pat
 from core.component_installer import ComponentInstallError, ComponentInstaller
 from core.component_state import ComponentState, ComponentStateStore
 from core.release_manifest import ReleaseComponent, default_release_manifest_public_key, load_release_manifest_file
+from core.wire_config import WireConfigError
 
 
 RUNNING_JOB_STATUSES = {"queued", "running"}
@@ -15,7 +16,7 @@ RUNNING_JOB_STATUSES = {"queued", "running"}
 SIMULATION_COMPONENTS: dict[str, ReleaseComponent] = {
     "codex-desktop": ReleaseComponent(
         component_id="codex-desktop",
-        name="Codex",
+        name="Codex 桌面端",
         version="待正式清单",
         platform="windows",
         arch="x64",
@@ -23,10 +24,10 @@ SIMULATION_COMPONENTS: dict[str, ReleaseComponent] = {
         size=1,
         sha256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         urls=(),
-        install_path="agents/codex",
-        entry="Codex-Installer.exe",
+        install_path="agents/codex-desktop",
+        entry=None,
         category="agent",
-        description="OpenAI 编程智能体",
+        description="OpenAI Codex 桌面应用",
     ),
     "claude-code": ReleaseComponent(
         component_id="claude-code",
@@ -54,7 +55,7 @@ SIMULATION_COMPONENTS: dict[str, ReleaseComponent] = {
         sha256="23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
         urls=(),
         install_path="agents/opencode",
-        entry="opencode.exe",
+        entry="package/bin/opencode.exe",
         category="agent",
         description="终端优先 AI 编程工具",
     ),
@@ -68,8 +69,8 @@ SIMULATION_COMPONENTS: dict[str, ReleaseComponent] = {
         size=1,
         sha256="3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
         urls=(),
-        install_path="agents/openclaw",
-        entry="OpenClawCompanion-Setup-x64.exe",
+        install_path="agents/openclaw-companion",
+        entry="package/openclaw.mjs",
         category="agent",
         description="协议兼容组件",
     ),
@@ -129,6 +130,58 @@ def register_component_routes(app, ctx) -> None:
         if error := ctx.auth_error(request):
             return error
         return ctx.fastapi_json(_component_catalog(ctx).status())
+
+    @app.get("/api/components/model-config/status")
+    async def components_model_config_status(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        component_id = str(request.query_params.get("componentId") or request.query_params.get("id") or "").strip()
+        if not component_id:
+            return ctx.fastapi_json({"error": "componentId is required"}, 400)
+        status = _model_config_status(ctx, component_id)
+        return ctx.fastapi_json({"status": status})
+
+    @app.post("/api/components/model-config/apply")
+    async def components_model_config_apply(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        component_id = str(body.get("componentId") or body.get("id") or "").strip()
+        model = str(body.get("model") or "").strip()
+        if not component_id:
+            return ctx.fastapi_json({"error": "componentId is required"}, 400)
+        if not _truthy(body.get("confirmed")):
+            return ctx.fastapi_json({"error": "写入模型配置需要确认"}, 403)
+        current = _model_config_status(ctx, component_id)
+        if current.get("installed") is False:
+            return ctx.fastapi_json({"error": "请先安装或检测该智能体", "status": current}, 400)
+        try:
+            status = ctx.get_wire_svc().sync_agent_model_config(component_id, model=model)
+        except WireConfigError as exc:
+            failed = _model_config_status(ctx, component_id)
+            failed["status"] = "failed"
+            failed["message"] = str(exc)
+            return ctx.fastapi_json({"error": str(exc), "status": failed}, 400)
+        return ctx.fastapi_json({"status": _with_install_state(ctx, component_id, status)})
+
+    @app.post("/api/components/model-config/rollback")
+    async def components_model_config_rollback(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        component_id = str(body.get("componentId") or body.get("id") or "").strip()
+        if not component_id:
+            return ctx.fastapi_json({"error": "componentId is required"}, 400)
+        if not _truthy(body.get("confirmed")):
+            return ctx.fastapi_json({"error": "回滚模型配置需要确认"}, 403)
+        try:
+            status = ctx.get_wire_svc().rollback_agent_model_config(component_id)
+        except WireConfigError as exc:
+            failed = _model_config_status(ctx, component_id)
+            failed["status"] = "failed"
+            failed["message"] = str(exc)
+            return ctx.fastapi_json({"error": str(exc), "status": failed}, 400)
+        return ctx.fastapi_json({"status": _with_install_state(ctx, component_id, status)})
 
     @app.post("/api/components/install")
     async def components_install(request: Request):
@@ -430,3 +483,32 @@ def _component_installer(ctx) -> ComponentInstaller:
 
 def _component_state_store(ctx) -> ComponentStateStore:
     return ComponentStateStore(default_component_state_path(ctx.paths.base_path))
+
+
+def _model_config_status(ctx, component_id: str) -> dict:
+    status = ctx.get_wire_svc().agent_model_config_status(component_id)
+    return _with_install_state(ctx, component_id, status)
+
+
+def _with_install_state(ctx, component_id: str, status: dict) -> dict:
+    item = _component_by_id(ctx, component_id)
+    component_status = str((item or {}).get("status") or "not_installed")
+    installed = component_status in {"ready", "started", "upgrade_available"}
+    result = dict(status)
+    result["installed"] = installed
+    result["componentStatus"] = component_status
+    if result.get("supported") and not installed:
+        result["configured"] = False
+        result["status"] = "not_installed"
+        result["message"] = "请先安装或检测该智能体"
+    return result
+
+
+def _component_by_id(ctx, component_id: str) -> dict | None:
+    try:
+        for item in _component_catalog(ctx).status().get("components", []):
+            if item.get("id") == component_id:
+                return item
+    except Exception:
+        return None
+    return None

@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,7 +15,8 @@ if PYTHON_DIR not in sys.path:
 
 from core.paths import AppPaths
 from core.storage import read_json
-from core.wire_config import WireService, build_wire_from_session
+from core.wire_config import WireConfigError, WireService, build_wire_from_session
+from core.openclaw_model_sync import sync_openclaw_models_from_gateway_profile
 
 
 def session_snapshot() -> dict:
@@ -46,6 +48,70 @@ def session_snapshot() -> dict:
 
 
 class WireServiceTests(unittest.TestCase):
+    def test_default_text_model_prefers_qwen37_plus_for_managed_accounts(self) -> None:
+        session = {
+            **session_snapshot(),
+            "gatewayDefaultModel": "",
+            "gateway": {
+                "classifiedModels": {
+                    "text": ["agnes-2.0-flash", "qwen3.7-plus"],
+                    "image": [],
+                    "video": [],
+                },
+            },
+        }
+
+        wire = build_wire_from_session(session)
+
+        self.assertEqual(wire["models"]["text"], "qwen3.7-plus")
+
+    def test_default_text_model_is_empty_when_managed_catalog_has_no_text_models(self) -> None:
+        session = {
+            **session_snapshot(),
+            "gatewayDefaultModel": "",
+            "gatewayModels": ["agnes-image-2.1-flash", "agnes-video-v2.0", "agnes-2.0-flash"],
+            "gateway": {
+                "classifiedModels": {
+                    "text": [],
+                    "image": ["agnes-image-2.1-flash"],
+                    "video": ["agnes-video-v2.0"],
+                },
+            },
+        }
+
+        wire = build_wire_from_session(session)
+
+        self.assertEqual(wire["models"]["text"], "")
+        self.assertEqual(wire["modelLists"]["text"], [])
+
+    def test_agent_sync_reports_clear_error_when_managed_catalog_has_no_text_models(self) -> None:
+        session = {
+            **session_snapshot(),
+            "gatewayDefaultModel": "",
+            "gatewayModels": ["agnes-image-2.1-flash", "agnes-video-v2.0", "agnes-2.0-flash"],
+            "gateway": {
+                "classifiedModels": {
+                    "text": [],
+                    "image": ["agnes-image-2.1-flash"],
+                    "video": ["agnes-video-v2.0"],
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+
+            result = service.sync_from_session(session, targets=("openclaw", "opencode", "codex", "claude"))
+            errors = {item["target"]: item.get("error", "") for item in result["syncResults"]}
+
+            self.assertEqual(result["wire"]["models"]["text"], "")
+            self.assertIn("没有可用文本模型", errors["openclaw"])
+            self.assertIn("没有可用文本模型", errors["opencode"])
+            self.assertIn("没有可用文本模型", errors["codex"])
+            self.assertIn("没有可用文本模型", errors["claude"])
+            self.assertFalse(os.path.exists(os.path.join(paths.data_dir, ".codex", "config.toml")))
+            self.assertFalse(os.path.exists(os.path.join(paths.data_dir, ".opencode", "opencode.json")))
+
     def test_sync_from_session_persists_public_wire_without_exposing_raw_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = AppPaths(temp_dir)
@@ -76,6 +142,7 @@ class WireServiceTests(unittest.TestCase):
             targets = {item["target"]: item["ok"] for item in result["syncResults"]}
 
             self.assertTrue(targets["openclaw"])
+            self.assertTrue(targets["opencode"])
             self.assertTrue(targets["phone"])
             self.assertTrue(targets["desktop"])
             self.assertTrue(targets["image"])
@@ -97,8 +164,164 @@ class WireServiceTests(unittest.TestCase):
             self.assertEqual(image_config["managedBy"], "heang_account")
             self.assertEqual(image_config["model"], "gpt-image-1")
 
+            opencode_config = read_json(os.path.join(paths.data_dir, ".opencode", "opencode.json"), {})
+            self.assertEqual(opencode_config["model"], "loom/qwen3.7-plus")
+            opencode_provider = opencode_config["provider"]["loom"]
+            self.assertEqual(opencode_provider["options"]["apiKey"], "{env:LOOM_OPENCODE_API_KEY}")
+            self.assertNotIn("sk-test-token-not-real", json.dumps(opencode_config))
+
             self.assertFalse(os.path.exists(paths.video_config))
             self.assertFalse(os.path.exists(paths.videoapi_config))
+
+    def test_sync_from_session_writes_codex_and_claude_launcher_configs_without_exposing_raw_token(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            secret = session_snapshot()["memberToken"]
+
+            result = service.sync_from_session(session_snapshot())
+            targets = {item["target"]: item["ok"] for item in result["syncResults"]}
+
+            self.assertTrue(targets["codex"])
+            self.assertTrue(targets["claude"])
+
+            codex_config = os.path.join(paths.data_dir, ".codex", "config.toml")
+            claude_settings = os.path.join(paths.data_dir, ".claude", "settings.json")
+            self.assertTrue(os.path.isfile(codex_config))
+            self.assertTrue(os.path.isfile(claude_settings))
+
+            with open(codex_config, "r", encoding="utf-8") as handle:
+                codex_text = handle.read()
+            with open(claude_settings, "r", encoding="utf-8") as handle:
+                claude_text = handle.read()
+
+            self.assertIn('model = "qwen3.7-plus"', codex_text)
+            self.assertIn('model_provider = "heang"', codex_text)
+            self.assertIn("[model_providers.heang]", codex_text)
+            self.assertIn('env_key = "LOOM_CODEX_API_KEY"', codex_text)
+            self.assertIn('wire_api = "responses"', codex_text)
+            self.assertNotIn('wire_api = "chat"', codex_text)
+            self.assertNotIn(secret, codex_text)
+
+            user_codex_config = os.path.join(paths.data_dir, ".codex-user", "config.toml")
+            self.assertTrue(os.path.isfile(user_codex_config))
+            with open(user_codex_config, "r", encoding="utf-8") as handle:
+                user_codex_text = handle.read()
+            self.assertEqual(user_codex_text, codex_text)
+
+            claude_config = json.loads(claude_text)
+            self.assertEqual(claude_config["env"]["ANTHROPIC_MODEL"], "qwen3.7-plus")
+            self.assertEqual(claude_config["env"]["ANTHROPIC_BASE_URL"], "https://api.heang.top/v1")
+            self.assertEqual(claude_config["env"]["ANTHROPIC_AUTH_TOKEN"], "{env:LOOM_CLAUDE_API_KEY}")
+            self.assertEqual(claude_config["env"]["ANTHROPIC_API_KEY"], "{env:LOOM_CLAUDE_API_KEY}")
+            self.assertNotIn(secret, claude_text)
+
+    def test_codex_user_config_merge_preserves_existing_desktop_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            user_codex_config = os.path.join(paths.data_dir, ".codex-user", "config.toml")
+            os.makedirs(os.path.dirname(user_codex_config), exist_ok=True)
+            with open(user_codex_config, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(
+                    "\n".join([
+                        'model = "gpt-5.5"',
+                        'model_reasoning_effort = "xinflo"',
+                        'service_tier = "priority"',
+                        'approval_policy = "never"',
+                        'model_provider = "xinflo"',
+                        "",
+                        '[plugins."computer-use@openai-bundled"]',
+                        "enabled = true",
+                        "",
+                        "[mcp_servers.node_repl]",
+                        'command = "node_repl.exe"',
+                        "",
+                        "[model_providers.xinflo]",
+                        'name = "xinflo"',
+                        'base_url = "https://xinflo.com/v1"',
+                        'env_key = "XINFLO_API_KEY"',
+                        'wire_api = "responses"',
+                        "",
+                    ])
+                )
+
+            service = WireService(paths)
+            service.sync_custom_provider(
+                provider="xinflo",
+                base_url="https://api.heang.top/v1",
+                api_key="sk-test-token-not-real",
+                text_model="qwen3.7-plus",
+                targets=("codex",),
+            )
+
+            with open(user_codex_config, "r", encoding="utf-8") as handle:
+                merged = handle.read()
+
+            self.assertIn('model = "qwen3.7-plus"', merged)
+            self.assertIn('model_provider = "xinflo"', merged)
+            self.assertIn('model_reasoning_effort = "xinflo"', merged)
+            self.assertIn('service_tier = "priority"', merged)
+            self.assertIn('approval_policy = "never"', merged)
+            self.assertIn('[plugins."computer-use@openai-bundled"]', merged)
+            self.assertIn("[mcp_servers.node_repl]", merged)
+            self.assertIn("[model_providers.xinflo]", merged)
+            self.assertIn('base_url = "https://api.heang.top/v1"', merged)
+            self.assertIn('env_key = "LOOM_CODEX_API_KEY"', merged)
+            self.assertIn('wire_api = "responses"', merged)
+            self.assertNotIn("sk-test-token-not-real", merged)
+
+    def test_agent_env_keys_are_persisted_for_codex_claude_and_opencode_launches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            secret = session_snapshot()["memberToken"]
+
+            with (
+                mock.patch("core.wire_config._should_persist_user_env", return_value=True),
+                mock.patch("core.wire_config._write_user_env_var") as write_env,
+            ):
+                service.sync_from_session(session_snapshot(), targets=("opencode", "codex", "claude"))
+
+            calls = {(call.args[0], call.args[1]) for call in write_env.call_args_list}
+            self.assertIn(("LOOM_OPENCODE_API_KEY", secret), calls)
+            self.assertIn(("LOOM_CODEX_API_KEY", secret), calls)
+            self.assertIn(("LOOM_CLAUDE_API_KEY", secret), calls)
+
+    def test_openclaw_agent_model_config_writes_managed_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            service.sync_from_session(session_snapshot())
+
+            status = service.sync_agent_model_config("openclaw-companion", model="gpt-4o")
+
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["model"], "gpt-4o")
+            self.assertEqual(status["configPath"], paths.openclaw_config)
+
+            openclaw_config = read_json(paths.openclaw_config, {})
+            primary = openclaw_config["agents"]["defaults"]["model"]["primary"]
+            self.assertTrue(primary.endswith("/gpt-4o"))
+            providers = openclaw_config["models"]["providers"]
+            self.assertTrue(any(provider.get("baseUrl") == "https://api.heang.top/v1" for provider in providers.values()))
+
+    def test_agent_model_config_write_failure_restores_previous_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            service.sync_from_session(session_snapshot())
+            codex_config = os.path.join(paths.data_dir, ".codex", "config.toml")
+
+            with open(codex_config, "r", encoding="utf-8") as handle:
+                before = handle.read()
+
+            with mock.patch("core.wire_config._atomic_write_text", side_effect=OSError("disk full")):
+                with self.assertRaises(WireConfigError):
+                    service.sync_agent_model_config("codex-desktop", model="gpt-4o")
+
+            with open(codex_config, "r", encoding="utf-8") as handle:
+                after = handle.read()
+            self.assertEqual(after, before)
 
     def test_verify_and_rollback_use_current_and_last_good_wire(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -114,6 +337,23 @@ class WireServiceTests(unittest.TestCase):
 
             rolled_back = service.rollback()
             self.assertEqual(rolled_back["wire"]["models"]["text"], "qwen3.7-plus")
+
+    def test_first_custom_provider_does_not_create_fake_last_good_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+
+            service.sync_custom_provider(
+                provider="custom",
+                base_url="https://third.example/v1",
+                api_key="sk-test-token-not-real",
+                text_model="gpt-4o",
+                targets=("codex",),
+            )
+
+            self.assertFalse(os.path.exists(paths.wire_last_good))
+            with self.assertRaises(WireConfigError):
+                service.rollback()
 
     def test_sync_target_errors_are_redacted_before_returning_to_account_layer(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -179,6 +419,80 @@ class WireServiceTests(unittest.TestCase):
 
             self.assertFalse(os.path.exists(paths.video_config))
             self.assertFalse(os.path.exists(paths.videoapi_config))
+
+    def test_custom_provider_blank_phone_model_keeps_desktop_and_phone_models_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+
+            result = service.sync_custom_provider(
+                provider="custom",
+                base_url="https://third.example/v1",
+                api_key="sk-test-token-not-real",
+                text_model="claude-3-5-sonnet",
+                targets=("codex", "claude", "desktop", "phone"),
+            )
+
+            public_wire = result["wire"]
+            self.assertEqual(public_wire["models"]["text"], "claude-3-5-sonnet")
+            self.assertEqual(public_wire["models"]["phone"], "agnes-2.0-flash")
+
+            with open(os.path.join(paths.data_dir, ".codex", "config.toml"), "r", encoding="utf-8") as handle:
+                codex_text = handle.read()
+            with open(os.path.join(paths.data_dir, ".claude", "settings.json"), "r", encoding="utf-8") as handle:
+                claude_text = handle.read()
+            phone_config = read_json(os.path.join(paths.launcher_dir, "phone-agent.json"), {})
+
+            self.assertIn('model = "claude-3-5-sonnet"', codex_text)
+            self.assertNotIn('model = "agnes-2.0-flash"', codex_text)
+            self.assertEqual(json.loads(claude_text)["env"]["ANTHROPIC_MODEL"], "claude-3-5-sonnet")
+            self.assertEqual(phone_config["llm"]["model"], "agnes-2.0-flash")
+
+    def test_codex_model_config_rejects_phone_agent_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            service.sync_from_session(session_snapshot())
+
+            with self.assertRaises(WireConfigError):
+                service.sync_agent_model_config("codex-desktop", model="agnes-2.0-flash")
+
+    def test_codex_status_detects_user_config_model_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            service.sync_from_session(session_snapshot())
+            user_codex_config = os.path.join(paths.data_dir, ".codex-user", "config.toml")
+            with open(user_codex_config, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(
+                    "\n".join([
+                        "# Managed by LOOM.",
+                        'model = "gpt-5.5"',
+                        'model_provider = "loom"',
+                        "",
+                    ])
+                )
+
+            status = service.agent_model_config_status("codex-desktop")
+
+            self.assertFalse(status["configured"])
+            self.assertEqual(status["status"], "unconfigured")
+            self.assertEqual(status["expectedModel"], "qwen3.7-plus")
+            self.assertEqual(status["actualModel"], "gpt-5.5")
+
+    def test_openclaw_model_sync_rejects_phone_only_model_list(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            ok = sync_openclaw_models_from_gateway_profile(
+                paths,
+                {
+                    "baseUrl": "https://third.example/v1",
+                    "apiKey": "sk-test-token-not-real",
+                    "models": ["agnes-2.0-flash"],
+                },
+            )
+
+            self.assertFalse(ok)
 
 
 if __name__ == "__main__":

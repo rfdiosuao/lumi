@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,7 +21,37 @@ WIRE_PROVIDER = "heang"
 WIRE_CUSTOM_MANAGED_BY = "custom_provider"
 DEFAULT_TEXT_MODEL = "qwen3.7-plus"
 DEFAULT_PHONE_MODEL = "agnes-2.0-flash"
+TEXT_MODEL_PRIORITY = (
+    "qwen3.7-plus",
+    "qwen3.6-plus",
+    "qwen3.5-plus",
+    "glm-4-flash",
+    "kimi-k2.5",
+    "MiniMax-M2.5",
+)
+PHONE_MODEL_IDS = {DEFAULT_PHONE_MODEL.lower()}
 MANAGED_ACCOUNT_SOURCES = {"newapi_account", WIRE_MANAGED_BY, WIRE_CUSTOM_MANAGED_BY}
+AGENT_ENV_KEYS = ("LOOM_OPENCODE_API_KEY", "LOOM_CODEX_API_KEY", "LOOM_CLAUDE_API_KEY")
+AGENT_MODEL_CONFIGS = {
+    "codex-desktop": {
+        "target": "codex",
+        "name": "Codex",
+        "configDir": ".codex",
+        "configFile": "config.toml",
+    },
+    "claude-code": {
+        "target": "claude",
+        "name": "Claude Code",
+        "configDir": ".claude",
+        "configFile": "settings.json",
+    },
+    "openclaw-companion": {
+        "target": "openclaw",
+        "name": "OpenClaw",
+        "configDir": ".openclaw",
+        "configFile": "openclaw.json",
+    },
+}
 
 SECRET_TEXT_PATTERNS = (
     re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|session[_-]?cookie|password|secret|token)(\s*[:=]\s*)([^\s,;]+)"),
@@ -38,7 +70,7 @@ class WireService:
         self.append_log = append_log or (lambda _text: None)
 
     def current(self) -> dict[str, Any] | None:
-        wire = read_json(self.paths.wire_current, None)
+        wire = _read_json_if_exists(self.paths.wire_current)
         if not isinstance(wire, dict):
             return None
         return _unprotect_wire(wire)
@@ -50,14 +82,12 @@ class WireService:
         self,
         session: dict[str, Any],
         *,
-        targets: tuple[str, ...] = ("openclaw", "image", "desktop", "phone"),
+        targets: tuple[str, ...] = ("openclaw", "opencode", "codex", "claude", "image", "desktop", "phone"),
     ) -> dict[str, Any]:
         wire = build_wire_from_session(session)
-        current = read_json(self.paths.wire_current, None)
+        current = _read_json_if_exists(self.paths.wire_current)
         if isinstance(current, dict):
             write_json(self.paths.wire_last_good, current)
-        elif not os.path.exists(self.paths.wire_last_good):
-            write_json(self.paths.wire_last_good, _protected_wire(wire))
 
         write_json(self.paths.wire_current, _protected_wire(wire))
         results = self.apply_wire(wire, targets=targets)
@@ -76,14 +106,14 @@ class WireService:
         image_model: str = "",
         phone_model: str = "",
         video_model: str = "",
-        targets: tuple[str, ...] = ("openclaw", "image", "desktop", "phone"),
+        targets: tuple[str, ...] = ("openclaw", "opencode", "codex", "claude", "image", "desktop", "phone"),
     ) -> dict[str, Any]:
         provider = _pick_text(provider, "自定义 Provider")
         base_url = _normalize_base_url(base_url)
         api_key = _pick_text(api_key)
         text_model = _pick_text(text_model)
         image_model = _pick_text(image_model)
-        phone_model = _pick_text(phone_model, text_model, DEFAULT_PHONE_MODEL)
+        phone_model = _pick_text(phone_model, DEFAULT_PHONE_MODEL)
         video_model = _pick_text(video_model)
         if not base_url:
             raise WireConfigError("请输入第三方 Provider URL")
@@ -118,15 +148,15 @@ class WireService:
                 "desktopRpa": True,
                 "imageGateway": bool(image_model),
                 "videoGateway": False,
-                "codex": False,
+                "opencode": True,
+                "codex": True,
+                "claude": True,
             },
             "updatedAt": _iso_now(),
         }
-        current = read_json(self.paths.wire_current, None)
+        current = _read_json_if_exists(self.paths.wire_current)
         if isinstance(current, dict):
             write_json(self.paths.wire_last_good, current)
-        elif not os.path.exists(self.paths.wire_last_good):
-            write_json(self.paths.wire_last_good, _protected_wire(wire))
         write_json(self.paths.wire_current, _protected_wire(wire))
         results = self.apply_wire(wire, targets=targets)
         return {
@@ -137,6 +167,9 @@ class WireService:
     def apply_wire(self, wire: dict[str, Any], *, targets: tuple[str, ...]) -> list[dict[str, Any]]:
         actions = {
             "openclaw": self._sync_openclaw,
+            "opencode": self._sync_opencode,
+            "codex": self._sync_codex,
+            "claude": self._sync_claude,
             "image": self._sync_image,
             "desktop": self._sync_desktop,
             "phone": self._sync_phone,
@@ -168,6 +201,9 @@ class WireService:
         targets = {
             "token": {"ok": bool(_pick_text(wire.get("apiKey")))},
             "openclaw": {"ok": bool(read_json(self.paths.openclaw_config, {}))},
+            "opencode": {"ok": bool(read_json(os.path.join(self.paths.data_dir, ".opencode", "opencode.json"), {}))},
+            "codex": {"ok": self.agent_model_config_status("codex-desktop")["configured"]},
+            "claude": {"ok": self.agent_model_config_status("claude-code")["configured"]},
             "phone": {"ok": bool(read_json(os.path.join(self.paths.launcher_dir, "phone-agent.json"), {}))},
             "desktop": {"ok": bool(read_json(os.path.join(self.paths.launcher_dir, "desktop-agent.json"), {}))},
             "image": {"ok": bool(read_json(self.paths.image_config, {}))},
@@ -181,23 +217,214 @@ class WireService:
         }
 
     def rollback(self) -> dict[str, Any]:
-        previous = read_json(self.paths.wire_last_good, None)
+        previous = _read_json_if_exists(self.paths.wire_last_good)
         if not isinstance(previous, dict):
             raise WireConfigError("没有可回滚的模型同步快照")
         write_json(self.paths.wire_current, previous)
         wire = _unprotect_wire(previous)
-        results = self.apply_wire(wire, targets=("openclaw", "image", "desktop", "phone"))
+        results = self.apply_wire(wire, targets=("openclaw", "opencode", "codex", "claude", "image", "desktop", "phone"))
         return {
             "wire": _public_wire(wire),
             "syncResults": results,
         }
 
+    def agent_model_config_status(self, component_id: str) -> dict[str, Any]:
+        component_id = str(component_id or "").strip()
+        target = AGENT_MODEL_CONFIGS.get(component_id)
+        if not target:
+            return {
+                "componentId": component_id,
+                "supported": False,
+                "configured": False,
+                "status": "unsupported",
+                "message": "该组件暂不支持模型配置",
+                "availableModels": [],
+            }
+
+        wire = self.current()
+        config_path = self._agent_config_path(component_id)
+        metadata = self._agent_config_metadata(component_id)
+        model_lists = wire.get("modelLists") if isinstance(wire, dict) and isinstance(wire.get("modelLists"), dict) else {}
+        text_models = _desktop_text_models(_list_values(model_lists.get("text")))
+        current_model = _desktop_text_model(_model_value(wire, "text", "")) if isinstance(wire, dict) else ""
+        if current_model and not text_models:
+            text_models = [current_model, *text_models]
+        metadata_model = _desktop_text_model(metadata.get("model"))
+        expected_model = metadata_model or current_model
+        actual_model = _desktop_text_model(_agent_config_model(component_id, config_path))
+        user_config_path = _user_codex_config_path(self.paths) if component_id == "codex-desktop" else ""
+        user_actual_model = _desktop_text_model(_agent_config_model(component_id, user_config_path)) if user_config_path else ""
+        config_matches = not actual_model or not expected_model or actual_model == expected_model
+        user_config_matches = component_id != "codex-desktop" or not user_actual_model or not expected_model or user_actual_model == expected_model
+        configured = bool(
+            os.path.isfile(config_path)
+            and metadata.get("configured")
+            and expected_model
+            and config_matches
+            and user_config_matches
+        )
+        if not wire:
+            status = "no_wire"
+            message = "请先登录中转站或应用第三方模型配置"
+        elif configured:
+            status = "configured"
+            message = "模型配置已写入"
+        elif component_id == "codex-desktop" and user_actual_model and expected_model and user_actual_model != expected_model:
+            status = "unconfigured"
+            message = "Codex 用户配置与 LOOM 当前模型不一致，请重新写入配置"
+        else:
+            status = "unconfigured"
+            message = "可写入 LOOM 管理配置"
+        return {
+            "componentId": component_id,
+            "supported": True,
+            "configured": configured,
+            "status": status,
+            "message": message,
+            "model": user_actual_model or actual_model or metadata_model or current_model,
+            "expectedModel": expected_model,
+            "actualModel": user_actual_model or actual_model,
+            "provider": _pick_text(wire.get("provider")) if isinstance(wire, dict) else "",
+            "baseUrl": _pick_text(wire.get("baseUrl")) if isinstance(wire, dict) else "",
+            "managedBy": _wire_managed_by(wire) if isinstance(wire, dict) else "",
+            "availableModels": text_models,
+            "configPath": config_path,
+            "userConfigPath": user_config_path,
+            "backupAvailable": bool(metadata.get("backupPath") and os.path.exists(str(metadata.get("backupPath")))),
+            "updatedAt": metadata.get("updatedAt") or "",
+        }
+
+    def sync_agent_model_config(self, component_id: str, *, model: str = "", wire: dict[str, Any] | None = None) -> dict[str, Any]:
+        component_id = str(component_id or "").strip()
+        if component_id not in AGENT_MODEL_CONFIGS:
+            raise WireConfigError("该组件暂不支持模型配置")
+        wire = wire or self.current()
+        if not wire:
+            raise WireConfigError("请先登录中转站或应用第三方模型配置")
+        base_url = _pick_text(wire.get("baseUrl")).rstrip("/")
+        api_key = _pick_text(wire.get("apiKey"))
+        if _looks_like_phone_model(model):
+            raise WireConfigError("手机 Agent 模型不能写入 Codex / Claude Code，请选择文本模型。")
+        selected_model = _pick_agent_model(wire, model)
+        if not selected_model:
+            raise WireConfigError("没有可用文本模型，请同步/购买/换模型")
+        if not base_url or not api_key:
+            raise WireConfigError("中转站模型配置不完整，请先同步模型")
+
+        if component_id == "openclaw-companion":
+            return self._sync_openclaw_agent_model_config(component_id, wire, selected_model)
+
+        config_path = self._agent_config_path(component_id)
+        config_text = self._agent_config_text(component_id, wire, selected_model)
+        backup_path = _write_text_with_backup(config_path, config_text)
+        user_config_path = ""
+        user_backup_path = ""
+        if component_id == "codex-desktop":
+            user_config_path = _user_codex_config_path(self.paths)
+            existing_user_config = _read_text(user_config_path) if os.path.isfile(user_config_path) else ""
+            user_config_text = _codex_user_config_text(
+                existing_user_config,
+                base_url,
+                _pick_text(wire.get("provider"), "LOOM"),
+                selected_model,
+                _wire_managed_by(wire),
+            )
+            try:
+                user_backup_path = _write_text_with_backup(user_config_path, user_config_text)
+            except Exception:
+                if backup_path and os.path.isfile(backup_path):
+                    _restore_text(config_path, _read_text(backup_path))
+                raise
+        metadata = {
+            "componentId": component_id,
+            "configured": True,
+            "managedBy": _wire_managed_by(wire),
+            "provider": _pick_text(wire.get("provider")),
+            "baseUrl": base_url,
+            "model": selected_model,
+            "configPath": config_path,
+            "userConfigPath": user_config_path,
+            "backupPath": backup_path or self._agent_config_metadata(component_id).get("backupPath") or "",
+            "userBackupPath": user_backup_path or self._agent_config_metadata(component_id).get("userBackupPath") or "",
+            "updatedAt": _iso_now(),
+        }
+        write_json(self._agent_config_metadata_path(component_id), metadata)
+        if component_id == "codex-desktop":
+            _persist_agent_env_key(self.paths, "LOOM_CODEX_API_KEY", api_key)
+        elif component_id == "claude-code":
+            _persist_agent_env_key(self.paths, "LOOM_CLAUDE_API_KEY", api_key)
+        return self.agent_model_config_status(component_id)
+
+    def rollback_agent_model_config(self, component_id: str) -> dict[str, Any]:
+        component_id = str(component_id or "").strip()
+        if component_id not in AGENT_MODEL_CONFIGS:
+            raise WireConfigError("该组件暂不支持模型配置回滚")
+        metadata = self._agent_config_metadata(component_id)
+        backup_path = str(metadata.get("backupPath") or "")
+        config_path = self._agent_config_path(component_id)
+        if not backup_path or not os.path.isfile(backup_path):
+            raise WireConfigError("没有可回滚的模型配置备份")
+        _atomic_write_text(config_path, _read_text(backup_path))
+        metadata["configured"] = True
+        metadata["updatedAt"] = _iso_now()
+        write_json(self._agent_config_metadata_path(component_id), metadata)
+        return self.agent_model_config_status(component_id)
+
+    def _sync_openclaw_agent_model_config(self, component_id: str, wire: dict[str, Any], selected_model: str) -> dict[str, Any]:
+        config_path = self._agent_config_path(component_id)
+        backup_path = _backup_text_file(config_path)
+        models = wire.get("modelLists") if isinstance(wire.get("modelLists"), dict) else {}
+        text_models = _desktop_text_models(_list_values(models.get("text")))
+        if selected_model and selected_model not in text_models:
+            text_models = [selected_model, *text_models]
+        managed_by = _wire_managed_by(wire)
+        try:
+            ok = sync_openclaw_models_from_gateway_profile(
+                self.paths,
+                {
+                    "source": managed_by,
+                    "managedBy": managed_by,
+                    "profileKey": "custom_provider" if managed_by == WIRE_CUSTOM_MANAGED_BY else "member_gateway",
+                    "name": _pick_text(wire.get("provider"), "LOOM"),
+                    "authMode": "custom" if managed_by == WIRE_CUSTOM_MANAGED_BY else "member",
+                    "baseUrl": _pick_text(wire.get("baseUrl")),
+                    "apiKey": _pick_text(wire.get("apiKey")),
+                    "defaultModel": selected_model,
+                    "imageModel": _model_value(wire, "image", ""),
+                    "models": text_models or [selected_model],
+                },
+            )
+            if not ok:
+                raise WireConfigError("OpenClaw 模型配置写入失败，请先同步中转站模型")
+        except Exception as exc:
+            if backup_path and os.path.isfile(backup_path):
+                _restore_text(config_path, _read_text(backup_path))
+            if isinstance(exc, WireConfigError):
+                raise
+            raise WireConfigError(f"OpenClaw 模型配置写入失败：{exc}") from exc
+
+        metadata = {
+            "componentId": component_id,
+            "configured": True,
+            "managedBy": managed_by,
+            "provider": _pick_text(wire.get("provider")),
+            "baseUrl": _pick_text(wire.get("baseUrl")).rstrip("/"),
+            "model": selected_model,
+            "configPath": config_path,
+            "backupPath": backup_path or self._agent_config_metadata(component_id).get("backupPath") or "",
+            "updatedAt": _iso_now(),
+        }
+        write_json(self._agent_config_metadata_path(component_id), metadata)
+        return self.agent_model_config_status(component_id)
+
     def _sync_openclaw(self, wire: dict[str, Any]) -> None:
         models = wire.get("modelLists") if isinstance(wire.get("modelLists"), dict) else {}
-        text_models = models.get("text") if isinstance(models.get("text"), list) else []
-        default_model = _model_value(wire, "text", DEFAULT_TEXT_MODEL)
+        text_models = _desktop_text_models(models.get("text") if isinstance(models.get("text"), list) else [])
+        default_model = _model_value(wire, "text", "")
         managed_by = _wire_managed_by(wire)
-        sync_openclaw_models_from_gateway_profile(
+        if not default_model:
+            raise WireConfigError("没有可用文本模型，请同步/购买/换模型")
+        ok = sync_openclaw_models_from_gateway_profile(
             self.paths,
             {
                 "source": managed_by,
@@ -212,6 +439,53 @@ class WireService:
                 "models": text_models or [default_model],
             },
         )
+        if not ok:
+            raise WireConfigError("OpenClaw 模型配置写入失败，请先同步中转站模型")
+
+    def _sync_opencode(self, wire: dict[str, Any]) -> None:
+        base_url = _pick_text(wire.get("baseUrl")).rstrip("/")
+        api_key = _pick_text(wire.get("apiKey"))
+        default_model = _model_value(wire, "text", "")
+        model_lists = wire.get("modelLists") if isinstance(wire.get("modelLists"), dict) else {}
+        text_models = _desktop_text_models(_list_values(model_lists.get("text")))
+        if default_model and default_model not in text_models:
+            text_models = [default_model, *text_models]
+        text_models = [model for model in text_models if model]
+        if not text_models:
+            text_models = [default_model]
+        if not default_model:
+            raise WireConfigError("没有可用文本模型，请同步/购买/换模型")
+        if not base_url or not api_key:
+            raise WireConfigError("opencode 缺少中转站模型配置")
+
+        provider_id = "loom"
+        config_dir = os.path.join(self.paths.data_dir, ".opencode")
+        os.makedirs(config_dir, exist_ok=True)
+        config_path = os.path.join(config_dir, "opencode.json")
+        config = read_json(config_path, {})
+        if not isinstance(config, dict):
+            config = {}
+        config["$schema"] = "https://opencode.ai/config.json"
+        config["model"] = f"{provider_id}/{default_model}"
+        provider = config.get("provider") if isinstance(config.get("provider"), dict) else {}
+        provider[provider_id] = {
+            "name": "LOOM 中转站",
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "baseURL": base_url,
+                "apiKey": "{env:LOOM_OPENCODE_API_KEY}",
+            },
+            "models": {model: {"name": model} for model in text_models},
+        }
+        config["provider"] = provider
+        write_json(config_path, config)
+        _persist_agent_env_key(self.paths, "LOOM_OPENCODE_API_KEY", api_key)
+
+    def _sync_codex(self, wire: dict[str, Any]) -> None:
+        self.sync_agent_model_config("codex-desktop", wire=wire)
+
+    def _sync_claude(self, wire: dict[str, Any]) -> None:
+        self.sync_agent_model_config("claude-code", wire=wire)
 
     def _sync_image(self, wire: dict[str, Any]) -> None:
         image_model = _model_value(wire, "image", "")
@@ -233,7 +507,7 @@ class WireService:
         write_json(self.paths.image_config, current)
 
     def _sync_desktop(self, wire: dict[str, Any]) -> None:
-        model = _model_value(wire, "text", DEFAULT_TEXT_MODEL)
+        model = _model_value(wire, "text", "")
         managed_by = _wire_managed_by(wire)
         provider = {
             "managedBy": managed_by,
@@ -278,6 +552,26 @@ class WireService:
             if current.get("managedBy") in MANAGED_ACCOUNT_SOURCES or current.get("gatewayMode") == "member":
                 write_json(path, {})
 
+    def _agent_config_path(self, component_id: str) -> str:
+        target = AGENT_MODEL_CONFIGS[component_id]
+        return os.path.join(self.paths.data_dir, str(target["configDir"]), str(target["configFile"]))
+
+    def _agent_config_metadata_path(self, component_id: str) -> str:
+        return os.path.join(self.paths.launcher_dir, "agent-model-configs", f"{component_id}.json")
+
+    def _agent_config_metadata(self, component_id: str) -> dict[str, Any]:
+        metadata = read_json(self._agent_config_metadata_path(component_id), {})
+        return metadata if isinstance(metadata, dict) else {}
+
+    def _agent_config_text(self, component_id: str, wire: dict[str, Any], model: str) -> str:
+        base_url = _pick_text(wire.get("baseUrl")).rstrip("/")
+        provider = _pick_text(wire.get("provider"), "LOOM")
+        if component_id == "codex-desktop":
+            return _codex_config_text(base_url, provider, model, _wire_managed_by(wire))
+        if component_id == "claude-code":
+            return _claude_settings_text(base_url, provider, model)
+        raise WireConfigError("该组件暂不支持模型配置")
+
 
 def build_wire_from_session(session: dict[str, Any]) -> dict[str, Any]:
     gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
@@ -287,7 +581,11 @@ def build_wire_from_session(session: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(classes, dict):
         classes = _classify_models(session.get("gatewayModels") if isinstance(session.get("gatewayModels"), list) else [])
 
-    text_model = _pick_model(_pick_text(session.get("gatewayDefaultModel"), gateway.get("defaultModel")), classes.get("text"), DEFAULT_TEXT_MODEL)
+    text_model = _pick_text_model(
+        _pick_text(session.get("gatewayDefaultModel"), gateway.get("defaultModel")),
+        classes.get("text"),
+        "",
+    )
     image_model = _pick_model(_pick_text(session.get("gatewayImageModel"), gateway.get("imageModel")), classes.get("image"), "")
     video_model = _pick_model(
         _pick_text(session.get("gatewayVideoDraftModel"), gateway.get("videoDraftModel"), session.get("gatewayVideoModel")),
@@ -297,8 +595,11 @@ def build_wire_from_session(session: dict[str, Any]) -> dict[str, Any]:
     phone_model = _pick_text(phone_agent.get("model"), DEFAULT_PHONE_MODEL)
     api_key = _pick_text(phone_agent.get("apiKey"), session.get("memberToken"), gateway.get("accessToken"))
     base_url = _pick_text(phone_agent.get("baseUrl"), session.get("gatewayBaseUrl"), gateway.get("baseUrl"), "https://api.heang.top/v1")
+    text_model_list = _desktop_text_models(_list_values(classes.get("text")))
+    if text_model and text_model not in text_model_list:
+        text_model_list = [text_model, *text_model_list]
     model_lists = {
-        "text": _list_values(classes.get("text")),
+        "text": text_model_list,
         "image": _list_values(classes.get("image")),
         "video": _list_values(classes.get("video")),
     }
@@ -318,14 +619,16 @@ def build_wire_from_session(session: dict[str, Any]) -> dict[str, Any]:
             "video": video_model,
         },
         "modelLists": model_lists,
-        "targets": {
-            "openclaw": True,
-            "phone": True,
-            "desktopRpa": True,
-            "imageGateway": bool(image_model),
-            "videoGateway": False,
-            "codex": False,
-        },
+            "targets": {
+                "openclaw": True,
+                "phone": True,
+                "desktopRpa": True,
+                "imageGateway": bool(image_model),
+                "videoGateway": False,
+                "opencode": True,
+                "codex": True,
+                "claude": True,
+            },
         "updatedAt": _iso_now(),
     }
 
@@ -335,6 +638,12 @@ def _protected_wire(wire: dict[str, Any]) -> dict[str, Any]:
     if payload.get("apiKey"):
         payload["apiKey"] = protect_secret(payload.get("apiKey"))
     return payload
+
+
+def _read_json_if_exists(path: str) -> Any | None:
+    if not os.path.exists(path):
+        return None
+    return read_json(path, None)
 
 
 def _unprotect_wire(wire: dict[str, Any]) -> dict[str, Any]:
@@ -371,6 +680,8 @@ def _classify_models(models: list[Any]) -> dict[str, list[str]]:
             classified["video"].append(model)
         elif any(marker in lower for marker in ("image", "dall-e", "gpt-image", "flux", "midjourney", "sd-", "imagen", "seedream")):
             classified["image"].append(model)
+        elif _looks_like_phone_model(model):
+            continue
         else:
             classified["text"].append(model)
     return classified
@@ -392,11 +703,54 @@ def _model_value(wire: dict[str, Any], key: str, fallback: str) -> str:
     return _pick_text(models.get(key), fallback)
 
 
+def _pick_agent_model(wire: dict[str, Any], preferred: str = "") -> str:
+    model_lists = wire.get("modelLists") if isinstance(wire.get("modelLists"), dict) else {}
+    text_models = _desktop_text_models(_list_values(model_lists.get("text")))
+    preferred = _pick_text(preferred)
+    if preferred:
+        return _desktop_text_model(preferred)
+    current = _desktop_text_model(_model_value(wire, "text", ""))
+    if current and (not text_models or current in text_models):
+        return current
+    return text_models[0] if text_models else ""
+
+
 def _pick_model(preferred: str, candidates: Any, fallback: str) -> str:
     values = _list_values(candidates)
     if preferred and (not values or preferred in values):
         return preferred
     return values[0] if values else fallback
+
+
+def _pick_text_model(preferred: str, candidates: Any, fallback: str) -> str:
+    values = _desktop_text_models(_list_values(candidates))
+    preferred = _desktop_text_model(preferred)
+    fallback = _desktop_text_model(fallback)
+    if preferred and (not values or preferred in values):
+        return preferred
+    for model in TEXT_MODEL_PRIORITY:
+        if model in values:
+            return model
+    return values[0] if values else fallback
+
+
+def _looks_like_phone_model(model_id: Any) -> bool:
+    text = _pick_text(model_id).lower()
+    return bool(text) and text in PHONE_MODEL_IDS
+
+
+def _desktop_text_model(model_id: Any) -> str:
+    text = _pick_text(model_id)
+    return "" if _looks_like_phone_model(text) else text
+
+
+def _desktop_text_models(models: list[str]) -> list[str]:
+    result: list[str] = []
+    for model in models:
+        text = _desktop_text_model(model)
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _wire_managed_by(wire: dict[str, Any]) -> str:
@@ -423,6 +777,24 @@ def _pick_text(*values: Any) -> str:
     return ""
 
 
+def _agent_config_model(component_id: str, path: str) -> str:
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        if component_id == "codex-desktop":
+            for line in _read_text(path).splitlines():
+                stripped = line.strip()
+                if stripped.startswith("model = "):
+                    return _pick_text(stripped.split("=", 1)[1].strip().strip('"'))
+        if component_id == "claude-code":
+            payload = json.loads(_read_text(path))
+            env = payload.get("env") if isinstance(payload, dict) else {}
+            return _pick_text(env.get("ANTHROPIC_MODEL")) if isinstance(env, dict) else ""
+    except Exception:
+        return ""
+    return ""
+
+
 def _mask_secret(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -430,6 +802,242 @@ def _mask_secret(value: Any) -> str:
     if len(text) <= 8:
         return "****"
     return f"{text[:4]}****{text[-4:]}"
+
+
+def _codex_provider_id(provider: str, managed_by: str = "") -> str:
+    if managed_by == WIRE_MANAGED_BY and _pick_text(provider).lower() in {"", "loom", "luming", "麓鸣"}:
+        provider = WIRE_PROVIDER
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", _pick_text(provider, WIRE_PROVIDER).lower()).strip("-_")
+    if not slug or slug in {"openai", "ollama", "lmstudio"}:
+        slug = "loom"
+    return slug
+
+
+def _codex_provider_block(base_url: str, provider: str, provider_id: str) -> list[str]:
+    return [
+        f"[model_providers.{provider_id}]",
+        f'name = "{_toml_string(provider or "LOOM")}"',
+        f'base_url = "{_toml_string(base_url)}"',
+        'env_key = "LOOM_CODEX_API_KEY"',
+        'wire_api = "responses"',
+    ]
+
+
+def _codex_config_text(base_url: str, provider: str, model: str, managed_by: str = "") -> str:
+    provider_id = _codex_provider_id(provider, managed_by)
+    return "\n".join([
+        "# Managed by LOOM. The real token is injected at launch time.",
+        "# Only model/provider fields are managed; personal Codex plugins and MCP stay in user config.",
+        f'model = "{_toml_string(model)}"',
+        f'model_provider = "{provider_id}"',
+        "",
+        *_codex_provider_block(base_url, provider, provider_id),
+        "",
+    ])
+
+
+def _codex_user_config_text(existing_text: str, base_url: str, provider: str, model: str, managed_by: str = "") -> str:
+    if not _pick_text(existing_text):
+        return _codex_config_text(base_url, provider, model, managed_by)
+    provider_id = _codex_provider_id(provider, managed_by)
+    lines = existing_text.splitlines()
+    lines = _upsert_top_level_toml_value(lines, "model", model)
+    lines = _upsert_top_level_toml_value(lines, "model_provider", provider_id)
+    lines = _remove_toml_table(lines, f"[model_providers.{provider_id}]")
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines.extend(["", *_codex_provider_block(base_url, provider, provider_id), ""])
+    return "\n".join(lines)
+
+
+def _upsert_top_level_toml_value(lines: list[str], key: str, value: str) -> list[str]:
+    result: list[str] = []
+    replaced = False
+    in_top_level = True
+    assignment = f'{key} = "{_toml_string(value)}"'
+    key_pattern = re.compile(rf"^{re.escape(key)}\s*=")
+    for line in lines:
+        stripped = line.strip()
+        if in_top_level and stripped.startswith("[") and stripped.endswith("]"):
+            if not replaced:
+                result.append(assignment)
+                replaced = True
+            in_top_level = False
+        if in_top_level and key_pattern.match(stripped):
+            if not replaced:
+                result.append(assignment)
+                replaced = True
+            continue
+        result.append(line)
+    if in_top_level and not replaced:
+        result.append(assignment)
+    return result
+
+
+def _remove_toml_table(lines: list[str], table_header: str) -> list[str]:
+    result: list[str] = []
+    skipping = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if stripped == table_header:
+                skipping = True
+                continue
+            if skipping:
+                skipping = False
+        if not skipping:
+            result.append(line)
+    return result
+
+
+def _user_codex_config_path(paths: AppPaths) -> str:
+    override = _pick_text(os.environ.get("LOOM_CODEX_CONFIG_PATH"))
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    base_path = os.path.abspath(paths.base_path)
+    temp_root = os.path.abspath(tempfile.gettempdir())
+    if base_path.startswith(temp_root):
+        return os.path.join(paths.data_dir, ".codex-user", "config.toml")
+    return os.path.join(os.path.expanduser("~"), ".codex", "config.toml")
+
+
+def clear_agent_user_env_keys(paths: AppPaths) -> None:
+    for name in AGENT_ENV_KEYS:
+        os.environ.pop(name, None)
+        if _should_persist_user_env(paths):
+            _delete_user_env_var(name)
+
+
+def _persist_agent_env_key(paths: AppPaths, name: str, value: str) -> None:
+    if name not in AGENT_ENV_KEYS or not value:
+        return
+    os.environ[name] = value
+    if _should_persist_user_env(paths):
+        _write_user_env_var(name, value)
+
+
+def _should_persist_user_env(paths: AppPaths) -> bool:
+    if str(os.environ.get("LOOM_DISABLE_USER_ENV_SYNC") or "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    if str(os.environ.get("LOOM_FORCE_USER_ENV_SYNC") or "").strip().lower() in {"1", "true", "yes"}:
+        return True
+    try:
+        base_path = os.path.abspath(paths.base_path)
+        temp_root = os.path.abspath(tempfile.gettempdir())
+        return not (base_path == temp_root or base_path.startswith(temp_root + os.sep))
+    except Exception:
+        return False
+
+
+def _write_user_env_var(name: str, value: str) -> None:
+    if os.name != "nt":
+        return
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, name, 0, winreg.REG_EXPAND_SZ, value)
+    _broadcast_user_env_change()
+
+
+def _delete_user_env_var(name: str) -> None:
+    if os.name != "nt":
+        return
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, name)
+    except FileNotFoundError:
+        return
+    _broadcast_user_env_change()
+
+
+def _broadcast_user_env_change() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        HWND_BROADCAST = 0xFFFF
+        WM_SETTINGCHANGE = 0x001A
+        SMTO_ABORTIFHUNG = 0x0002
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            "Environment",
+            SMTO_ABORTIFHUNG,
+            5000,
+            None,
+        )
+    except Exception:
+        pass
+
+
+def _claude_settings_text(base_url: str, provider: str, model: str) -> str:
+    return json.dumps({
+        "managedBy": "LOOM",
+        "provider": provider or "LOOM",
+        "env": {
+            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_AUTH_TOKEN": "{env:LOOM_CLAUDE_API_KEY}",
+            "ANTHROPIC_API_KEY": "{env:LOOM_CLAUDE_API_KEY}",
+            "ANTHROPIC_MODEL": model,
+        },
+    }, indent=2, ensure_ascii=False) + "\n"
+
+
+def _write_text_with_backup(path: str, text: str) -> str:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    backup_path = _backup_text_file(path)
+    try:
+        _atomic_write_text(path, text)
+    except Exception as exc:
+        if backup_path and os.path.isfile(backup_path):
+            _restore_text(path, _read_text(backup_path))
+        raise WireConfigError(f"模型配置写入失败：{exc}") from exc
+    return backup_path
+
+
+def _backup_text_file(path: str) -> str:
+    if not os.path.isfile(path):
+        return ""
+    backup_dir = os.path.join(os.path.dirname(path), ".loom-backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = os.path.join(backup_dir, f"{os.path.basename(path)}.{stamp}.bak")
+    _restore_text(backup_path, _read_text(path))
+    return backup_path
+
+
+def _atomic_write_text(path: str, text: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix=".loom-", suffix=".tmp", dir=os.path.dirname(path) or ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _read_text(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _restore_text(path: str, text: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
+def _toml_string(value: Any) -> str:
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _redact_secret_text(value: Any) -> str:

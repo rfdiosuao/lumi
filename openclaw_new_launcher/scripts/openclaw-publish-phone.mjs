@@ -285,7 +285,7 @@ async function readRuntimeContext() {
     try {
       return JSON.parse(await fs.readFile(filePath, 'utf8'));
     } catch (error) {
-      if (error?.code !== 'ENOENT') throw new Error(`Failed to read ${filePath}: ${error.message}`);
+      if (error?.code !== 'ENOENT') return {};
     }
   }
   return {};

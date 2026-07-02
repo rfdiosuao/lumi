@@ -15,13 +15,15 @@ interface SidebarProps {
   onStop: () => void;
 }
 
-type IconName = 'rocket' | 'box' | 'phone' | 'user' | 'capability' | 'model' | 'wrench' | 'settings' | 'power' | 'exit';
+type IconName = 'rocket' | 'box' | 'creative' | 'phone' | 'matrix' | 'user' | 'capability' | 'model' | 'wrench' | 'settings' | 'power' | 'exit';
 
 function iconFor(item: NavItem): IconName {
   const key = item.key;
   if (key === 'dashboard') return 'rocket';
   if (key === 'agents') return 'box';
+  if (key === 'creative') return 'creative';
   if (key === 'phone') return 'phone';
+  if (key === 'workbench') return 'matrix';
   if (key === 'capabilities') return 'capability';
   if (key === 'license') return 'user';
   if (key === 'models') return 'model';
@@ -71,6 +73,31 @@ const Icon: React.FC<{ name: IconName; className?: string }> = ({ name, classNam
       <svg {...common}>
         <rect x="7" y="2.8" width="10" height="18.4" rx="2.2" />
         <path d="M10.5 18.2h3" />
+      </svg>
+    );
+  }
+  if (name === 'creative') {
+    return (
+      <svg {...common}>
+        <path d="M5 17.5c2.8-6.7 7.1-10.6 13-11.8" />
+        <path d="M8.5 16.8c1.8-3.2 4.1-5.2 6.8-6" />
+        <path d="M4.5 19.5c2.4.2 4.5-.3 6.4-1.5" />
+        <path d="M16.4 4.2 19.8 7.6" />
+        <path d="M13.9 5.6 18.4 10" />
+      </svg>
+    );
+  }
+  if (name === 'matrix') {
+    return (
+      <svg {...common}>
+        <rect x="4" y="5" width="6" height="6" rx="1.2" />
+        <rect x="14" y="5" width="6" height="6" rx="1.2" />
+        <rect x="4" y="15" width="6" height="6" rx="1.2" />
+        <rect x="14" y="15" width="6" height="6" rx="1.2" />
+        <path d="M10 8h4" />
+        <path d="M10 18h4" />
+        <path d="M7 11v4" />
+        <path d="M17 11v4" />
       </svg>
     );
   }

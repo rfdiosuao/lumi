@@ -10,13 +10,54 @@ import os
 import re
 import json
 import subprocess
+import threading
+import time
+from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Request
 
 
 _DEVICE_ID_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _PHONE_SCRIPT_TIMEOUT_SEC = 240
+_DEFAULT_PHONE_PORT = 9527
+_PHONE_TASK_MODES = {"observe", "safe", "full"}
+_PHONE_TASK_PROFILES = {"fast", "standard", "deep"}
+_PHONE_DIRECT_STEP_TIMEOUT_SEC = 8
+_PHONE_TEMPLATE_STEP_TIMEOUT_SEC = 12
+_PHONE_AGENT_STEP_TIMEOUT_SEC = 15
+_PHONE_SCREENSHOT_CACHE_TTL_MS = 1200
+_PHONE_READ_CACHE_TTL_SEC = 30
+_PHONE_READ_CACHE_LOCK = threading.Lock()
+_PHONE_READ_CACHE: dict[str, dict] = {}
+_PHONE_SCREENSHOT_CACHE_LOCK = threading.Lock()
+_PHONE_SCREENSHOT_CACHE: dict[str, dict] = {}
+_PHONE_EVENT_SYNC_LOCK = threading.Lock()
+_PHONE_EVENT_SYNC_STATE: dict[str, dict] = {}
+_PHONE_TASK_ROUND_CAPS = {
+    "observe": 4,
+    "safe": 12,
+    "full": 30,
+}
+_PHONE_TASK_PROFILE_DEFAULTS = {
+    "fast": {
+        "observe": (45, 60, 4, 500),
+        "safe": (120, 135, 12, 500),
+        "full": (300, 315, 30, 500),
+    },
+    "standard": {
+        "observe": (90, 105, 1, 800),
+        "safe": (240, 260, 12, 800),
+        "full": (600, 620, 30, 800),
+    },
+    "deep": {
+        "observe": (180, 210, 1, 1200),
+        "safe": (600, 630, 12, 1200),
+        "full": (900, 930, 30, 1200),
+    },
+}
 _SYNC_SECRET_KEYS = {
     "apiKey",
     "api_key",
@@ -29,6 +70,8 @@ _SYNC_SECRET_KEYS = {
     "secret",
     "token",
 }
+
+OPENCLAW_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _phone_store_path(ctx) -> str:
@@ -44,10 +87,37 @@ def _normalize_url(value: object) -> str:
     text = _clip(value, 512).rstrip("/")
     if not text:
         return ""
+    text = (
+        text.replace("：", ":")
+        .replace("﹕", ":")
+        .replace("꞉", ":")
+        .replace("／", "/")
+        .replace("⁄", "/")
+        .replace("。", ".")
+        .replace("．", ".")
+        .replace("｡", ".")
+    )
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"^http:/(?!/)", "http://", text, flags=re.I)
+    text = re.sub(r"^https:/(?!/)", "https://", text, flags=re.I)
+    if text.startswith("//"):
+        text = f"http:{text}"
+    if "://" not in text:
+        text = f"http://{text}"
     parsed = urlparse(text)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("手机地址必须是 http:// 或 https:// 开头的完整地址")
-    return text
+        raise ValueError("请输入手机 IP，例如 192.168.1.78（LOOM 会自动使用 9527 端口）")
+    if parsed.username or parsed.password:
+        raise ValueError("手机地址不需要用户名或密码，请只输入手机 IP")
+    host = parsed.hostname or ""
+    if not host or any(ch.isspace() for ch in host):
+        raise ValueError("手机 IP 格式不正确")
+    try:
+        port = parsed.port or _DEFAULT_PHONE_PORT
+    except ValueError as exc:
+        raise ValueError("手机端口格式不正确") from exc
+    host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"{parsed.scheme}://{host_part}:{port}"
 
 
 def _normalize_device_id(value: object, fallback: str = "phone-1") -> str:
@@ -87,11 +157,1672 @@ def _script_path(ctx, script_name: str) -> str:
     return os.path.join(ctx.paths.base_path, "scripts", script_name)
 
 
+def _resolve_openclaw_root(base_root: str | os.PathLike[str] | None = None) -> Path:
+    return Path(base_root).resolve() if base_root else OPENCLAW_ROOT
+
+
+def node_executable(base_root: str | os.PathLike[str] | None = None, *, explicit: str | None = None) -> str:
+    explicit_value = str(explicit or "").strip()
+    if explicit_value:
+        return explicit_value
+    env_value = str(os.environ.get("OPENCLAW_NODE_EXE") or "").strip()
+    if env_value:
+        return env_value
+    root = _resolve_openclaw_root(base_root)
+    binary_name = "node.exe" if os.name == "nt" else "node"
+    candidates = (
+        root / "node" / binary_name,
+        root / "_up_" / "node" / binary_name,
+        root / "SystemData" / ".core" / "node" / binary_name,
+        root / "runtime" / "node" / binary_name,
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return binary_name
+
+
+def _phone_daemon_runtime_path(base_root: str | os.PathLike[str] | None = None) -> Path:
+    return _resolve_openclaw_root(base_root) / "data" / ".openclaw" / "runtime" / "phone-daemon.json"
+
+
+def _phone_daemon_health(runtime: dict) -> dict | None:
+    port = runtime.get("port")
+    token = str(runtime.get("token") or "").strip()
+    if not isinstance(port, int) or port <= 0:
+        return None
+    if not token:
+        return None
+    try:
+        request = UrlRequest(
+            f"http://127.0.0.1:{port}/health",
+            headers={"X-LOOM-PHONE-DAEMON-TOKEN": token},
+            method="GET",
+        )
+        with urlopen(request, timeout=3) as response:
+            text = response.read().decode("utf-8", errors="replace")
+        payload = json.loads(text) if text else {}
+    except (HTTPError, URLError, OSError, TimeoutError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) and payload.get("ok") is not False else None
+
+
+def build_phone_agent_command(
+    payload: dict,
+    *,
+    base_root: str | os.PathLike[str] | None = None,
+    node_path: str | None = None,
+) -> list[str]:
+    safe_payload = payload if isinstance(payload, dict) else {}
+    root = _resolve_openclaw_root(base_root)
+    cmd = [
+        node_executable(root, explicit=node_path),
+        str(root / "scripts" / "openclaw-phone-agent.mjs"),
+        "run",
+        "--daemon",
+        str(safe_payload.get("daemon") or "auto"),
+    ]
+    prompt = safe_payload.get("prompt")
+    if prompt:
+        cmd.extend(["--prompt", str(prompt)])
+    mode = str(safe_payload.get("mode") or "").strip()
+    if mode:
+        cmd.extend(["--mode", mode])
+    option_pairs = (
+        ("timeoutSec", "--timeout-sec"),
+        ("maxWaitSec", "--max-wait-sec"),
+        ("maxRounds", "--max-rounds"),
+        ("pollMs", "--poll-ms"),
+        ("executionLayer", "--execution-layer"),
+        ("stepTimeoutSec", "--step-timeout-sec"),
+    )
+    for key, flag in option_pairs:
+        value = safe_payload.get(key)
+        if value not in (None, ""):
+            cmd.extend([flag, str(value)])
+    template_name = safe_payload.get("template") or safe_payload.get("templateName")
+    if template_name:
+        cmd.extend(["--template", str(template_name)])
+    if safe_payload.get("json", True):
+        cmd.append("--json")
+    return cmd
+
+
+def start_phone_daemon(
+    *,
+    base_root: str | os.PathLike[str] | None = None,
+    node_path: str | None = None,
+) -> dict:
+    root = _resolve_openclaw_root(base_root)
+    current = phone_daemon_status(base_root=root)
+    if current.get("running"):
+        result = dict(current)
+        result.update({"ok": True, "running": True, "state": "running", "alreadyRunning": True})
+        return result
+    proc = subprocess.Popen(
+        [node_executable(root, explicit=node_path), str(root / "scripts" / "openclaw-phone-daemon.mjs")],
+        cwd=str(root),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return {"ok": True, "pid": proc.pid, "running": True, "state": "starting"}
+
+
+def read_phone_daemon_runtime(*, base_root: str | os.PathLike[str] | None = None) -> dict:
+    path = _phone_daemon_runtime_path(base_root)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def phone_daemon_status(*, base_root: str | os.PathLike[str] | None = None) -> dict:
+    try:
+        runtime = read_phone_daemon_runtime(base_root=base_root)
+    except FileNotFoundError:
+        return {"ok": True, "running": False, "state": "stopped"}
+    health = _phone_daemon_health(runtime)
+    if not health:
+        return {
+            "ok": True,
+            "running": False,
+            "state": "stopped",
+            "pid": runtime.get("pid"),
+            "port": runtime.get("port"),
+        }
+    return {
+        "ok": True,
+        "running": True,
+        "state": "running",
+        "pid": runtime.get("pid"),
+        "port": runtime.get("port"),
+        "startedAt": runtime.get("startedAt"),
+        "sessions": health.get("sessions"),
+    }
+
+
+def stop_phone_daemon(*, base_root: str | os.PathLike[str] | None = None) -> dict:
+    try:
+        runtime = read_phone_daemon_runtime(base_root=base_root)
+    except FileNotFoundError:
+        return {"ok": True, "running": False, "state": "stopped", "stopped": False, "reason": "not_running"}
+    port = runtime.get("port")
+    if not isinstance(port, int) or port <= 0:
+        return {"ok": True, "running": False, "state": "stopped", "stopped": False, "reason": "invalid_runtime"}
+    request = UrlRequest(
+        f"http://127.0.0.1:{port}/shutdown",
+        data=b"{}",
+        method="POST",
+        headers={
+            "X-LOOM-PHONE-DAEMON-TOKEN": str(runtime.get("token") or ""),
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            text = response.read().decode("utf-8", errors="replace")
+        payload = json.loads(text) if text else {}
+    except (HTTPError, URLError, OSError, TimeoutError, ValueError):
+        return {"ok": True, "running": False, "state": "stopped", "stopped": False, "reason": "not_running"}
+    return {
+        "ok": True,
+        "running": False,
+        "state": "stopped",
+        "stopped": bool(payload.get("ok", True)),
+    }
+
+
 def _safe_prompt(value: object) -> str:
     text = str(value or "").strip()
     if "\x00" in text:
         raise ValueError("任务内容包含非法字符")
     return text[:2000]
+
+
+def _phone_task_mode(value: object) -> str:
+    mode = str(value or "safe").strip().lower()
+    aliases = {
+        "read": "observe",
+        "readonly": "observe",
+        "read_only": "observe",
+        "observe_only": "observe",
+        "confirm": "safe",
+        "safe_action": "safe",
+        "auto": "full",
+        "full_access": "full",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in _PHONE_TASK_MODES:
+        raise ValueError("手机任务模式不支持，请选择 observe / safe / full")
+    return mode
+
+
+def _phone_task_profile(value: object) -> str:
+    profile = str(value or "fast").strip().lower()
+    aliases = {
+        "quick": "fast",
+        "demo": "fast",
+        "normal": "standard",
+        "default": "standard",
+        "stable": "standard",
+        "slow": "deep",
+        "complex": "deep",
+    }
+    profile = aliases.get(profile, profile)
+    if profile not in _PHONE_TASK_PROFILES:
+        raise ValueError("手机任务性能档位不支持，请选择 fast / standard / deep")
+    return profile
+
+
+def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _phone_task_tuning(mode: str, profile: str, body: dict) -> tuple[int, int, int, int]:
+    timeout_default, max_wait_default, rounds_default, poll_default = _PHONE_TASK_PROFILE_DEFAULTS[profile][mode]
+    timeout_sec = _bounded_int(body.get("timeoutSec"), default=timeout_default, minimum=30, maximum=1200)
+    max_wait_sec = _bounded_int(body.get("maxWaitSec"), default=max_wait_default, minimum=45, maximum=1260)
+    max_rounds = _bounded_int(body.get("maxRounds"), default=rounds_default, minimum=1, maximum=_PHONE_TASK_ROUND_CAPS[mode])
+    poll_ms = _bounded_int(body.get("pollMs"), default=poll_default, minimum=500, maximum=1200)
+    return timeout_sec, max_wait_sec, max_rounds, poll_ms
+
+
+def _phone_direct_action(value: object, prompt: str = "") -> str:
+    action = str(value or "").strip().lower()
+    text = re.sub(r"\s+", "", str(prompt or "").strip().lower())
+    if not action:
+        if re.fullmatch(r"(back|pressback|返回|返回上一页|上一页|后退)", text or ""):
+            action = "back"
+        elif re.fullmatch(r"(home|presshome|回到桌面|返回桌面|桌面|主页|回主页)", text or ""):
+            action = "home"
+    aliases = {
+        "press_back": "back",
+        "返回": "back",
+        "上一页": "back",
+        "press_home": "home",
+        "桌面": "home",
+        "主页": "home",
+    }
+    action = aliases.get(action, action)
+    return action if action in {"back", "home"} else ""
+
+
+def _phone_explicit_action_body(ctx, body: dict) -> dict:
+    if "actionBody" in body:
+        raw = body.get("actionBody")
+    else:
+        raw = body.get("action_body")
+    if raw in (None, ""):
+        return _phone_cached_selector_action_body(ctx, body)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("actionBody 必须是 JSON 对象") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("actionBody 必须是 JSON 对象")
+    action = _phone_action_body_name(raw.get("action") or raw.get("type"))
+    if not action:
+        raise ValueError("actionBody 必须包含 action")
+    action_body = {**raw, "action": action}
+    _phone_apply_action_body_overrides(action_body, body)
+    return action_body
+
+
+def _phone_cached_selector_action_body(ctx, body: dict) -> dict:
+    selector_index = _phone_selector_index(body)
+    if selector_index is None:
+        return {}
+    fast_path = _clip(body.get("fastPath") or body.get("fast_path") or "observe_fast", 40) or "observe_fast"
+    key = _phone_read_cache_key(ctx, body, fast_path)
+    now = time.monotonic()
+    with _PHONE_READ_CACHE_LOCK:
+        item = _PHONE_READ_CACHE.get(key)
+        if not item:
+            raise ValueError("selectorIndex requires a recent /api/phone/read result")
+        if now - float(item.get("updatedAt") or 0) > _PHONE_READ_CACHE_TTL_SEC:
+            _PHONE_READ_CACHE.pop(key, None)
+            raise ValueError("cached selectors expired; read screen again")
+        expected_hash = _clip(body.get("screenHash") or body.get("screen_hash") or body.get("knownHash") or body.get("known_hash"), 80)
+        cached_hash = str(item.get("screenHash") or "").strip()
+        if expected_hash and cached_hash and expected_hash != cached_hash:
+            raise ValueError("selectorIndex screenHash mismatch; read screen again")
+        selectors = item.get("selectors") if isinstance(item.get("selectors"), list) else []
+        if selector_index < 0 or selector_index >= len(selectors):
+            raise ValueError("selectorIndex out of range; read screen again")
+        selector = selectors[selector_index]
+    if not isinstance(selector, dict):
+        raise ValueError("cached selector is invalid; read screen again")
+    action_body = _phone_compact_action_body(selector.get("actionBody") if isinstance(selector.get("actionBody"), dict) else selector)
+    if not action_body:
+        raise ValueError("cached selector has no actionBody; read screen again")
+    _phone_apply_action_body_overrides(action_body, body)
+    return action_body
+
+
+def _phone_apply_action_body_overrides(action_body: dict, request_body: dict) -> None:
+    if "observeAfter" in request_body or "observe_after" in request_body:
+        raw = request_body.get("observeAfter", request_body.get("observe_after"))
+        action_body["observeAfter"] = _phone_bool(raw)
+
+
+def _phone_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _phone_selector_index(body: dict) -> int | None:
+    if "selectorIndex" in body or "selector_index" in body:
+        raw = body.get("selectorIndex", body.get("selector_index"))
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("selectorIndex must be an integer") from None
+    if "selectorNumber" in body or "selector_number" in body:
+        raw = body.get("selectorNumber", body.get("selector_number"))
+        try:
+            return int(raw) - 1
+        except (TypeError, ValueError):
+            raise ValueError("selectorNumber must be an integer") from None
+    return None
+
+
+def _phone_prompt_for_action_body(action_body: dict) -> str:
+    action = _clip(action_body.get("action"), 40) or "action_fast"
+    target = _clip(
+        action_body.get("text")
+        or action_body.get("contentDescription")
+        or action_body.get("resourceId")
+        or action_body.get("nodeId"),
+        120,
+    )
+    return f"{action} {target}".strip()
+
+
+def _phone_action_body_name(value: object) -> str:
+    text = _clip(value, 40).strip()
+    if not text:
+        return ""
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", text)
+    text = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
+    aliases = {
+        "wait_element": "wait_element",
+        "wait_for_element": "wait_element",
+        "wait_until_element": "wait_element",
+        "wait_text": "wait_element",
+        "wait_for_text": "wait_element",
+        "click_text": "click_text",
+        "tap_text": "tap_text",
+        "click_node": "click_node",
+        "tap_node": "tap_node",
+        "input_text": "input_text",
+    }
+    return aliases.get(text, text)
+
+
+def _phone_template_name(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"[^a-z0-9_.-]+", "-", text).strip(".-_")
+    return text[:80]
+
+
+def _phone_template_from_prompt(prompt: str) -> str:
+    text = re.sub(r"\s+", "", str(prompt or "").strip().lower())
+    if not text:
+        return ""
+    if any(token in text for token in {"打开系统设置", "打开设置", "系统设置", "settings首页", "opensettings"}):
+        return "open-settings"
+    if any(token in text for token in {"刷新页面", "下拉刷新", "refreshscreen"}):
+        return "refresh-screen"
+    return ""
+
+
+def _phone_execution_layer(*, direct_action: str, template_name: str) -> str:
+    if direct_action:
+        return "direct"
+    if template_name:
+        return "template"
+    return "agent"
+
+
+def _phone_step_timeout_sec(layer: str, profile: str) -> int:
+    if layer == "direct":
+        return _PHONE_DIRECT_STEP_TIMEOUT_SEC
+    if layer == "template":
+        return _PHONE_TEMPLATE_STEP_TIMEOUT_SEC
+    if profile == "deep":
+        return 20
+    return _PHONE_AGENT_STEP_TIMEOUT_SEC
+
+
+def _phone_max_wait_for_layer(layer: str, profile: str, max_wait_sec: int, max_rounds: int, step_timeout_sec: int) -> int:
+    if layer == "direct":
+        return min(max_wait_sec, step_timeout_sec + 6)
+    if layer == "template":
+        return min(max_wait_sec, 25)
+    if profile == "fast":
+        return min(max_wait_sec, max(30, min(75, max_rounds * 5 + step_timeout_sec)))
+    return max_wait_sec
+
+
+def _phone_execution_steps(layer: str) -> list[dict]:
+    if layer == "direct":
+        return [
+            {"id": "prepare", "label": "准备连接", "timeoutSec": _PHONE_DIRECT_STEP_TIMEOUT_SEC},
+            {"id": "execute", "label": "直连执行", "timeoutSec": _PHONE_DIRECT_STEP_TIMEOUT_SEC},
+            {"id": "collect", "label": "收集结果", "timeoutSec": _PHONE_DIRECT_STEP_TIMEOUT_SEC},
+        ]
+    if layer == "template":
+        return [
+            {"id": "prepare", "label": "准备模板", "timeoutSec": _PHONE_TEMPLATE_STEP_TIMEOUT_SEC},
+            {"id": "execute", "label": "模板执行", "timeoutSec": _PHONE_TEMPLATE_STEP_TIMEOUT_SEC},
+            {"id": "collect", "label": "收集结果", "timeoutSec": _PHONE_TEMPLATE_STEP_TIMEOUT_SEC},
+        ]
+    return [
+        {"id": "prepare", "label": "准备 Agent", "timeoutSec": _PHONE_AGENT_STEP_TIMEOUT_SEC},
+        {"id": "execute", "label": "提交并轮询", "timeoutSec": _PHONE_AGENT_STEP_TIMEOUT_SEC},
+        {"id": "collect", "label": "收集结果", "timeoutSec": _PHONE_AGENT_STEP_TIMEOUT_SEC},
+    ]
+
+
+def _phone_execution_contract(
+    *,
+    layer: str,
+    profile: str = "fast",
+    mode: str = "safe",
+    timeout_sec: int = 0,
+    max_wait_sec: int = 0,
+    max_rounds: int = 0,
+    poll_ms: int = 0,
+    step_timeout_sec: int = 0,
+    direct_action: str = "",
+    template_name: str = "",
+) -> dict:
+    step_timeout_sec = max(5, min(int(step_timeout_sec or _phone_step_timeout_sec(layer, profile)), 30))
+    steps = []
+    for step in _phone_execution_steps(layer):
+        next_step = dict(step)
+        next_step["timeoutSec"] = min(int(next_step.get("timeoutSec") or step_timeout_sec), step_timeout_sec)
+        steps.append(next_step)
+    return {
+        "layer": layer,
+        "profile": profile,
+        "mode": mode,
+        "directAction": direct_action,
+        "template": template_name,
+        "stepTimeoutSec": step_timeout_sec,
+        "steps": steps,
+        "budget": {
+            "timeoutSec": int(timeout_sec or 0),
+            "maxWaitSec": int(max_wait_sec or timeout_sec or 0),
+            "maxRounds": int(max_rounds or 0),
+            "pollMs": int(poll_ms or 0),
+        },
+    }
+
+
+def _phone_agent_run_args(
+    *,
+    prompt: str,
+    mode: str,
+    timeout_sec: int,
+    max_wait_sec: int,
+    max_rounds: int,
+    poll_ms: int,
+    execution_layer: str,
+    step_timeout_sec: int,
+    template_name: str = "",
+) -> list[str]:
+    return build_phone_agent_command(
+        {
+            "prompt": prompt,
+            "mode": mode,
+            "daemon": "auto",
+            "timeoutSec": timeout_sec,
+            "maxWaitSec": max_wait_sec,
+            "maxRounds": max_rounds,
+            "pollMs": poll_ms,
+            "executionLayer": execution_layer,
+            "stepTimeoutSec": step_timeout_sec,
+            "template": template_name,
+            "json": True,
+        }
+    )[2:]
+
+
+def _phone_progress_fields(kind: str, execution: dict, step_id: str, message: str) -> dict:
+    layer = str(execution.get("layer") or "agent")
+    step_timeout = int(execution.get("stepTimeoutSec") or _PHONE_AGENT_STEP_TIMEOUT_SEC)
+    return {
+        "message": message,
+        "tone": "neutral",
+        "phase": f"{kind}.{layer}.{step_id}",
+        "commandId": kind,
+        "executionLayer": layer,
+        "currentStep": step_id,
+        "stepTimeoutSec": step_timeout,
+        "execution": execution,
+    }
+
+
+def _phone_read_cache_key(ctx, body: dict | None, fast_path: str) -> str:
+    body = body or {}
+    base_path = str(getattr(getattr(ctx, "paths", None), "base_path", "") or "")
+    device_id = str(
+        body.get("deviceId")
+        or body.get("device_id")
+        or body.get("phoneDeviceId")
+        or "default"
+    ).strip() or "default"
+    return f"{base_path}|{device_id}|{fast_path or 'observe_fast'}"
+
+
+def _phone_cached_screen_hash(ctx, body: dict | None, fast_path: str) -> str:
+    key = _phone_read_cache_key(ctx, body, fast_path)
+    now = time.monotonic()
+    with _PHONE_READ_CACHE_LOCK:
+        item = _PHONE_READ_CACHE.get(key)
+        if not item:
+            return ""
+        if now - float(item.get("updatedAt") or 0) > _PHONE_READ_CACHE_TTL_SEC:
+            _PHONE_READ_CACHE.pop(key, None)
+            return ""
+        return str(item.get("screenHash") or "").strip()
+
+
+def _phone_screenshot_cache_key(ctx, body: dict | None) -> str:
+    body = body or {}
+    screen_hash = _clip(
+        body.get("screenHash")
+        or body.get("screen_hash")
+        or body.get("knownHash")
+        or body.get("known_hash"),
+        80,
+    )
+    if not screen_hash:
+        return ""
+    base_path = str(getattr(getattr(ctx, "paths", None), "base_path", "") or "")
+    device_id = str(
+        body.get("deviceId")
+        or body.get("device_id")
+        or body.get("phoneDeviceId")
+        or "default"
+    ).strip() or "default"
+    return f"{base_path}|{device_id}|{screen_hash}"
+
+
+def _phone_screenshot_cache_body(ctx, body: dict | None) -> dict:
+    next_body = dict(body or {})
+    screen_hash = _clip(
+        next_body.get("screenHash")
+        or next_body.get("screen_hash")
+        or next_body.get("knownHash")
+        or next_body.get("known_hash"),
+        80,
+    )
+    if not screen_hash:
+        cached_hash = _phone_cached_screen_hash(ctx, next_body, "observe_fast")
+        if cached_hash:
+            next_body["screenHash"] = cached_hash
+            next_body["screenHashSource"] = "read_cache"
+    return next_body
+
+
+def _phone_cached_screenshot_result(ctx, body: dict | None) -> dict:
+    key = _phone_screenshot_cache_key(ctx, body)
+    if not key:
+        return {}
+    now = time.monotonic()
+    ttl_sec = max(0.1, _PHONE_SCREENSHOT_CACHE_TTL_MS / 1000)
+    with _PHONE_SCREENSHOT_CACHE_LOCK:
+        item = _PHONE_SCREENSHOT_CACHE.get(key)
+        if not item:
+            return {}
+        if now - float(item.get("updatedAt") or 0) > ttl_sec:
+            _PHONE_SCREENSHOT_CACHE.pop(key, None)
+            return {}
+        try:
+            return json.loads(json.dumps(item.get("result") or {}, ensure_ascii=False))
+        except (TypeError, json.JSONDecodeError):
+            return dict(item.get("result") or {})
+
+
+def _phone_mark_cached_screenshot_result(result: dict, started_at: float, screen_hash: str = "") -> dict:
+    cached = dict(result or {})
+    metrics = dict(cached.get("metrics") if isinstance(cached.get("metrics"), dict) else {})
+    metrics["mode"] = "screenshot"
+    metrics["cacheHit"] = True
+    metrics["screenshotMs"] = 0
+    metrics["totalMs"] = max(0, int((time.monotonic() - started_at) * 1000))
+    metrics.setdefault("toolCallMs", 0)
+    metrics.setdefault("screenTreeMs", 0)
+    metrics.setdefault("llmRoundMs", 0)
+    metrics.setdefault("rounds", 0)
+    if screen_hash:
+        metrics["screenHash"] = screen_hash
+        cached["screenHash"] = screen_hash
+    cached["metrics"] = metrics
+    cached["success"] = True
+    cached["cacheHit"] = True
+    cached["currentStep"] = "cache"
+    return cached
+
+
+def _remember_phone_screenshot_result(ctx, body: dict | None, result: dict) -> None:
+    if not isinstance(result, dict) or result.get("success") is False:
+        return
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    if metrics.get("cacheHit") is True:
+        return
+    cache_body = dict(body or {})
+    screen_hash = _clip(
+        cache_body.get("screenHash")
+        or cache_body.get("screen_hash")
+        or cache_body.get("knownHash")
+        or cache_body.get("known_hash")
+        or result.get("screenHash")
+        or metrics.get("screenHash"),
+        80,
+    )
+    if screen_hash:
+        cache_body["screenHash"] = screen_hash
+        result.setdefault("screenHash", screen_hash)
+        metrics["screenHash"] = screen_hash
+        result["metrics"] = metrics
+        read_cache_key = _phone_read_cache_key(ctx, cache_body, "observe_fast")
+        with _PHONE_READ_CACHE_LOCK:
+            _PHONE_READ_CACHE[read_cache_key] = {
+                "screenHash": screen_hash,
+                "selectors": [],
+                "updatedAt": time.monotonic(),
+            }
+    key = _phone_screenshot_cache_key(ctx, cache_body)
+    if not key:
+        return
+    with _PHONE_SCREENSHOT_CACHE_LOCK:
+        _PHONE_SCREENSHOT_CACHE[key] = {
+            "updatedAt": time.monotonic(),
+            "result": result,
+        }
+
+
+def _extract_screen_hash_from_stdout(stdout: str) -> str:
+    try:
+        payload = json.loads(stdout or "{}")
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    for candidate in (
+        payload.get("screenHash"),
+        payload.get("screen_hash"),
+        data.get("screenHash"),
+        data.get("screen_hash"),
+    ):
+        text = str(candidate or "").strip()
+        if text:
+            return text[:80]
+    return ""
+
+
+def _phone_observation_fields_from_stdout(stdout: str) -> dict:
+    payload = _phone_stdout_payload(stdout)
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    fields: dict[str, object] = {}
+    for key in ("screenHash", "summary", "currentPackage", "activity"):
+        value = payload.get(key)
+        if value in (None, ""):
+            value = data.get(key)
+        text = str(value or "").strip()
+        if text:
+            fields[key] = text[:1000] if key == "summary" else text[:160]
+    selectors = _phone_compact_selectors_from_payload(payload, data)
+    if selectors:
+        fields["selectors"] = selectors
+        fields["selectorCount"] = len(selectors)
+    return fields
+
+
+def _selected_phone_matrix_device(ctx) -> dict:
+    try:
+        store = ctx.read_json(_phone_store_path(ctx), {"selectedDeviceId": "", "devices": []})
+    except Exception:
+        return {}
+    if not isinstance(store, dict):
+        return {}
+    devices = store.get("devices")
+    if not isinstance(devices, list):
+        return {}
+    selected_id = str(store.get("selectedDeviceId") or "").strip()
+    selected = next(
+        (
+            item
+            for item in devices
+            if isinstance(item, dict) and str(item.get("id") or item.get("deviceId") or "").strip() == selected_id
+        ),
+        None,
+    )
+    if selected is None:
+        selected = next((item for item in devices if isinstance(item, dict)), None)
+    return dict(selected or {})
+
+
+def _phone_matrix_presence_time() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+
+
+def _phone_matrix_last_result(result: dict) -> str:
+    report = result.get("agentReport") if isinstance(result.get("agentReport"), dict) else {}
+    headline = _clip(report.get("headline"), 120)
+    if headline:
+        return headline
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    mode = str(result.get("mode") or metrics.get("mode") or result.get("executionLayer") or "").strip()
+    total_ms = metrics.get("totalMs")
+    if isinstance(total_ms, (int, float)):
+        return f"{mode or 'phone'} {int(total_ms)}ms"
+    return mode or str(result.get("currentStep") or "phone")[:80]
+
+
+def _phone_matrix_screen_summary(kind: str, result: dict, payload: dict) -> str:
+    if kind == "phone.status":
+        return ""
+    report = result.get("agentReport") if isinstance(result.get("agentReport"), dict) else {}
+    headline = _clip(report.get("headline"), 300)
+    if headline:
+        return headline
+    summary = _clip(result.get("summary") or payload.get("summary") or payload.get("backendSummary"), 300)
+    if summary:
+        return summary
+    frame = payload.get("frame") if isinstance(payload.get("frame"), dict) else {}
+    current_screen = frame.get("currentScreen") if isinstance(frame.get("currentScreen"), dict) else {}
+    package_name = _clip(
+        result.get("currentPackage")
+        or payload.get("currentPackage")
+        or current_screen.get("packageName")
+        or current_screen.get("foregroundPackageName"),
+        80,
+    )
+    node_count = current_screen.get("nodeCount")
+    if package_name and isinstance(node_count, (int, float)):
+        return f"{package_name} · {int(node_count)} nodes"
+    return package_name or "手机任务已返回结果"
+
+
+def _phone_status_matrix_summary(status: dict, fallback: str = "") -> str:
+    if not status:
+        return fallback or "手机连接状态未知"
+    parts = []
+    if status.get("online") is True:
+        parts.append("在线")
+    elif status.get("online") is False:
+        parts.append("离线")
+    if status.get("accessibilityRunning") is True:
+        parts.append("无障碍运行")
+    elif status.get("accessibilityRunning") is False:
+        parts.append("无障碍未运行")
+    if status.get("screenOn") is True:
+        parts.append("屏幕亮")
+    if status.get("deviceLocked") is True:
+        parts.append("已锁屏")
+    return " · ".join(parts) or fallback or "手机状态已更新"
+
+
+def _sync_phone_matrix_presence(ctx, kind: str, result: dict) -> None:
+    if not isinstance(result, dict):
+        return
+    try:
+        from core.phone_matrix import MatrixControlPlane
+
+        matrix = MatrixControlPlane(ctx.paths)
+        payload = _phone_stdout_payload(str(result.get("stdout") or ""))
+        updates: list[dict] = []
+        if kind == "phone.status":
+            selected_id = _clip(payload.get("selectedDeviceId"), 100)
+            rows = payload.get("results")
+            if isinstance(rows, list):
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
+                    device = item.get("device") if isinstance(item.get("device"), dict) else {}
+                    status = item.get("status") if isinstance(item.get("status"), dict) else {}
+                    device_id = _clip(device.get("id") or device.get("deviceId") or selected_id, 100)
+                    if not device_id:
+                        continue
+                    ok = item.get("ok")
+                    online = bool(status.get("online")) if "online" in status else bool(ok)
+                    updates.append({
+                        "deviceId": device_id,
+                        "name": _clip(device.get("name") or device_id, 80),
+                        "group": _clip(device.get("group") or "本机手机", 80),
+                        "online": online,
+                        "heartbeatAt": _phone_matrix_presence_time(),
+                        "currentScreenSummary": _phone_status_matrix_summary(status, _clip(item.get("error"), 200)),
+                        "failureCount": 0 if online else 1,
+                        "lastResult": _phone_matrix_last_result(result),
+                    })
+        elif kind in {"phone.read", "phone.screenshot", "phone.task"} and result.get("success") is True:
+            selected = _selected_phone_matrix_device(ctx)
+            device_id = _clip(selected.get("id") or selected.get("deviceId") or selected.get("name") or "phone-1", 100)
+            updates.append({
+                "deviceId": device_id,
+                "name": _clip(selected.get("name") or device_id, 80),
+                "group": _clip(selected.get("group") or "本机手机", 80),
+                "online": True,
+                "heartbeatAt": _phone_matrix_presence_time(),
+                "currentScreenSummary": _phone_matrix_screen_summary(kind, result, payload),
+                "failureCount": 0,
+                "lastResult": _phone_matrix_last_result(result),
+            })
+        for update in updates:
+            matrix.register_device(update)
+    except Exception:
+        return
+
+
+def _parse_phone_sse_events(lines) -> list[dict]:
+    events: list[dict] = []
+    current: dict[str, object] = {"event": "message"}
+    data_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current, data_lines
+        if not data_lines and current == {"event": "message"}:
+            return
+        data_text = "\n".join(data_lines)
+        data_value: object = data_text
+        if data_text.strip():
+            try:
+                data_value = json.loads(data_text)
+            except json.JSONDecodeError:
+                data_value = data_text
+        event = dict(current)
+        event["data"] = data_value
+        events.append(event)
+        current = {"event": "message"}
+        data_lines = []
+
+    for raw in lines:
+        line = str(raw or "").rstrip("\r\n")
+        if line == "":
+            flush()
+            continue
+        if line.startswith(":"):
+            continue
+        field, sep, value = line.partition(":")
+        if sep and value.startswith(" "):
+            value = value[1:]
+        if field == "data":
+            data_lines.append(value)
+        elif field == "event":
+            current["event"] = value or "message"
+        elif field == "id":
+            current["id"] = value
+        elif field == "retry":
+            try:
+                current["retry"] = int(value)
+            except ValueError:
+                current["retry"] = value
+    flush()
+    return events
+
+
+def _phone_event_matrix_patch(event: dict, device: dict | str | None = None) -> dict:
+    if not isinstance(event, dict):
+        return {}
+    name = _clip(event.get("event") or event.get("type"), 80)
+    data = event.get("data")
+    if name not in {"snapshot", "heartbeat"} or not isinstance(data, dict):
+        return {}
+    status = data.get("status") if isinstance(data.get("status"), dict) else {}
+    metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+    tasks = data.get("tasks") if isinstance(data.get("tasks"), list) else []
+    if isinstance(device, str):
+        device_info = {"id": device}
+    else:
+        device_info = dict(device or {})
+    device_id = _clip(device_info.get("id") or device_info.get("deviceId") or event.get("deviceId") or "phone-1", 100)
+    package_name = _clip(status.get("currentPackage") or status.get("packageName"), 120)
+    app_name = _clip(status.get("currentApp") or status.get("appName"), 120)
+    parts = []
+    if app_name or package_name:
+        parts.append(app_name or package_name)
+    if package_name and app_name and package_name != app_name:
+        parts.append(package_name)
+    if status.get("accessibilityRunning") is True:
+        parts.append("accessibility on")
+    elif status.get("accessibilityRunning") is False:
+        parts.append("accessibility off")
+    if status.get("screenOn") is True:
+        parts.append("screen on")
+    if status.get("deviceLocked") is True:
+        parts.append("locked")
+    running_tasks = [item for item in tasks if isinstance(item, dict) and str(item.get("status") or "") == "running"]
+    primary_task = running_tasks[0] if running_tasks else next((item for item in tasks if isinstance(item, dict)), {})
+    task_reports = [
+        item.get("agentReport")
+        for item in tasks
+        if isinstance(item, dict) and isinstance(item.get("agentReport"), dict)
+    ]
+    primary_report = task_reports[0] if task_reports else {}
+    if task_reports:
+        headline = _phone_public_text(primary_report.get("headline"), 180)
+        if headline:
+            parts.insert(0, headline)
+    if running_tasks:
+        parts.append(f"{len(running_tasks)} running task")
+    current_task_id = _clip(
+        status.get("currentTaskId")
+        or primary_task.get("taskId")
+        or primary_task.get("id")
+        or primary_task.get("currentTaskId"),
+        120,
+    )
+    current_step = _phone_public_text(
+        primary_report.get("currentStep")
+        or primary_task.get("currentStep")
+        or primary_task.get("status"),
+        160,
+    )
+    headline = _phone_public_text(primary_report.get("headline"), 240)
+    needs_codex = any(
+        isinstance(report, dict) and report.get("needsCodex") is True
+        for report in task_reports
+    )
+    busy = bool(status.get("busy") is True or status.get("taskRunning") is True or running_tasks or current_task_id)
+    total_ms = metrics.get("totalMs")
+    latency_ms = _phone_event_latency_ms(event, data)
+    last_result = f"event_stream {name}"
+    if isinstance(total_ms, (int, float)):
+        last_result = f"{last_result} {int(total_ms)}ms"
+    patch = {
+        "deviceId": device_id,
+        "name": _clip(device_info.get("name") or device_id, 80),
+        "group": _clip(device_info.get("group") or "local phones", 80),
+        "online": bool(status.get("online", True)),
+        "heartbeatAt": _phone_matrix_presence_time(),
+        "lastEventAt": _phone_matrix_presence_time(),
+        "streamStatus": "connected",
+        "streamLatencyMs": latency_ms,
+        "currentPackage": package_name,
+        "foregroundApp": app_name,
+        "accessibilityRunning": status.get("accessibilityRunning") if isinstance(status.get("accessibilityRunning"), bool) else None,
+        "screenOn": status.get("screenOn") if isinstance(status.get("screenOn"), bool) else None,
+        "deviceLocked": status.get("deviceLocked") if isinstance(status.get("deviceLocked"), bool) else None,
+        "runningTaskCount": len(running_tasks),
+        "currentScreenSummary": " | ".join(parts) or "phone event stream alive",
+        "failureCount": 0,
+        "lastResult": last_result,
+        "busy": busy,
+    }
+    if current_task_id:
+        patch["currentTaskId"] = current_task_id
+    if current_step:
+        patch["currentStep"] = current_step
+    if headline:
+        patch["headline"] = headline
+    if needs_codex:
+        patch["needsCodex"] = True
+    return patch
+
+
+def _phone_event_latency_ms(event: dict, data: dict) -> int:
+    raw = data.get("timestampMs")
+    if raw in (None, ""):
+        raw = event.get("timestampMs")
+    try:
+        timestamp_ms = float(raw)
+    except (TypeError, ValueError):
+        return 0
+    if timestamp_ms <= 0:
+        return 0
+    return max(0, int(time.time() * 1000 - timestamp_ms))
+
+
+def _apply_phone_event_to_matrix(ctx, event: dict, device: dict | None = None) -> None:
+    patch = _phone_event_matrix_patch(event, device or _selected_phone_matrix_device(ctx))
+    if not patch:
+        return
+    try:
+        from core.phone_matrix import MatrixControlPlane
+
+        MatrixControlPlane(ctx.paths).register_device(patch)
+    except Exception:
+        return
+
+
+def _phone_event_sync_key(device_id: str = "") -> str:
+    return _normalize_device_id(device_id, "__default__")
+
+
+def _phone_event_sync_public(state: dict | None) -> dict:
+    if not isinstance(state, dict):
+        return {"running": False}
+    process = state.get("process")
+    running = bool(process is not None and getattr(process, "poll", lambda: 1)() is None)
+    state_name = "running" if running else ("stopped" if state.get("finishedAt") or state.get("returncode") is not None else "starting")
+    last_event_at = state.get("lastEventAt")
+    last_heartbeat_at = state.get("lastHeartbeatAt")
+    last_summary = state.get("lastSummary") if isinstance(state.get("lastSummary"), dict) else {}
+    stopped_by = _clip(last_summary.get("stoppedBy") or state.get("stoppedBy"), 80)
+    stale = bool(
+        running
+        and isinstance(last_event_at, (int, float))
+        and time.time() - float(last_event_at) > 15
+    )
+    public = {
+        "running": running,
+        "state": state_name,
+        "restartable": not running,
+        "stale": stale,
+        "deviceId": state.get("deviceId") or "",
+        "startedAt": state.get("startedAt") or "",
+        "finishedAt": state.get("finishedAt") or "",
+        "eventCount": int(state.get("eventCount") or 0),
+        "lastEvent": _phone_public_event(state.get("lastEvent")) if isinstance(state.get("lastEvent"), dict) else None,
+        "lastEventAt": last_event_at if isinstance(last_event_at, (int, float)) else None,
+        "lastHeartbeatAt": last_heartbeat_at if isinstance(last_heartbeat_at, (int, float)) else None,
+        "lastError": _clip(state.get("lastError"), 500),
+        "lastSummary": _secret_safe_payload(last_summary),
+        "stoppedBy": stopped_by,
+        "returncode": state.get("returncode"),
+        "maxSec": int(state.get("maxSec") or 0),
+        "maxEvents": int(state.get("maxEvents") or 0),
+    }
+    return public
+
+
+def _phone_event_sync_status(device_id: str = "") -> dict:
+    key = _phone_event_sync_key(device_id)
+    with _PHONE_EVENT_SYNC_LOCK:
+        return _phone_event_sync_public(_PHONE_EVENT_SYNC_STATE.get(key))
+
+
+def _close_phone_event_process_pipes(process) -> None:
+    for stream in (getattr(process, "stdout", None), getattr(process, "stderr", None)):
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:
+            pass
+
+
+def _record_phone_event_sync_event(ctx, key: str, state: dict, event: dict) -> None:
+    if event.get("type") == "phone_event_sync_summary":
+        with _PHONE_EVENT_SYNC_LOCK:
+            state["lastSummary"] = _secret_safe_payload(event)
+            state["stoppedBy"] = _clip(event.get("stoppedBy"), 80)
+            state["lastEventAt"] = time.time()
+        return
+    selected = _selected_phone_matrix_device(ctx)
+    if state.get("deviceId"):
+        selected["id"] = state.get("deviceId")
+    elif event.get("deviceId"):
+        selected["id"] = event.get("deviceId")
+    _apply_phone_event_to_matrix(ctx, event, selected)
+    with _PHONE_EVENT_SYNC_LOCK:
+        events = state.setdefault("events", [])
+        events.append(event)
+        del events[:-50]
+        state["eventCount"] = int(state.get("eventCount") or 0) + 1
+        state["lastEvent"] = event
+        state["lastEventAt"] = time.time()
+        if str(event.get("event") or event.get("type") or "") in {"snapshot", "heartbeat", "hello"}:
+            state["lastHeartbeatAt"] = state["lastEventAt"]
+
+
+def _start_phone_event_sync(ctx, *, device_id: str = "", max_sec: int = 3600, max_events: int = 0) -> dict:
+    key = _phone_event_sync_key(device_id)
+    with _PHONE_EVENT_SYNC_LOCK:
+        existing = _PHONE_EVENT_SYNC_STATE.get(key)
+        if existing and existing.get("process") is not None and existing["process"].poll() is None:
+            return _phone_event_sync_public(existing)
+        if existing and isinstance(existing.get("finishedEpoch"), (int, float)):
+            if time.time() - float(existing.get("finishedEpoch") or 0) < 5:
+                return _phone_event_sync_public(existing)
+    script_path = _script_path(ctx, "openclaw-phone-agent.mjs")
+    if not os.path.exists(script_path):
+        return {"running": False, "error": "phone event sync script missing"}
+    node_exe = str(getattr(ctx.paths, "node_exe", "") or "")
+    if not node_exe or not os.path.exists(node_exe):
+        return {"running": False, "error": "Node.js runtime missing"}
+    args = ["events-sync", "--json", "--max-sec", str(max_sec), "--max-events", str(max_events)]
+    if device_id:
+        args.extend(["--device-id", device_id])
+    process = subprocess.Popen(
+        [node_exe, script_path, *args],
+        cwd=ctx.paths.base_path,
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    state = {
+        "process": process,
+        "deviceId": device_id,
+        "startedAt": _phone_matrix_presence_time(),
+        "finishedAt": "",
+        "eventCount": 0,
+        "events": [],
+        "lastEvent": None,
+        "lastError": "",
+        "returncode": None,
+        "maxSec": max_sec,
+        "maxEvents": max_events,
+    }
+    with _PHONE_EVENT_SYNC_LOCK:
+        _PHONE_EVENT_SYNC_STATE[key] = state
+
+    def read_stdout() -> None:
+        try:
+            assert process.stdout is not None
+            for raw in process.stdout:
+                line = _sanitize_cli_output(ctx, raw.strip(), kind="phone.events")
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    for parsed in _parse_phone_sse_events(line.splitlines()):
+                        _record_phone_event_sync_event(ctx, key, state, parsed)
+                    continue
+                if isinstance(event, dict):
+                    _record_phone_event_sync_event(ctx, key, state, event)
+        except Exception as exc:
+            with _PHONE_EVENT_SYNC_LOCK:
+                state["lastError"] = str(exc)[:500]
+
+    def read_stderr() -> None:
+        try:
+            assert process.stderr is not None
+            stderr_parts: list[str] = []
+            for raw in process.stderr:
+                text = _sanitize_cli_output(ctx, raw.strip(), kind="phone.events")
+                if text:
+                    stderr_parts.append(text)
+                    del stderr_parts[:-20]
+                    with _PHONE_EVENT_SYNC_LOCK:
+                        state["lastError"] = "\n".join(stderr_parts)[-2000:]
+        except Exception:
+            return
+
+    def wait_process() -> None:
+        code = process.wait()
+        _close_phone_event_process_pipes(process)
+        with _PHONE_EVENT_SYNC_LOCK:
+            state["returncode"] = code
+            state["finishedAt"] = _phone_matrix_presence_time()
+            state["finishedEpoch"] = time.time()
+
+    threading.Thread(target=read_stdout, name=f"PhoneEventSyncStdout-{key}", daemon=True).start()
+    threading.Thread(target=read_stderr, name=f"PhoneEventSyncStderr-{key}", daemon=True).start()
+    threading.Thread(target=wait_process, name=f"PhoneEventSyncWait-{key}", daemon=True).start()
+    return _phone_event_sync_public(state)
+
+
+def _ensure_phone_event_syncs_for_saved_devices(
+    ctx,
+    *,
+    device_ids: list[str] | None = None,
+    max_sec: int = 86400,
+    max_events: int = 0,
+) -> dict:
+    try:
+        store = _load_store(ctx)
+    except Exception as exc:
+        return {"started": False, "devices": [], "error": str(exc)[:200]}
+    devices = [item for item in store.get("devices", []) if isinstance(item, dict)]
+    normalized_ids = {
+        _normalize_device_id(item)
+        for item in (device_ids or [])
+        if str(item or "").strip()
+    }
+    statuses: list[dict] = []
+    for device in devices:
+        device_id = _normalize_device_id(device.get("id") or device.get("deviceId") or device.get("name"))
+        if normalized_ids and device_id not in normalized_ids:
+            continue
+        if not str(device.get("baseUrl") or "").strip() or not str(device.get("token") or "").strip():
+            continue
+        status = _start_phone_event_sync(ctx, device_id=device_id, max_sec=max_sec, max_events=max_events)
+        statuses.append(status)
+    return {
+        "started": any(bool(item.get("running")) for item in statuses),
+        "devices": statuses,
+    }
+
+
+def _stop_phone_event_sync(device_id: str = "") -> dict:
+    key = _phone_event_sync_key(device_id)
+    with _PHONE_EVENT_SYNC_LOCK:
+        state = _PHONE_EVENT_SYNC_STATE.get(key)
+        if not state:
+            return {"running": False}
+        process = state.get("process")
+    if process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    if process is not None:
+        _close_phone_event_process_pipes(process)
+    with _PHONE_EVENT_SYNC_LOCK:
+        state["finishedAt"] = _phone_matrix_presence_time()
+        state["returncode"] = process.poll() if process is not None else None
+        return _phone_event_sync_public(state)
+
+
+def _phone_compact_selectors_from_payload(payload: dict, data: dict) -> list[dict]:
+    source = payload.get("selectors")
+    if not isinstance(source, list):
+        source = data.get("selectors")
+    if not isinstance(source, list):
+        source = payload.get("keyNodes")
+    if not isinstance(source, list):
+        source = data.get("keyNodes")
+    if not isinstance(source, list):
+        return []
+    selectors: list[dict] = []
+    for item in source[:40]:
+        if not isinstance(item, dict):
+            continue
+        action_body = _phone_compact_action_body(item.get("actionBody") if isinstance(item.get("actionBody"), dict) else item)
+        if not action_body:
+            continue
+        selectors.append(
+            {
+                "nodeId": _clip(item.get("nodeId") or item.get("node_id") or item.get("id"), 80),
+                "label": _clip(
+                    item.get("label")
+                    or item.get("text")
+                    or item.get("description")
+                    or item.get("contentDescription")
+                    or item.get("resourceId"),
+                    120,
+                ),
+                "actionBody": action_body,
+            }
+        )
+    return selectors
+
+
+def _phone_compact_action_body(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    action = _phone_action_body_name(value.get("action") or value.get("type") or value.get("name"))
+    if not action:
+        return {}
+    body: dict[str, object] = {"action": action}
+    text = _clip(value.get("text") or value.get("targetText") or value.get("target_text") or value.get("label"), 160)
+    if text:
+        body["text"] = text
+    content_description = _clip(
+        value.get("contentDescription")
+        or value.get("content_description")
+        or value.get("description")
+        or value.get("targetDescription")
+        or value.get("target_description"),
+        160,
+    )
+    if content_description:
+        body["contentDescription"] = content_description
+    resource_id = _clip(value.get("resourceId") or value.get("resource_id") or value.get("viewId") or value.get("view_id"), 200)
+    if resource_id:
+        body["resourceId"] = resource_id
+    node_id = _clip(value.get("nodeId") or value.get("node_id") or value.get("id"), 100)
+    if node_id:
+        body["nodeId"] = node_id
+    direction = _clip(value.get("direction"), 24)
+    if direction:
+        body["direction"] = direction
+    for key in ("timeoutMs", "durationMs"):
+        if isinstance(value.get(key), int):
+            body[key] = value[key]
+    return body
+
+
+def _phone_progress_result_fields_from_stdout(stdout: str) -> dict:
+    payload = _phone_stdout_payload(stdout)
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    fields: dict[str, object] = {}
+    report = _phone_agent_report_from_payload(payload, data)
+    if report:
+        fields["agentReport"] = report
+    for key in ("mode", "action", "currentStep"):
+        value = payload.get(key)
+        if value in (None, ""):
+            value = data.get(key)
+        if value in (None, "") and key == "currentStep" and report:
+            value = report.get("currentStep")
+        text = str(value or "").strip()
+        if text:
+            fields[key] = text[:160]
+    if report and "currentStep" not in fields:
+        text = _clip(report.get("currentStep"), 160)
+        if text:
+            fields["currentStep"] = text
+    if report.get("needsCodex") is True:
+        fields["needsCodex"] = True
+    events = payload.get("events")
+    if not isinstance(events, list):
+        events = data.get("events")
+    if isinstance(events, list):
+        fields["events"] = events[:30]
+    queue = _phone_queue_fields_from_payload(payload, data)
+    if queue:
+        fields["queue"] = queue
+    return fields
+
+
+def _phone_agent_report_from_payload(payload: dict, data: dict) -> dict:
+    candidates: list[dict] = []
+    for value in (
+        payload,
+        data,
+        payload.get("result") if isinstance(payload.get("result"), dict) else {},
+        data.get("result") if isinstance(data.get("result"), dict) else {},
+        payload.get("task") if isinstance(payload.get("task"), dict) else {},
+        data.get("task") if isinstance(data.get("task"), dict) else {},
+    ):
+        if isinstance(value, dict):
+            candidates.append(value)
+    for source in candidates:
+        report = source.get("agentReport")
+        if isinstance(report, dict):
+            return _phone_agent_report_public(report)
+    return {}
+
+
+def _phone_agent_report_public(report: dict) -> dict:
+    safe = _secret_safe_payload(report)
+    if not isinstance(safe, dict):
+        return {}
+    allowed = {
+        "schema",
+        "status",
+        "headline",
+        "currentStep",
+        "completed",
+        "needsCodex",
+        "completedSummary",
+        "message",
+        "fixHint",
+        "queueMs",
+        "queueDepth",
+        "queuePosition",
+        "exception",
+    }
+    public = {key: value for key, value in safe.items() if key in allowed}
+    for key in ("schema", "status", "headline", "currentStep", "completedSummary", "message", "fixHint"):
+        if key in public:
+            public[key] = _phone_public_text(public[key], 600 if key == "fixHint" else 240)
+    if isinstance(safe.get("lastEvent"), dict):
+        public["lastEvent"] = _phone_public_event(safe.get("lastEvent"))
+    if isinstance(public.get("exception"), dict):
+        exception = public["exception"]
+        public["exception"] = {
+            "code": _phone_public_text(exception.get("code"), 120),
+            "message": _phone_public_text(exception.get("message"), 500),
+            "repairTarget": _phone_public_text(exception.get("repairTarget"), 120),
+            "codexInstruction": _phone_public_text(exception.get("codexInstruction"), 500),
+        }
+    return public
+
+
+def _phone_public_event(event: object) -> dict:
+    if not isinstance(event, dict):
+        return {}
+    public: dict[str, object] = {}
+    for key in ("type", "event", "id", "round", "time", "toolId", "toolName", "success", "retry"):
+        value = event.get(key)
+        if value not in (None, ""):
+            public[key] = _secret_safe_payload(value)
+    message = _phone_public_text(event.get("message"), 240)
+    if message:
+        public["message"] = message
+    data = event.get("data")
+    if isinstance(data, dict):
+        compact_data: dict[str, object] = {}
+        for key in ("schema", "timestampMs", "version"):
+            if key in data:
+                compact_data[key] = _secret_safe_payload(data.get(key))
+        status = data.get("status") if isinstance(data.get("status"), dict) else {}
+        if status:
+            compact_data["status"] = {
+                key: _secret_safe_payload(status.get(key))
+                for key in ("busy", "currentTaskId", "currentPackage", "accessibilityRunning", "screenOn", "deviceLocked")
+                if key in status
+            }
+        if compact_data:
+            public["data"] = compact_data
+    return public
+
+
+def _phone_public_text(value: object, limit: int = 240) -> str:
+    text = _clip(value, limit)
+    if not text:
+        return ""
+    text = re.sub(r"(?i)\bsk-[A-Za-z0-9_-]{8,}", "[redacted-secret]", text)
+    text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", "Bearer [redacted]", text)
+    text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[redacted-email]", text)
+    text = re.sub(r"\b\d{7,}\b", "[redacted-number]", text)
+    return text[:limit]
+
+
+def _phone_queue_fields_from_payload(payload: dict, data: dict | None = None) -> dict:
+    data = data if isinstance(data, dict) else {}
+    candidates: list[dict] = []
+    for value in (
+        payload.get("queue"),
+        data.get("queue"),
+        payload.get("final"),
+        data.get("final"),
+    ):
+        if isinstance(value, dict):
+            candidates.append(value)
+            nested = value.get("result") if isinstance(value.get("result"), dict) else {}
+            if nested:
+                candidates.append(nested)
+            nested_data = value.get("data") if isinstance(value.get("data"), dict) else {}
+            if nested_data:
+                candidates.append(nested_data)
+            nested_queue = value.get("queue") if isinstance(value.get("queue"), dict) else {}
+            if nested_queue:
+                candidates.append(nested_queue)
+    candidates.extend([payload, data])
+
+    queue: dict[str, object] = {}
+    for source in candidates:
+        for key in ("queueMs", "queueDepth", "queuePosition"):
+            if key in queue:
+                continue
+            parsed = _non_negative_int(source.get(key))
+            if parsed is not None:
+                queue[key] = parsed
+        if "currentTaskId" not in queue:
+            current_task_id = str(source.get("currentTaskId") or "").strip()
+            if current_task_id:
+                queue["currentTaskId"] = current_task_id[:160]
+        if "cancelRequested" not in queue and isinstance(source.get("cancelRequested"), bool):
+            queue["cancelRequested"] = bool(source.get("cancelRequested"))
+    return queue
+
+
+def _non_negative_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _phone_payload_failure(stdout: str) -> dict:
+    payload = _phone_stdout_payload(stdout)
+    if not payload:
+        return {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    if payload.get("success") is not False and data.get("success") is not False:
+        return {}
+    error_code = str(
+        payload.get("errorCode")
+        or payload.get("error_code")
+        or data.get("errorCode")
+        or data.get("error_code")
+        or "phone_payload_failed"
+    ).strip() or "phone_payload_failed"
+    reason = str(
+        payload.get("reason")
+        or payload.get("error")
+        or payload.get("message")
+        or data.get("reason")
+        or data.get("error")
+        or data.get("message")
+        or error_code
+    ).strip() or error_code
+    return {"errorCode": error_code[:120], "reason": reason[:500]}
+
+
+def _phone_stdout_payload(stdout: str) -> dict:
+    try:
+        payload = json.loads(stdout or "{}")
+    except json.JSONDecodeError:
+        payload = _phone_first_json_object(stdout)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _phone_first_json_object(text: str) -> dict:
+    value = str(text or "")
+    for start, char in enumerate(value):
+        if char != "{":
+            continue
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(value)):
+            current = value[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == '"':
+                    in_string = False
+                continue
+            if current == '"':
+                in_string = True
+            elif current == "{":
+                depth += 1
+            elif current == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = value[start : index + 1]
+                    try:
+                        payload = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+                    return payload if isinstance(payload, dict) else {}
+    return {}
+
+
+def _phone_metrics_mode(kind: str, execution: dict | None = None) -> str:
+    execution = execution or {}
+    layer = str(execution.get("layer") or "").strip().lower()
+    direct_action = str(execution.get("directAction") or "").strip()
+    if kind == "phone.metrics":
+        return "metrics"
+    if kind == "phone.screenshot":
+        return "screenshot"
+    if kind == "phone.read" or (layer == "direct" and str(execution.get("mode") or "") == "observe"):
+        return "observe_fast"
+    if layer == "template" and direct_action:
+        return "template/action_fast"
+    if layer == "template":
+        return "template"
+    if layer == "direct" and direct_action:
+        return "action_fast"
+    if layer == "agent":
+        return "agent_fallback"
+    return kind.split(".", 1)[-1]
+
+
+def _phone_result_metrics(kind: str, stdout: str, started_at: float, execution: dict | None = None) -> dict:
+    elapsed_ms = max(0, int((time.monotonic() - started_at) * 1000))
+    payload = _phone_stdout_payload(stdout)
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    source_metrics = payload.get("metrics")
+    if not isinstance(source_metrics, dict) and isinstance(data.get("metrics"), dict):
+        source_metrics = data.get("metrics")
+
+    metrics = dict(source_metrics or {})
+    metrics.setdefault("totalMs", elapsed_ms)
+    execution = execution or {}
+
+    if kind == "phone.metrics":
+        metrics.setdefault("mode", "metrics")
+        return metrics
+
+    if kind == "phone.screenshot":
+        frame = payload.get("frame") if isinstance(payload.get("frame"), dict) else {}
+        cached = bool(payload.get("cached") or frame.get("cached"))
+        metrics.update({
+            "mode": "screenshot",
+            "cacheHit": cached,
+            "screenshotMs": 0 if cached else elapsed_ms,
+            "toolCallMs": metrics.get("toolCallMs", elapsed_ms),
+            "screenTreeMs": metrics.get("screenTreeMs", 0),
+            "llmRoundMs": metrics.get("llmRoundMs", 0),
+            "rounds": metrics.get("rounds", 0),
+        })
+        screen_hash = (
+            payload.get("screenHash")
+            or payload.get("screen_hash")
+            or frame.get("screenHash")
+            or frame.get("screen_hash")
+        )
+        if screen_hash:
+            metrics["screenHash"] = str(screen_hash)[:80]
+        return metrics
+
+    if kind in {"phone.read", "phone.task"}:
+        layer = str(execution.get("layer") or "").strip().lower()
+        direct_action = str(execution.get("directAction") or "").strip()
+        budget = execution.get("budget") if isinstance(execution.get("budget"), dict) else {}
+        if "mode" not in metrics:
+            metrics["mode"] = _phone_metrics_mode(kind, execution)
+        metrics.setdefault("rounds", 0 if layer in {"direct", "template"} else int(budget.get("maxRounds") or 0))
+        metrics.setdefault("toolCallMs", elapsed_ms)
+        metrics.setdefault("screenTreeMs", 0)
+        metrics.setdefault("llmRoundMs", 0)
+        metrics.setdefault("screenshotMs", 0)
+        metrics.setdefault("cacheHit", bool(payload.get("cacheHit") or data.get("cacheHit")))
+        screen_hash = _extract_screen_hash_from_stdout(stdout)
+        if screen_hash:
+            metrics.setdefault("screenHash", screen_hash)
+        return metrics
+
+    if metrics:
+        return metrics
+    return {}
+
+
+def _phone_promote_metrics_fields(result: dict, metrics: dict) -> None:
+    mode = str(metrics.get("mode") or "").strip()
+    if mode:
+        result.setdefault("mode", mode[:160])
+    if "cacheHit" in metrics:
+        result.setdefault("cacheHit", bool(metrics.get("cacheHit")))
+
+
+def _remember_phone_read_screen_hash(ctx, kind: str, body: dict | None, stdout: str) -> None:
+    if kind not in {"phone.read", "phone.task"}:
+        return
+    body = body or {}
+    fast_path = str(body.get("fastPath") or body.get("fast_path") or "observe_fast")
+    screen_hash = _extract_screen_hash_from_stdout(stdout)
+    if not screen_hash:
+        return
+    payload = _phone_stdout_payload(stdout)
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    selectors = _phone_compact_selectors_from_payload(payload, data)
+    key = _phone_read_cache_key(ctx, body, fast_path)
+    with _PHONE_READ_CACHE_LOCK:
+        previous = _PHONE_READ_CACHE.get(key)
+        if (
+            not selectors
+            and isinstance(previous, dict)
+            and str(previous.get("screenHash") or "").strip() == screen_hash
+        ):
+            previous_selectors = previous.get("selectors")
+            if isinstance(previous_selectors, list):
+                selectors = previous_selectors
+        _PHONE_READ_CACHE[key] = {
+            "screenHash": screen_hash,
+            "selectors": selectors,
+            "updatedAt": time.monotonic(),
+        }
+
+
+def _with_phone_execution(payload: dict, execution: dict) -> dict:
+    return {
+        **payload,
+        "executionLayer": execution.get("layer") or payload.get("executionLayer") or "",
+        "execution": execution,
+    }
 
 
 def _sanitize(ctx, text: str) -> str:
@@ -103,7 +1834,158 @@ def _sanitize(ctx, text: str) -> str:
 
 def _sanitize_cli_output(ctx, text: str, *, kind: str) -> str:
     cleaned = _drop_embedded_images(text, kind=kind)
-    return _sanitize(ctx, cleaned)
+    return _sanitize(ctx, _redact_cli_secrets(cleaned))
+
+
+def _redact_cli_secrets(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    value = re.sub(
+        r'(?i)("?(?:api[_-]?key|apikey|token|access[_-]?token|authorization|password|secret|x-lumi-signature)"?\s*:\s*")([^"]+)(")',
+        r'\1[redacted]\3',
+        value,
+    )
+    value = re.sub(
+        r"(?i)\b(api[_-]?key|apikey|token|access[_-]?token|authorization|password|secret|x-lumi-signature)(\s*=\s*)([^\s,;]+)",
+        r"\1\2[redacted]",
+        value,
+    )
+    value = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", "Bearer [redacted]", value)
+    return value
+
+
+def _phone_cli_failure_message(stdout: str, stderr: str) -> str:
+    text = f"{stdout}\n{stderr}".lower()
+    if "accessibility_stale" in text or "stale_enabled_not_bound" in text:
+        return "手机无障碍开关已开启，但 APKClaw 服务未重新绑定。请打开 APKClaw 到前台，必要时重新开关一次无障碍。"
+    if "agent_not_initialized" in text:
+        return "手机 Agent 服务尚未就绪，请在手机端打开 APKClaw 并保持前台运行。"
+    if "phone_locked" in text or "锁屏" in text or "熄屏" in text:
+        return "手机处于锁屏或熄屏状态，请先解锁并保持亮屏。"
+    if "accessibility_off" in text or "无障碍" in text:
+        return "手机无障碍服务未开启，请在手机端开启 APKClaw 无障碍。"
+    if "model_not_configured" in text or "模型" in text and "配置" in text:
+        return "手机 Agent 模型尚未配置，请先登录中转站并同步手机模型。"
+    if "task_busy" in text or "busy" in text or "已有任务" in text:
+        return "APKClaw 正在执行其他任务，请稍后重试。"
+    if "device_offline" in text or "econnrefused" in text or "fetch failed" in text or "offline" in text:
+        return "无法连接手机端 APKClaw，请确认手机和电脑在同一网络，且 APKClaw 已启动。"
+    if "signature" in text or "unauthorized" in text or "forbidden" in text or "403" in text:
+        return "手机连接签名或令牌校验失败，请重新保存连接令牌。"
+    return "手机任务执行失败，请检查手机连接和诊断日志"
+
+
+def _phone_cli_failure_code(stdout: str, stderr: str, code: object = "") -> str:
+    if str(code or "").lower() == "timeout":
+        return "timeout"
+    text = f"{stdout}\n{stderr}".lower()
+    if "accessibility_stale" in text or "stale_enabled_not_bound" in text:
+        return "accessibility_stale"
+    if "agent_not_initialized" in text:
+        return "agent_not_initialized"
+    if "phone_locked" in text or "锁屏" in text or "熄屏" in text:
+        return "phone_locked"
+    if "accessibility_off" in text or "无障碍" in text:
+        return "accessibility_off"
+    if "model_not_configured" in text or ("模型" in text and "配置" in text):
+        return "model_not_configured"
+    if "task_busy" in text or "busy" in text or "已有任务" in text:
+        return "task_busy"
+    if "device_offline" in text or "econnrefused" in text or "fetch failed" in text or "offline" in text:
+        return "device_offline"
+    if "signature" in text or "unauthorized" in text or "forbidden" in text or "403" in text:
+        return "auth_failed"
+    return "phone_task_failed"
+
+
+def _phone_failure_result(
+    kind: str,
+    *,
+    code: object,
+    reason: str,
+    stdout: str,
+    stderr: str,
+    execution: dict,
+    started_at: float,
+) -> dict:
+    elapsed_ms = max(0, int((time.monotonic() - started_at) * 1000))
+    metrics = _phone_result_metrics(kind, stdout, started_at, execution)
+    error_code = _phone_cli_failure_code(stdout, stderr, code)
+    if not metrics:
+        metrics = {
+            "mode": _phone_metrics_mode(kind, execution),
+            "totalMs": elapsed_ms,
+            "toolCallMs": elapsed_ms,
+            "screenTreeMs": 0,
+            "llmRoundMs": 0,
+            "screenshotMs": 0,
+            "cacheHit": False,
+            "rounds": 0,
+        }
+    result = {
+        "success": False,
+        "code": code,
+        "errorCode": error_code,
+        "reason": reason,
+        "error": reason,
+        "stdout": stdout,
+        "stderr": stderr,
+        "metrics": metrics,
+        "currentStep": "failed",
+        "agentReport": _phone_failure_agent_report(error_code, reason),
+    }
+    _phone_promote_metrics_fields(result, metrics)
+    return _with_phone_execution(result, execution)
+
+
+def _phone_failure_agent_report(error_code: str, reason: str) -> dict:
+    code = _clip(error_code or "phone_task_failed", 120)
+    repair_target = _phone_failure_repair_target(code)
+    instruction = _phone_failure_codex_instruction(repair_target)
+    return {
+        "schema": "apkclaw.agent_report.v1",
+        "status": "error",
+        "headline": f"exception: {_clip(reason, 180)}",
+        "currentStep": "failed",
+        "completed": True,
+        "needsCodex": True,
+        "completedSummary": "Task stopped before completion",
+        "exception": {
+            "code": code,
+            "message": _clip(reason, 500),
+            "repairTarget": repair_target,
+            "codexInstruction": instruction,
+        },
+        "fixHint": f"{instruction} Last error: {_clip(reason, 240)}",
+    }
+
+
+def _phone_failure_repair_target(error_code: str) -> str:
+    return {
+        "accessibility_off": "apkclaw_accessibility",
+        "model_not_configured": "phone_model_config",
+        "model_not_ready": "phone_model_config",
+        "task_busy": "phone_task_queue",
+        "timeout": "phone_task_timeout",
+        "fallback_timeout": "phone_task_timeout",
+        "phone_locked": "phone_lock_state",
+        "auth_failed": "lumi_pairing",
+        "device_offline": "phone_network",
+        "agent_not_initialized": "apkclaw_agent_runtime",
+    }.get(error_code, "apkclaw_agent_runtime")
+
+
+def _phone_failure_codex_instruction(repair_target: str) -> str:
+    return {
+        "apkclaw_accessibility": "Inspect APKClaw accessibility binding, stale enabled state, keep-alive, and background kill recovery.",
+        "phone_model_config": "Check LOOM phone model sync and APKClaw LLM configuration.",
+        "phone_task_queue": "Inspect running task, queue depth, cancellation, and retry policy.",
+        "phone_task_timeout": "Inspect slow step, blocked screen, Agent loop budget, and timeout settings.",
+        "phone_lock_state": "Ask user to unlock the phone; do not bypass secure lock screens.",
+        "lumi_pairing": "Repair Lumi pairing/signature headers without changing token semantics.",
+        "phone_network": "Check phone URL, LAN reachability, server keep-alive, and process survival.",
+    }.get(repair_target, "Inspect APKClaw Agent runtime logs, crash logs, metrics, and last task events.")
 
 
 def _drop_embedded_images(text: object, *, kind: str) -> str:
@@ -170,14 +2052,42 @@ def _submit_phone_job(
     script_name: str,
     args: list[str],
     timeout_sec: int = _PHONE_SCRIPT_TIMEOUT_SEC,
+    execution_layer: str = "",
+    step_timeout_sec: int = 15,
+    execution: dict | None = None,
+    evidence_body: dict | None = None,
+    fallback_script_name: str = "",
+    fallback_args: list[str] | None = None,
+    fallback_execution: dict | None = None,
+    fallback_timeout_sec: int = 0,
 ):
     script_path = _script_path(ctx, script_name)
+    fallback_script_path = _script_path(ctx, fallback_script_name) if fallback_script_name else ""
     if not os.path.exists(script_path):
         return ctx.fastapi_json({"error": "手机能力脚本缺失"}, 404)
     node_exe = str(getattr(ctx.paths, "node_exe", "") or "")
     if not node_exe or not os.path.exists(node_exe):
         return ctx.fastapi_json({"error": "Node.js 运行时缺失，无法执行手机任务"}, 500)
     timeout_sec = max(5, min(int(timeout_sec or _PHONE_SCRIPT_TIMEOUT_SEC), 1800))
+    layer = execution_layer or ("direct" if script_name == "openclaw-phone-vision.mjs" else "agent")
+    step_timeout_sec = max(5, min(int(step_timeout_sec or 15), 30))
+    if layer == "direct":
+        timeout_sec = min(timeout_sec, step_timeout_sec + 7)
+    elif layer == "template":
+        timeout_sec = min(timeout_sec, 25)
+    execution = dict(execution or _phone_execution_contract(
+        layer=layer,
+        profile="fast",
+        mode="safe",
+        timeout_sec=timeout_sec,
+        max_wait_sec=timeout_sec,
+        max_rounds=0,
+        poll_ms=0,
+        step_timeout_sec=step_timeout_sec,
+    ))
+    fallback_args = list(fallback_args or [])
+    fallback_execution = dict(fallback_execution or {})
+    fallback_timeout_sec = max(5, min(int(fallback_timeout_sec or timeout_sec), 1800))
 
     def target(job_id: str) -> dict:
         ctx.get_job_mgr().progress(job_id, "正在执行手机任务", "neutral", phase=kind, commandId=kind)
@@ -206,22 +2116,296 @@ def _submit_phone_job(
         stdout = _sanitize_cli_output(ctx, completed.stdout or "", kind=kind)
         stderr = _sanitize_cli_output(ctx, completed.stderr or "", kind=kind)
         if completed.returncode != 0:
-            return {
+            return _with_phone_execution({
                 "success": False,
                 "code": completed.returncode,
-                "error": "手机任务执行失败，请检查手机连接和诊断日志",
+                "error": _phone_cli_failure_message(stdout, stderr),
                 "stdout": stdout,
                 "stderr": stderr,
-            }
-        return {
+            }, execution)
+        return _with_phone_execution({
             "success": True,
             "code": completed.returncode,
             "stdout": stdout,
             "stderr": stderr,
-        }
+        }, execution)
 
-    job = ctx.get_job_mgr().submit_progress(kind, label, target)
+    def target_with_progress(job_id: str) -> dict:
+        ctx.get_job_mgr().progress(
+            job_id,
+            "手机任务已开始",
+            "neutral",
+            phase=f"{kind}.{layer}.prepare",
+            commandId=kind,
+            executionLayer=layer,
+            currentStep="prepare",
+            stepTimeoutSec=step_timeout_sec,
+            execution=execution,
+        )
+        started_at = time.monotonic()
+
+        def run_agent_fallback(previous_result: dict) -> dict:
+            if not fallback_script_path or not fallback_args or not fallback_execution:
+                return previous_result
+            fallback_info = {
+                "from": _phone_metrics_mode(kind, execution),
+                "errorCode": str(previous_result.get("errorCode") or previous_result.get("code") or "phone_task_failed"),
+                "reason": str(previous_result.get("reason") or previous_result.get("error") or "")[:500],
+            }
+            ctx.get_job_mgr().progress(
+                job_id,
+                "手机任务进入 Agent 兜底",
+                "neutral",
+                phase=f"{kind}.agent.fallback",
+                commandId=kind,
+                executionLayer="agent",
+                currentStep="agent_fallback",
+                stepTimeoutSec=int(fallback_execution.get("stepTimeoutSec") or _PHONE_AGENT_STEP_TIMEOUT_SEC),
+                fallback=fallback_info,
+                execution=fallback_execution,
+            )
+            fallback_started_at = time.monotonic()
+            try:
+                fallback_process = subprocess.Popen(
+                    [node_exe, fallback_script_path, *fallback_args],
+                    cwd=ctx.paths.base_path,
+                    env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                fallback_stdout_raw, fallback_stderr_raw = fallback_process.communicate(timeout=fallback_timeout_sec)
+            except subprocess.TimeoutExpired:
+                fallback_process.kill()
+                fallback_stdout_raw, fallback_stderr_raw = fallback_process.communicate(timeout=2)
+                stdout = _sanitize_cli_output(ctx, fallback_stdout_raw or "", kind=kind)
+                stderr = _sanitize_cli_output(ctx, fallback_stderr_raw or "", kind=kind)
+                result = _phone_failure_result(
+                    kind,
+                    code="fallback_timeout",
+                    reason="phone agent fallback timed out",
+                    stdout=stdout,
+                    stderr=stderr,
+                    execution=fallback_execution,
+                    started_at=fallback_started_at,
+                )
+                result["fallback"] = fallback_info
+                return result
+
+            fallback_returncode = int(fallback_process.returncode if fallback_process.returncode is not None else 1)
+            stdout = _sanitize_cli_output(ctx, fallback_stdout_raw or "", kind=kind)
+            stderr = _sanitize_cli_output(ctx, fallback_stderr_raw or "", kind=kind)
+            if fallback_returncode != 0:
+                result = _phone_failure_result(
+                    kind,
+                    code=fallback_returncode,
+                    reason=_phone_cli_failure_message(stdout, stderr),
+                    stdout=stdout,
+                    stderr=stderr,
+                    execution=fallback_execution,
+                    started_at=fallback_started_at,
+                )
+                result["fallback"] = fallback_info
+                return result
+            payload_failure = _phone_payload_failure(stdout)
+            if payload_failure:
+                result = _phone_failure_result(
+                    kind,
+                    code="fallback_payload_failed",
+                    reason=str(payload_failure.get("reason") or "phone fallback payload failed"),
+                    stdout=stdout,
+                    stderr=stderr,
+                    execution=fallback_execution,
+                    started_at=fallback_started_at,
+                )
+                result["errorCode"] = str(payload_failure.get("errorCode") or result.get("errorCode") or "phone_payload_failed")
+                result["fallback"] = fallback_info
+                return result
+            result_payload = {
+                "success": True,
+                "code": fallback_returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "fallback": fallback_info,
+            }
+            result_payload.update(_phone_progress_result_fields_from_stdout(stdout))
+            result_payload.update(_phone_observation_fields_from_stdout(stdout))
+            result_payload.setdefault("currentStep", "collect")
+            metrics = _phone_result_metrics(kind, stdout, fallback_started_at, fallback_execution)
+            if metrics:
+                result_payload["metrics"] = metrics
+                _phone_promote_metrics_fields(result_payload, metrics)
+            return _with_phone_execution(result_payload, fallback_execution)
+
+        process = subprocess.Popen(
+            [node_exe, script_path, *args],
+            cwd=ctx.paths.base_path,
+            env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        heartbeat = 0
+        while True:
+            try:
+                stdout_raw, stderr_raw = process.communicate(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = time.monotonic() - started_at
+                if elapsed >= timeout_sec:
+                    process.kill()
+                    stdout_raw, stderr_raw = process.communicate(timeout=2)
+                    stdout = _sanitize_cli_output(ctx, stdout_raw or "", kind=kind)
+                    stderr = _sanitize_cli_output(ctx, stderr_raw or "", kind=kind)
+                    result = {
+                        "success": False,
+                        "code": "timeout",
+                        "error": "手机任务执行超时，请检查手机连接状态",
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "executionLayer": layer,
+                        "execution": execution,
+                    }
+                    result = _phone_failure_result(
+                        kind,
+                        code="timeout",
+                        reason=str(result.get("error") or "phone task timed out"),
+                        stdout=stdout,
+                        stderr=stderr,
+                        execution=execution,
+                        started_at=started_at,
+                    )
+                    result = run_agent_fallback(result)
+                    _record_phone_task_evidence(ctx, kind, evidence_body, result, started_at)
+                    return result
+                next_heartbeat = int(elapsed)
+                if next_heartbeat > heartbeat:
+                    heartbeat = next_heartbeat
+                    ctx.get_job_mgr().progress(
+                        job_id,
+                        "手机任务执行中",
+                        "neutral",
+                        phase=f"{kind}.{layer}.running",
+                        commandId=kind,
+                        executionLayer=layer,
+                        currentStep="execute",
+                        elapsedMs=int(elapsed * 1000),
+                        stepTimeoutSec=step_timeout_sec,
+                        execution=execution,
+                    )
+        returncode = int(process.returncode if process.returncode is not None else 1)
+        stdout = _sanitize_cli_output(ctx, stdout_raw or "", kind=kind)
+        stderr = _sanitize_cli_output(ctx, stderr_raw or "", kind=kind)
+        if returncode != 0:
+            result = _phone_failure_result(
+                kind,
+                code=returncode,
+                reason=_phone_cli_failure_message(stdout, stderr),
+                stdout=stdout,
+                stderr=stderr,
+                execution=execution,
+                started_at=started_at,
+            )
+            result = run_agent_fallback(result)
+            _record_phone_task_evidence(ctx, kind, evidence_body, result, started_at)
+            return result
+        payload_failure = _phone_payload_failure(stdout)
+        if payload_failure:
+            result = _phone_failure_result(
+                kind,
+                code="payload_failed",
+                reason=str(payload_failure.get("reason") or "phone payload failed"),
+                stdout=stdout,
+                stderr=stderr,
+                execution=execution,
+                started_at=started_at,
+            )
+            result["errorCode"] = str(payload_failure.get("errorCode") or result.get("errorCode") or "phone_payload_failed")
+            result = run_agent_fallback(result)
+            _record_phone_task_evidence(ctx, kind, evidence_body, result, started_at)
+            return result
+        ctx.get_job_mgr().progress(
+            job_id,
+            "手机任务已返回结果",
+            "success",
+            phase=f"{kind}.{layer}.done",
+            commandId=kind,
+            executionLayer=layer,
+            currentStep="collect",
+            stepTimeoutSec=step_timeout_sec,
+            execution=execution,
+        )
+        _remember_phone_read_screen_hash(ctx, kind, evidence_body, stdout)
+        result_payload = {
+            "success": True,
+            "code": returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+        result_payload.update(_phone_progress_result_fields_from_stdout(stdout))
+        result_payload.update(_phone_observation_fields_from_stdout(stdout))
+        result_payload.setdefault("currentStep", "collect")
+        metrics = _phone_result_metrics(kind, stdout, started_at, execution)
+        if metrics:
+            result_payload["metrics"] = metrics
+            _phone_promote_metrics_fields(result_payload, metrics)
+        result = _with_phone_execution(result_payload, execution)
+        if kind == "phone.screenshot":
+            _remember_phone_screenshot_result(ctx, evidence_body, result)
+        _sync_phone_matrix_presence(ctx, kind, result)
+        _record_phone_task_evidence(ctx, kind, evidence_body, result, started_at)
+        return result
+
+    job = ctx.get_job_mgr().submit_progress(
+        kind,
+        label,
+        target_with_progress,
+        initial_progress=_phone_progress_fields(kind, execution, "prepare", "手机任务已排队，正在准备"),
+    )
     return ctx.fastapi_json({"jobId": job["id"], "job": job})
+
+
+def _record_phone_task_evidence(ctx, kind: str, body: dict | None, result: dict, started_at: float) -> None:
+    try:
+        from loom_cli import _write_task_evidence
+
+        endpoint = f"/api/phone/{kind.split('.', 1)[1]}" if kind.startswith("phone.") else f"/api/{kind.replace('.', '/')}"
+        ok = result.get("success") is True
+        payload = {
+            "ok": ok,
+            "command": kind,
+            "data": {
+                "method": "POST",
+                "endpoint": endpoint,
+                "body": _secret_safe_payload(body or {}),
+                "result": _secret_safe_payload(result),
+            },
+        }
+        if not ok:
+            payload["error"] = {
+                "code": str(result.get("code") or "phone_task_failed"),
+                "message": str(result.get("error") or "")[:300],
+            }
+        permission = "read" if kind in {"phone.status", "phone.screenshot", "phone.read", "phone.history", "phone.metrics"} else "control"
+        evidence_ctx = type("BridgeEvidenceContext", (), {"permission": permission, "source": "bridge"})()
+        _write_task_evidence(
+            [kind],
+            kind,
+            evidence_ctx,
+            payload,
+            (time.monotonic() - started_at) * 1000,
+            source="bridge",
+        )
+    except Exception:
+        return
 
 
 def _secret_safe_payload(value):
@@ -258,6 +2442,81 @@ def _sync_failed(sync_result: dict) -> bool:
     if not isinstance(results, list):
         return False
     return any(isinstance(item, dict) and item.get("ok") is False for item in results)
+
+
+def _configured_phone_device_count(ctx) -> int:
+    try:
+        store = ctx.read_json(_phone_store_path(ctx), {"devices": []})
+    except Exception:
+        return 0
+    devices = store.get("devices") if isinstance(store, dict) else []
+    if not isinstance(devices, list):
+        return 0
+    return sum(
+        1
+        for device in devices
+        if isinstance(device, dict)
+        and str(device.get("baseUrl") or "").strip()
+        and str(device.get("token") or "").strip()
+    )
+
+
+def _push_phone_model_to_device(ctx) -> dict:
+    if _configured_phone_device_count(ctx) <= 0:
+        return {
+            "attempted": False,
+            "success": True,
+            "message": "No configured phone device; model will be pushed before the next task.",
+        }
+    node_exe = str(getattr(ctx.paths, "node_exe", "") or "")
+    script_path = _script_path(ctx, "openclaw-phone-agent.mjs")
+    if not node_exe or not os.path.exists(node_exe) or not os.path.exists(script_path):
+        return {
+            "attempted": False,
+            "success": True,
+            "message": "Phone model saved locally; phone sync helper is unavailable in this runtime.",
+        }
+    try:
+        completed = subprocess.run(
+            [node_exe, script_path, "config-sync", "--json"],
+            cwd=ctx.paths.base_path,
+            env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "attempted": True,
+            "success": False,
+            "error": "手机模型已保存，但下发到手机超时，请确认手机在线后重试。",
+            "stdout": _sanitize_cli_output(ctx, exc.stdout if isinstance(exc.stdout, str) else "", kind="phone.sync_model"),
+            "stderr": _sanitize_cli_output(ctx, exc.stderr if isinstance(exc.stderr, str) else "", kind="phone.sync_model"),
+        }
+    stdout = _sanitize_cli_output(ctx, completed.stdout or "", kind="phone.sync_model")
+    stderr = _sanitize_cli_output(ctx, completed.stderr or "", kind="phone.sync_model")
+    if completed.returncode != 0:
+        return {
+            "attempted": True,
+            "success": False,
+            "error": _phone_cli_failure_message(stdout, stderr),
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+    try:
+        payload = json.loads(stdout) if stdout.strip() else {}
+    except json.JSONDecodeError:
+        payload = {"stdout": stdout}
+    return {
+        "attempted": True,
+        "success": bool(payload.get("ok", True)),
+        "model": payload.get("model") or "",
+        "phone": payload.get("phone") if isinstance(payload.get("phone"), dict) else {},
+        "status": payload.get("status") if isinstance(payload.get("status"), dict) else {},
+    }
 
 
 def _phone_sync_model_result(ctx) -> dict:
@@ -316,7 +2575,7 @@ def _upsert_device(store: dict, body: dict) -> dict:
     base_url = _normalize_url(body.get("baseUrl") or body.get("phoneUrl") or existing.get("baseUrl") or "")
     token = _clip(body.get("token"), 4096) or str(existing.get("token") or "").strip()
     if not base_url:
-        raise ValueError("请输入 APKClaw 手机地址")
+        raise ValueError("请输入手机 IP，例如 192.168.1.78")
     if not token:
         raise ValueError("请输入 APKClaw 连接令牌")
     next_device = {
@@ -347,6 +2606,53 @@ def _upsert_device(store: dict, body: dict) -> dict:
     }
 
 
+def _phone_sync_model_result(ctx) -> dict:
+    wire_getter = getattr(ctx, "get_wire_svc", None)
+    if not callable(wire_getter):
+        return {
+            "success": False,
+            "error": "模型同步服务不可用，请重启 LOOM 后再试。",
+        }
+
+    wire_svc = wire_getter()
+    session = _current_account_session(ctx)
+    if session:
+        result = wire_svc.sync_from_session(session, targets=("phone",))
+    else:
+        wire = wire_svc.current()
+        if not wire:
+            return {
+                "success": False,
+                "error": "尚未登录中转站账号，也没有可同步的模型配置。请先登录，或在模型账号页配置第三方 Provider。",
+            }
+        result = {
+            "wire": wire_svc.current_public(),
+            "syncResults": wire_svc.apply_wire(wire, targets=("phone",)),
+        }
+
+    public_result = _secret_safe_payload(result)
+    if _sync_failed(public_result):
+        return {
+            "success": False,
+            "error": "手机模型同步失败，请查看诊断日志。",
+            **public_result,
+        }
+    phone_import = _push_phone_model_to_device(ctx)
+    if phone_import.get("attempted") and not phone_import.get("success"):
+        return {
+            "success": False,
+            "error": "手机模型已保存，但下发到手机失败，请确认手机在线后重试。",
+            "phoneImport": phone_import,
+            **public_result,
+        }
+    return {
+        "success": True,
+        "message": "手机模型已同步",
+        "phoneImport": phone_import,
+        **public_result,
+    }
+
+
 def register_phone_routes(app, ctx) -> None:
     @app.api_route("/api/phone/config", methods=["GET", "POST"])
     async def phone_config(request: Request):
@@ -365,7 +2671,10 @@ def register_phone_routes(app, ctx) -> None:
         except ValueError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)
         ctx.write_json(_phone_store_path(ctx), store)
-        return ctx.fastapi_json(_public_store(store))
+        public = _public_store(store)
+        selected_id = _normalize_device_id(public.get("selectedDeviceId") or body.get("deviceId") or body.get("id"))
+        public["eventSync"] = _ensure_phone_event_syncs_for_saved_devices(ctx, device_ids=[selected_id])
+        return ctx.fastapi_json(public)
 
     @app.post("/api/phone/sync-model")
     async def phone_sync_model(request: Request):
@@ -395,7 +2704,10 @@ def register_phone_routes(app, ctx) -> None:
             label="手机设备",
             script_name="openclaw-phone-fleet.mjs",
             args=["list", "--json"],
-            timeout_sec=60,
+            timeout_sec=25,
+            execution_layer="direct",
+            step_timeout_sec=_PHONE_DIRECT_STEP_TIMEOUT_SEC,
+            evidence_body={},
         )
 
     @app.api_route("/api/phone/status", methods=["GET", "POST"])
@@ -408,19 +2720,145 @@ def register_phone_routes(app, ctx) -> None:
             label="手机连接",
             script_name="openclaw-phone-fleet.mjs",
             args=["status", "--json"],
-            timeout_sec=60,
+            timeout_sec=20,
+            execution_layer="direct",
+            step_timeout_sec=_PHONE_DIRECT_STEP_TIMEOUT_SEC,
         )
+
+    @app.api_route("/api/phone/metrics", methods=["GET", "POST"])
+    async def phone_metrics(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return _submit_phone_job(
+            ctx,
+            kind="phone.metrics",
+            label="手机运行指标",
+            script_name="openclaw-phone-agent.mjs",
+            args=["metrics", "--json"],
+            timeout_sec=20,
+            execution_layer="direct",
+            step_timeout_sec=_PHONE_DIRECT_STEP_TIMEOUT_SEC,
+        )
+
+    @app.post("/api/phone/events/start")
+    async def phone_events_start(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        device_id = _clip(body.get("deviceId") or body.get("device_id"), 100)
+        max_sec = _bounded_int(body.get("maxSec") or body.get("max_sec"), default=3600, minimum=1, maximum=86400)
+        max_events = _bounded_int(body.get("maxEvents") or body.get("max_events"), default=0, minimum=0, maximum=100000)
+        return ctx.fastapi_json(_start_phone_event_sync(ctx, device_id=device_id, max_sec=max_sec, max_events=max_events))
+
+    @app.get("/api/phone/events/status")
+    async def phone_events_status(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        device_id = _clip(request.query_params.get("deviceId") or request.query_params.get("device_id"), 100)
+        return ctx.fastapi_json(_phone_event_sync_status(device_id))
+
+    @app.post("/api/phone/events/stop")
+    async def phone_events_stop(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        device_id = _clip(body.get("deviceId") or body.get("device_id"), 100)
+        return ctx.fastapi_json(_stop_phone_event_sync(device_id))
+
+    @app.get("/api/phone/daemon/status")
+    async def phone_daemon_status_route(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(phone_daemon_status(base_root=ctx.paths.base_path))
+
+    @app.post("/api/phone/daemon/start")
+    async def phone_daemon_start_route(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        try:
+            result = start_phone_daemon(base_root=ctx.paths.base_path, node_path=ctx.paths.node_exe)
+        except OSError as exc:
+            return ctx.fastapi_json({"ok": False, "error": str(exc)}, 500)
+        return ctx.fastapi_json(result)
+
+    @app.post("/api/phone/daemon/stop")
+    async def phone_daemon_stop_route(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(stop_phone_daemon(base_root=ctx.paths.base_path))
 
     @app.post("/api/phone/screenshot")
     async def phone_screenshot(request: Request):
         if error := ctx.auth_error(request):
             return error
+        body = await ctx.body(request)
+        screenshot_body = _phone_screenshot_cache_body(ctx, body)
+        cached_result = _phone_cached_screenshot_result(ctx, screenshot_body)
+        if cached_result:
+            execution = _phone_execution_contract(
+                layer="direct",
+                profile="fast",
+                mode="observe",
+                timeout_sec=1,
+                max_wait_sec=1,
+                max_rounds=0,
+                poll_ms=0,
+                step_timeout_sec=_PHONE_DIRECT_STEP_TIMEOUT_SEC,
+            )
+
+            def target(job_id: str) -> dict:
+                started_at = time.monotonic()
+                ctx.get_job_mgr().progress(
+                    job_id,
+                    "手机截图缓存命中",
+                    "success",
+                    phase="phone.screenshot.direct.cached",
+                    commandId="phone.screenshot",
+                    executionLayer="direct",
+                    currentStep="cache",
+                    execution=execution,
+                )
+                screen_hash = _clip(
+                    screenshot_body.get("screenHash")
+                    or screenshot_body.get("screen_hash")
+                    or screenshot_body.get("knownHash")
+                    or screenshot_body.get("known_hash"),
+                    80,
+                )
+                return _phone_mark_cached_screenshot_result(cached_result, started_at, screen_hash)
+
+            job = ctx.get_job_mgr().submit_progress(
+                "phone.screenshot",
+                "手机截图",
+                target,
+                initial_progress=_phone_progress_fields(
+                    "phone.screenshot",
+                    execution,
+                    "cache",
+                    "手机截图缓存已命中",
+                ),
+            )
+            return ctx.fastapi_json({"jobId": job["id"], "job": job})
         return _submit_phone_job(
             ctx,
             kind="phone.screenshot",
             label="手机截图",
             script_name="openclaw-phone-vision.mjs",
-            args=["frame", "--json"],
+            args=[
+                "frame",
+                "--quality",
+                "62",
+                "--max-long-side",
+                "960",
+                "--no-grid",
+                "--cache-ttl-ms",
+                str(_PHONE_SCREENSHOT_CACHE_TTL_MS),
+                "--json",
+            ],
+            timeout_sec=25,
+            execution_layer="direct",
+            step_timeout_sec=_PHONE_DIRECT_STEP_TIMEOUT_SEC,
+            evidence_body=screenshot_body,
         )
 
     @app.post("/api/phone/read")
@@ -430,27 +2868,423 @@ def register_phone_routes(app, ctx) -> None:
         body = await ctx.body(request)
         try:
             prompt = _safe_prompt(body.get("prompt") or "只读取当前手机屏幕，不要点击、输入或滑动。")
+            fast_path = _clip(body.get("fastPath") or body.get("fast_path") or "observe_fast", 40) or "observe_fast"
+            known_hash = _clip(
+                body.get("knownHash")
+                or body.get("known_hash")
+                or body.get("screenHash")
+                or _phone_cached_screen_hash(ctx, body, fast_path),
+                80,
+            )
         except ValueError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)
+        read_args = [
+            "read",
+            "--prompt",
+            prompt,
+            "--fast-path",
+            fast_path,
+        ]
+        if known_hash:
+            read_args.extend(["--known-hash", known_hash])
+        read_args.append("--json")
         return _submit_phone_job(
             ctx,
             kind="phone.read",
             label="读取屏幕",
-            script_name="openclaw-phone-agent.mjs",
-            args=[
-                "run",
+            script_name="openclaw-phone-vision.mjs",
+            args=read_args,
+            timeout_sec=25,
+            execution_layer="direct",
+            step_timeout_sec=_PHONE_TEMPLATE_STEP_TIMEOUT_SEC,
+            evidence_body={"prompt": prompt, "fastPath": fast_path, "knownHash": known_hash},
+        )
+
+    @app.post("/api/phone/task")
+    async def phone_task(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        try:
+            prompt = _safe_prompt(body.get("prompt") or "")
+            mode = _phone_task_mode(body.get("mode"))
+            profile = _phone_task_profile(
+                body.get("profile")
+                or body.get("performanceProfile")
+                or body.get("taskProfile")
+            )
+            timeout_sec, max_wait_sec, max_rounds, poll_ms = _phone_task_tuning(mode, profile, body)
+            explicit_action_body = _phone_explicit_action_body(ctx, body)
+            if mode == "observe" and explicit_action_body:
+                raise ValueError("observe 模式不允许执行 actionBody")
+            explicit_action = str(explicit_action_body.get("action") or "")
+            if not prompt and explicit_action_body:
+                prompt = _phone_prompt_for_action_body(explicit_action_body)
+            direct_action = explicit_action or ("" if mode == "observe" else _phone_direct_action(body.get("action") or body.get("directAction"), prompt))
+            template_name = _phone_template_name(body.get("template") or body.get("templateId"))
+            if not template_name and mode == "safe":
+                template_name = _phone_template_from_prompt(prompt)
+            execution_layer = "direct" if explicit_action_body else _phone_execution_layer(direct_action=direct_action, template_name=template_name)
+            observe_known_hash = ""
+            if mode == "observe":
+                observe_known_hash = _clip(
+                    body.get("knownHash")
+                    or body.get("known_hash")
+                    or body.get("screenHash")
+                    or _phone_cached_screen_hash(ctx, body, "observe_fast"),
+                    80,
+                )
+            step_timeout_sec = _phone_step_timeout_sec(execution_layer, profile)
+            max_wait_sec = _phone_max_wait_for_layer(
+                execution_layer,
+                profile,
+                max_wait_sec,
+                max_rounds,
+                step_timeout_sec,
+            )
+        except ValueError as exc:
+            return ctx.fastapi_json({"error": str(exc)}, 400)
+        if not prompt:
+            return ctx.fastapi_json({"error": "请输入要手机执行的任务内容"}, 400)
+        evidence_body = {
+            "prompt": prompt,
+            "mode": mode,
+            "profile": profile,
+            "template": template_name,
+            "executionLayer": execution_layer,
+            "action": direct_action,
+            "timeoutSec": timeout_sec,
+            "maxWaitSec": max_wait_sec,
+            "maxRounds": max_rounds,
+            "pollMs": poll_ms,
+        }
+        if explicit_action_body:
+            evidence_body["actionBody"] = explicit_action_body
+        if mode == "observe":
+            observe_args = [
+                "read",
                 "--prompt",
                 prompt,
-                "--mode",
-                "observe",
-                "--timeout-sec",
-                "90",
-                "--max-wait-sec",
-                "100",
-                "--max-rounds",
-                "8",
-                "--json",
-            ],
+                "--fast-path",
+                "observe_fast",
+            ]
+            if observe_known_hash:
+                observe_args.extend(["--known-hash", observe_known_hash])
+                evidence_body["knownHash"] = observe_known_hash
+            observe_args.append("--json")
+            execution = _phone_execution_contract(
+                layer="direct",
+                profile=profile,
+                mode=mode,
+                timeout_sec=min(max_wait_sec, 25),
+                max_wait_sec=min(max_wait_sec, 25),
+                max_rounds=max_rounds,
+                poll_ms=poll_ms,
+                step_timeout_sec=_PHONE_TEMPLATE_STEP_TIMEOUT_SEC,
+                template_name=template_name,
+            )
+            return _submit_phone_job(
+                ctx,
+                kind="phone.task",
+                label="手机 Agent",
+                script_name="openclaw-phone-vision.mjs",
+                args=observe_args,
+                timeout_sec=min(max_wait_sec, 25),
+                execution_layer="direct",
+                step_timeout_sec=_PHONE_TEMPLATE_STEP_TIMEOUT_SEC,
+                execution=execution,
+                evidence_body=evidence_body,
+            )
+        if explicit_action_body:
+            execution = _phone_execution_contract(
+                layer="direct",
+                profile=profile,
+                mode=mode,
+                timeout_sec=max_wait_sec,
+                max_wait_sec=max_wait_sec,
+                max_rounds=max_rounds,
+                poll_ms=poll_ms,
+                step_timeout_sec=step_timeout_sec,
+                direct_action=direct_action,
+                template_name=template_name,
+            )
+            return _submit_phone_job(
+                ctx,
+                kind="phone.task",
+                label="手机 Agent",
+                script_name="openclaw-phone-vision.mjs",
+                args=[
+                    "action",
+                    "--fast-path",
+                    "action_fast",
+                    "--force-action",
+                    "--action-body",
+                    json.dumps(explicit_action_body, ensure_ascii=False),
+                    "--json",
+                ],
+                timeout_sec=max_wait_sec,
+                execution_layer="direct",
+                step_timeout_sec=step_timeout_sec,
+                execution=execution,
+                evidence_body=evidence_body,
+            )
+        if direct_action:
+            action_body = {
+                "action": direct_action,
+                "targetLabel": "system navigation",
+                "reason": "LOOM fast-path simple phone action",
+            }
+            _phone_apply_action_body_overrides(action_body, body)
+            execution = _phone_execution_contract(
+                layer="direct",
+                profile=profile,
+                mode=mode,
+                timeout_sec=max_wait_sec,
+                max_wait_sec=max_wait_sec,
+                max_rounds=max_rounds,
+                poll_ms=poll_ms,
+                step_timeout_sec=step_timeout_sec,
+                direct_action=direct_action,
+                template_name=template_name,
+            )
+            return _submit_phone_job(
+                ctx,
+                kind="phone.task",
+                label="手机 Agent",
+                script_name="openclaw-phone-vision.mjs",
+                args=[
+                    "action",
+                    "--fast-path",
+                    "action_fast",
+                    "--force-action",
+                    "--allow-unknown-target",
+                    "--action-body",
+                    json.dumps(action_body, ensure_ascii=False),
+                    "--json",
+                ],
+                timeout_sec=max_wait_sec,
+                execution_layer="direct",
+                step_timeout_sec=step_timeout_sec,
+                execution=execution,
+                evidence_body=evidence_body,
+            )
+        if template_name == "open-settings":
+            action_body = {
+                "action": "open_app",
+                "packageName": "com.android.settings",
+                "targetLabel": "Android Settings",
+                "reason": "LOOM deterministic open-settings template",
+            }
+            _phone_apply_action_body_overrides(action_body, body)
+            fallback_step_timeout_sec = _phone_step_timeout_sec("agent", profile)
+            execution = _phone_execution_contract(
+                layer="template",
+                profile=profile,
+                mode=mode,
+                timeout_sec=max_wait_sec,
+                max_wait_sec=max_wait_sec,
+                max_rounds=max_rounds,
+                poll_ms=poll_ms,
+                step_timeout_sec=step_timeout_sec,
+                direct_action="open_app",
+                template_name=template_name,
+            )
+            fallback_execution = _phone_execution_contract(
+                layer="agent",
+                profile=profile,
+                mode=mode,
+                timeout_sec=max_wait_sec,
+                max_wait_sec=max_wait_sec,
+                max_rounds=max_rounds,
+                poll_ms=poll_ms,
+                step_timeout_sec=fallback_step_timeout_sec,
+            )
+            return _submit_phone_job(
+                ctx,
+                kind="phone.task",
+                label="手机 Agent",
+                script_name="openclaw-phone-vision.mjs",
+                args=[
+                    "action",
+                    "--fast-path",
+                    "action_fast",
+                    "--force-action",
+                    "--allow-unknown-target",
+                    "--action-body",
+                    json.dumps(action_body, ensure_ascii=False),
+                    "--json",
+                ],
+                timeout_sec=max_wait_sec,
+                execution_layer="template",
+                step_timeout_sec=step_timeout_sec,
+                execution=execution,
+                evidence_body=evidence_body,
+                fallback_script_name="openclaw-phone-agent.mjs",
+                fallback_args=_phone_agent_run_args(
+                    prompt=prompt,
+                    mode=mode,
+                    timeout_sec=timeout_sec,
+                    max_wait_sec=max_wait_sec,
+                    max_rounds=max_rounds,
+                    poll_ms=poll_ms,
+                    execution_layer="agent",
+                    step_timeout_sec=fallback_step_timeout_sec,
+                ),
+                fallback_execution=fallback_execution,
+                fallback_timeout_sec=max_wait_sec + 5,
+            )
+        if template_name == "refresh-screen":
+            action_body = {
+                "action": "scroll",
+                "direction": "up",
+                "durationMs": 450,
+                "targetLabel": "pull-to-refresh gesture",
+                "reason": "LOOM deterministic refresh-screen template",
+            }
+            _phone_apply_action_body_overrides(action_body, body)
+            fallback_step_timeout_sec = _phone_step_timeout_sec("agent", profile)
+            execution = _phone_execution_contract(
+                layer="template",
+                profile=profile,
+                mode=mode,
+                timeout_sec=max_wait_sec,
+                max_wait_sec=max_wait_sec,
+                max_rounds=max_rounds,
+                poll_ms=poll_ms,
+                step_timeout_sec=step_timeout_sec,
+                direct_action="scroll",
+                template_name=template_name,
+            )
+            fallback_execution = _phone_execution_contract(
+                layer="agent",
+                profile=profile,
+                mode=mode,
+                timeout_sec=max_wait_sec,
+                max_wait_sec=max_wait_sec,
+                max_rounds=max_rounds,
+                poll_ms=poll_ms,
+                step_timeout_sec=fallback_step_timeout_sec,
+            )
+            return _submit_phone_job(
+                ctx,
+                kind="phone.task",
+                label="手机 Agent",
+                script_name="openclaw-phone-vision.mjs",
+                args=[
+                    "action",
+                    "--fast-path",
+                    "action_fast",
+                    "--force-action",
+                    "--action-body",
+                    json.dumps(action_body, ensure_ascii=False),
+                    "--json",
+                ],
+                timeout_sec=max_wait_sec,
+                execution_layer="template",
+                step_timeout_sec=step_timeout_sec,
+                execution=execution,
+                evidence_body=evidence_body,
+                fallback_script_name="openclaw-phone-agent.mjs",
+                fallback_args=_phone_agent_run_args(
+                    prompt=prompt,
+                    mode=mode,
+                    timeout_sec=timeout_sec,
+                    max_wait_sec=max_wait_sec,
+                    max_rounds=max_rounds,
+                    poll_ms=poll_ms,
+                    execution_layer="agent",
+                    step_timeout_sec=fallback_step_timeout_sec,
+                ),
+                fallback_execution=fallback_execution,
+                fallback_timeout_sec=max_wait_sec + 5,
+            )
+        if template_name in {"read-screen", "screen-summary"}:
+            template_known_hash = _clip(
+                body.get("knownHash")
+                or body.get("known_hash")
+                or body.get("screenHash")
+                or _phone_cached_screen_hash(ctx, body, "observe_fast"),
+                80,
+            )
+            template_read_args = [
+                "read",
+                "--prompt",
+                prompt,
+                "--fast-path",
+                "observe_fast",
+            ]
+            if template_known_hash:
+                template_read_args.extend(["--known-hash", template_known_hash])
+                evidence_body["knownHash"] = template_known_hash
+            template_read_args.append("--json")
+            execution = _phone_execution_contract(
+                layer="template",
+                profile=profile,
+                mode=mode,
+                timeout_sec=min(max_wait_sec, 25),
+                max_wait_sec=min(max_wait_sec, 25),
+                max_rounds=max_rounds,
+                poll_ms=poll_ms,
+                step_timeout_sec=step_timeout_sec,
+                template_name=template_name,
+            )
+            return _submit_phone_job(
+                ctx,
+                kind="phone.task",
+                label="手机 Agent",
+                script_name="openclaw-phone-vision.mjs",
+                args=template_read_args,
+                timeout_sec=min(max_wait_sec, 25),
+                execution_layer="template",
+                step_timeout_sec=step_timeout_sec,
+                execution=execution,
+                evidence_body=evidence_body,
+            )
+        execution = _phone_execution_contract(
+            layer=execution_layer,
+            profile=profile,
+            mode=mode,
+            timeout_sec=timeout_sec,
+            max_wait_sec=max_wait_sec,
+            max_rounds=max_rounds,
+            poll_ms=poll_ms,
+            step_timeout_sec=step_timeout_sec,
+            direct_action=direct_action,
+            template_name=template_name,
+        )
+        agent_args = [
+            "run",
+            "--prompt",
+            prompt,
+            "--mode",
+            mode,
+            "--timeout-sec",
+            str(timeout_sec),
+            "--max-wait-sec",
+            str(max_wait_sec),
+            "--max-rounds",
+            str(max_rounds),
+            "--poll-ms",
+            str(poll_ms),
+            "--execution-layer",
+            execution_layer,
+            "--step-timeout-sec",
+            str(step_timeout_sec),
+            "--json",
+        ]
+        if template_name:
+            agent_args.extend(["--template", template_name])
+        return _submit_phone_job(
+            ctx,
+            kind="phone.task",
+            label="手机 Agent",
+            script_name="openclaw-phone-agent.mjs",
+            args=agent_args,
+            timeout_sec=max_wait_sec + 5,
+            execution_layer=execution_layer,
+            step_timeout_sec=step_timeout_sec,
+            execution=execution,
+            evidence_body=evidence_body,
         )
 
     @app.post("/api/phone/history")

@@ -4,12 +4,66 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REQUEST_TIMEOUT_MS = 615_000;
+const DEFAULT_PHONE_PORT = '9527';
+const PAIRING_FAILURE_COOLDOWN_MS = 30_000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+const pairingCache = new Map();
+const pairingInflight = new Map();
+const pairingFailures = new Map();
+const pairingRepairInflight = new Map();
+const pairingAuthRetryTails = new Map();
 
 export function normalizePhoneUrl(url) {
-  return String(url || '').trim().replace(/\/+$/, '');
+  let text = String(url || '')
+    .trim()
+    .replace(/[：﹕꞉]/g, ':')
+    .replace(/[／⁄]/g, '/')
+    .replace(/[。．｡]/g, '.')
+    .replace(/\s+/g, '')
+    .replace(/^http:\/(?!\/)/i, 'http://')
+    .replace(/^https:\/(?!\/)/i, 'https://');
+  if (!text) return '';
+  if (text.startsWith('//')) text = `http:${text}`;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) text = `http://${text}`;
+  const parsed = new URL(text);
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('invalid_phone_url');
+  if (!parsed.hostname || isMalformedIpv4Like(parsed.hostname)) throw new Error('invalid_phone_url');
+  if (!parsed.port && isLikelyLanHost(parsed.hostname)) parsed.port = DEFAULT_PHONE_PORT;
+  parsed.username = '';
+  parsed.password = '';
+  parsed.pathname = '';
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+function isLikelyLanHost(hostname) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host === '::1') return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+function isMalformedIpv4Like(hostname) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (!/^[a-z0-9.-]+$/i.test(host)) return false;
+  const parts = host.split('.');
+  const onlyDigitsAndDots = /^[\d.]+$/.test(host);
+  if (onlyDigitsAndDots) return parts.length !== 4 || parts.some((part) => !part || Number(part) > 255);
+  if (parts.length !== 4) return false;
+  return parts.filter((part) => /\d/.test(part)).length >= 3;
+}
+
+function normalizeStoredPhoneUrl(value) {
+  try {
+    return normalizePhoneUrl(value);
+  } catch {
+    return String(value || '').trim().replace(/\/+$/, '');
+  }
 }
 
 export function ensurePhoneConfig(config) {
@@ -20,6 +74,30 @@ export function ensurePhoneConfig(config) {
 export async function readLauncherPhoneConfig() {
   const selected = await readLauncherPhoneConfigByDevice();
   return selected;
+}
+
+export async function readLauncherPhoneLlmConfig() {
+  const candidates = [
+    path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agent.json'),
+    path.join(PROJECT_ROOT, 'LOOMFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
+    path.join(PROJECT_ROOT, 'OpenClawFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
+  ];
+
+  for (const filePath of candidates) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(filePath, 'utf8'));
+      const llm = parsed?.llm && typeof parsed.llm === 'object' ? parsed.llm : {};
+      const baseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim() : '';
+      const apiKey = typeof llm.apiKey === 'string' ? llm.apiKey.trim() : '';
+      const model = typeof llm.model === 'string' ? llm.model.trim() : '';
+      if (!baseUrl || !apiKey || !model) continue;
+      return { baseUrl, apiKey, model, source: filePath };
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw new Error(`Failed to read launcher phone model config: ${filePath}: ${error.message}`);
+    }
+  }
+
+  return { baseUrl: '', apiKey: '', model: '', source: '' };
 }
 
 export async function readLauncherPhoneStore() {
@@ -40,11 +118,13 @@ export async function readLauncherPhoneStore() {
           .map((item) => ({
             id: typeof item.id === 'string' ? item.id.trim() : '',
             name: typeof item.name === 'string' ? item.name.trim() : '',
-            phoneUrl: typeof item.baseUrl === 'string' ? item.baseUrl.trim().replace(/\/+$/, '') : '',
+            phoneUrl: normalizeStoredPhoneUrl(item.baseUrl),
             phoneToken: typeof item.token === 'string' ? item.token.trim() : '',
             lumiLauncherId: typeof item.launcherId === 'string' ? item.launcherId.trim() : '',
             lumiLauncherSecret: typeof item.launcherSecret === 'string' ? item.launcherSecret.trim() : '',
             album: typeof item.album === 'string' ? item.album.trim() : '',
+            tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag).trim()).filter(Boolean) : [],
+            priority: Number.isFinite(Number(item.priority)) ? Number(item.priority) : 0,
           }))
           .filter((item) => item.id || item.phoneUrl || item.name),
         source: filePath,
@@ -91,11 +171,13 @@ export async function readLauncherPhoneConfigByDevice(deviceId = '') {
       return {
         id: parsedId,
         name: typeof parsed?.name === 'string' ? parsed.name.trim() : '',
-        phoneUrl: typeof parsed?.baseUrl === 'string' ? parsed.baseUrl.trim().replace(/\/+$/, '') : '',
+        phoneUrl: normalizeStoredPhoneUrl(parsed?.baseUrl),
         phoneToken: typeof parsed?.token === 'string' ? parsed.token.trim() : '',
         lumiLauncherId: typeof parsed?.launcherId === 'string' ? parsed.launcherId.trim() : '',
         lumiLauncherSecret: typeof parsed?.launcherSecret === 'string' ? parsed.launcherSecret.trim() : '',
         album: typeof parsed?.album === 'string' ? parsed.album.trim() : '',
+        tags: Array.isArray(parsed?.tags) ? parsed.tags.map((tag) => String(tag).trim()).filter(Boolean) : [],
+        priority: Number.isFinite(Number(parsed?.priority)) ? Number(parsed.priority) : 0,
         source: filePath,
       };
     } catch (error) {
@@ -126,46 +208,78 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TI
   }
 }
 
-export async function pairLumiLauncher(config) {
+export async function pairLumiLauncher(config, options = {}) {
   ensurePhoneConfig(config);
-  if (config.lumiLauncherId && config.lumiLauncherSecret) {
+  const forceRefresh = options.forceRefresh === true;
+  if (!forceRefresh && config.lumiLauncherId && config.lumiLauncherSecret) {
     return {
       launcherId: config.lumiLauncherId,
       launcherSecret: config.lumiLauncherSecret,
     };
   }
 
-  const launcherId = config.lumiLauncherId || `loom-cli-${crypto.randomUUID()}`;
-  const response = await fetchWithTimeout(`${normalizePhoneUrl(config.phoneUrl)}/api/lumi/security/pair`, {
-    method: 'POST',
-    headers: {
-      ...authHeaders(config),
-      'Content-Type': 'application/json; charset=utf-8',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({
-      launcherId,
-      launcherName: 'LOOM CLI',
-      clientVersion: 'loom-cli',
-    }),
-  }, 30_000);
-  const payload = await parseJsonResponse(response, 'Phone pairing returned non-JSON response');
-  if (!response.ok || payload?.success === false) {
-    throw new Error(payload?.error || `Lumi pairing failed: HTTP ${response.status}`);
+  const key = pairingCacheKey(config);
+  const cached = pairingCache.get(key);
+  if (!forceRefresh && cached?.launcherId && cached?.launcherSecret) return publicPairing(cached);
+
+  const failure = pairingFailures.get(key);
+  if (failure && failure.until > Date.now()) throw new Error(failure.message);
+  if (pairingInflight.has(key)) return pairingInflight.get(key);
+
+  const pairingPromise = (async () => {
+    const launcherId = config.lumiLauncherId || generatedLumiLauncherId(config);
+    const response = await fetchWithTimeout(`${normalizePhoneUrl(config.phoneUrl)}/api/lumi/security/pair`, {
+      method: 'POST',
+      headers: {
+        ...authHeaders(config),
+        'Content-Type': 'application/json; charset=utf-8',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        launcherId,
+        launcherName: 'LOOM CLI',
+        clientVersion: 'loom-cli',
+      }),
+    }, 30_000);
+    const payload = await parseJsonResponse(response, 'Phone pairing returned non-JSON response');
+    if (!response.ok || payload?.success === false) {
+      throw new Error(payload?.error || payload?.message || `Lumi pairing failed: HTTP ${response.status}`);
+    }
+    const data = payload?.data || payload;
+    if (!data?.launcherId || !data?.launcherSecret) {
+      throw new Error('Lumi pairing response did not include launcher credentials.');
+    }
+    config.lumiLauncherId = data.launcherId;
+    config.lumiLauncherSecret = data.launcherSecret;
+    await persistLumiPairing(config, data);
+    const nextPairing = {
+      launcherId: data.launcherId,
+      launcherSecret: data.launcherSecret,
+      repairedAt: Date.now(),
+    };
+    pairingCache.set(key, nextPairing);
+    pairingFailures.delete(key);
+    return publicPairing(nextPairing);
+  })();
+
+  pairingInflight.set(key, pairingPromise);
+  try {
+    return await pairingPromise;
+  } catch (error) {
+    pairingFailures.set(key, {
+      until: Date.now() + PAIRING_FAILURE_COOLDOWN_MS,
+      message: error?.message || 'Lumi pairing failed',
+    });
+    throw error;
+  } finally {
+    pairingInflight.delete(key);
   }
-  const data = payload?.data || payload;
-  if (!data?.launcherId || !data?.launcherSecret) {
-    throw new Error('Lumi pairing response did not include launcher credentials.');
-  }
-  config.lumiLauncherId = data.launcherId;
-  config.lumiLauncherSecret = data.launcherSecret;
-  return data;
 }
 
 export async function signedJsonRequest(config, method, endpoint, body = undefined, timeoutMs = REQUEST_TIMEOUT_MS, retryPairing = true) {
   ensurePhoneConfig(config);
   const bodyText = body === undefined ? '' : JSON.stringify(body);
-  const headers = await lumiHeaders(config, method, endpoint, bodyText);
+  const { headers, pairing } = await lumiHeaders(config, method, endpoint, bodyText);
   const response = await fetchWithTimeout(`${normalizePhoneUrl(config.phoneUrl)}${endpoint}`, {
     method,
     headers: {
@@ -177,10 +291,11 @@ export async function signedJsonRequest(config, method, endpoint, body = undefin
     body: body === undefined ? undefined : bodyText,
   }, timeoutMs);
   const payload = await parseJsonResponse(response, 'Phone returned non-JSON response');
-  if (response.status === 403 && retryPairing) {
-    config.lumiLauncherSecret = '';
-    config.lumiLauncherId = '';
-    return signedJsonRequest(config, method, endpoint, body, timeoutMs, false);
+  if (retryPairing && isLumiAuthFailure(response, payload)) {
+    return enqueuePairingAuthRetry(config, async () => {
+      await repairLumiPairing(config, pairing, { forceRefresh: shouldForceActionPairingRefresh(config, endpoint) });
+      return signedJsonRequest(config, method, endpoint, body, timeoutMs, false);
+    });
   }
   if (!response.ok || payload?.success === false) {
     throw new Error(payload?.error || payload?.message || `Phone request failed: HTTP ${response.status}`);
@@ -190,7 +305,7 @@ export async function signedJsonRequest(config, method, endpoint, body = undefin
 
 export async function signedFetch(config, method, endpoint, timeoutMs = REQUEST_TIMEOUT_MS, retryPairing = true) {
   ensurePhoneConfig(config);
-  const headers = await lumiHeaders(config, method, endpoint, '');
+  const { headers, pairing } = await lumiHeaders(config, method, endpoint, '');
   const response = await fetchWithTimeout(`${normalizePhoneUrl(config.phoneUrl)}${endpoint}`, {
     method,
     headers: {
@@ -199,9 +314,10 @@ export async function signedFetch(config, method, endpoint, timeoutMs = REQUEST_
     },
   }, timeoutMs);
   if (response.status === 403 && retryPairing) {
-    config.lumiLauncherSecret = '';
-    config.lumiLauncherId = '';
-    return signedFetch(config, method, endpoint, timeoutMs, false);
+    return enqueuePairingAuthRetry(config, async () => {
+      await repairLumiPairing(config, pairing);
+      return signedFetch(config, method, endpoint, timeoutMs, false);
+    });
   }
   return response;
 }
@@ -241,12 +357,167 @@ async function lumiHeaders(config, method, endpoint, bodyText) {
     .update(signatureInput, 'utf8')
     .digest('base64url');
   return {
-    'X-LUMI-LAUNCHER-ID': pairing.launcherId,
-    'X-LUMI-TIMESTAMP': timestamp,
-    'X-LUMI-NONCE': nonce,
-    'X-LUMI-BODY-SHA256': bodyHash,
-    'X-LUMI-SIGNATURE': signature,
+    pairing,
+    headers: {
+      'X-LUMI-LAUNCHER-ID': pairing.launcherId,
+      'X-LUMI-TIMESTAMP': timestamp,
+      'X-LUMI-NONCE': nonce,
+      'X-LUMI-BODY-SHA256': bodyHash,
+      'X-LUMI-SIGNATURE': signature,
+    },
   };
+}
+
+function pairingCacheKey(config) {
+  const tokenHash = crypto.createHash('sha256').update(String(config.phoneToken || ''), 'utf8').digest('hex');
+  return `${normalizePhoneUrl(config.phoneUrl)}:${tokenHash}`;
+}
+
+function generatedLumiLauncherId(config) {
+  const normalizedUrl = normalizePhoneUrl(config.phoneUrl);
+  const urlHash = crypto.createHash('sha256').update(normalizedUrl, 'utf8').digest('hex').slice(0, 8);
+  const tokenHash = crypto.createHash('sha256').update(String(config.phoneToken || ''), 'utf8').digest('hex').slice(0, 16);
+  return `loom-cli-${urlHash}-${tokenHash}`;
+}
+
+function publicPairing(pairing) {
+  return {
+    launcherId: pairing?.launcherId || pairing?.lumiLauncherId || '',
+    launcherSecret: pairing?.launcherSecret || pairing?.lumiLauncherSecret || '',
+  };
+}
+
+function samePairing(a, b) {
+  const left = publicPairing(a);
+  const right = publicPairing(b);
+  return Boolean(
+    left.launcherId
+    && left.launcherSecret
+    && right.launcherId
+    && right.launcherSecret
+    && left.launcherId === right.launcherId
+    && left.launcherSecret === right.launcherSecret
+  );
+}
+
+function applyPairingToConfig(config, pairing) {
+  if (!pairing?.launcherId || !pairing?.launcherSecret) return;
+  config.lumiLauncherId = pairing.launcherId;
+  config.lumiLauncherSecret = pairing.launcherSecret;
+}
+
+function clearLumiPairingCache(config) {
+  try {
+    const key = pairingCacheKey(config);
+    pairingCache.delete(key);
+    pairingFailures.delete(key);
+  } catch {
+    // Clearing cache should never mask the original request failure.
+  }
+}
+
+async function repairLumiPairing(config, failedPairing, options = {}) {
+  const key = pairingCacheKey(config);
+  const cached = pairingCache.get(key);
+  if (options.forceRefresh || samePairing(cached, failedPairing)) {
+    return startPairingRepair(config, key, failedPairing, options);
+  }
+  if (cached?.launcherId && cached?.launcherSecret) {
+    applyPairingToConfig(config, cached);
+    return publicPairing(cached);
+  }
+  if (pairingRepairInflight.has(key)) {
+    const repaired = await pairingRepairInflight.get(key);
+    applyPairingToConfig(config, repaired);
+    return repaired;
+  }
+  return startPairingRepair(config, key, failedPairing, options);
+}
+
+async function enqueuePairingAuthRetry(config, fn) {
+  const key = pairingCacheKey(config);
+  const previous = pairingAuthRetryTails.get(key) || Promise.resolve();
+  const run = previous.catch(() => {}).then(fn);
+  const tail = run.catch(() => {});
+  pairingAuthRetryTails.set(key, tail);
+  try {
+    return await run;
+  } finally {
+    if (pairingAuthRetryTails.get(key) === tail) {
+      pairingAuthRetryTails.delete(key);
+    }
+  }
+}
+
+async function startPairingRepair(config, key, failedPairing, options = {}) {
+  if (pairingRepairInflight.has(key)) {
+    const repaired = await pairingRepairInflight.get(key);
+    applyPairingToConfig(config, repaired);
+    return repaired;
+  }
+
+  const repairPromise = (async () => {
+    const latest = pairingCache.get(key);
+    if (!options.forceRefresh && latest?.launcherId && latest?.launcherSecret && !samePairing(latest, failedPairing)) {
+      applyPairingToConfig(config, latest);
+      return publicPairing(latest);
+    }
+    clearLumiPairingCache(config);
+    if (samePairing(config, failedPairing)) {
+      config.lumiLauncherSecret = '';
+      config.lumiLauncherId = '';
+    }
+    return pairLumiLauncher(config, { forceRefresh: true });
+  })();
+
+  pairingRepairInflight.set(key, repairPromise);
+  try {
+    const repaired = await repairPromise;
+    applyPairingToConfig(config, repaired);
+    return repaired;
+  } finally {
+    pairingRepairInflight.delete(key);
+  }
+}
+
+async function persistLumiPairing(config, data) {
+  const source = typeof config.source === 'string' ? config.source : '';
+  if (!source || !data?.launcherId || !data?.launcherSecret) return;
+  const resolved = path.resolve(source);
+  const allowedRoot = path.resolve(PROJECT_ROOT);
+  if (!resolved.toLowerCase().startsWith(`${allowedRoot.toLowerCase()}${path.sep}`)) return;
+
+  let payload;
+  try {
+    payload = JSON.parse(await fs.readFile(resolved, 'utf8'));
+  } catch {
+    return;
+  }
+
+  const nextPairing = {
+    launcherId: data.launcherId,
+    launcherSecret: data.launcherSecret,
+  };
+  if (Array.isArray(payload?.devices)) {
+    let changed = false;
+    payload.devices = payload.devices.map((device) => {
+      if (!device || typeof device !== 'object') return device;
+      const sameId = config.deviceId && String(device.id || '') === String(config.deviceId);
+      const sameUrl = normalizeStoredPhoneUrl(device.baseUrl) === normalizeStoredPhoneUrl(config.phoneUrl);
+      if (!sameId && !sameUrl) return device;
+      changed = true;
+      return { ...device, ...nextPairing };
+    });
+    if (!changed) return;
+  } else if (payload && typeof payload === 'object') {
+    payload = { ...payload, ...nextPairing };
+  } else {
+    return;
+  }
+
+  const tempPath = `${resolved}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  await fs.rename(tempPath, resolved);
 }
 
 async function parseJsonResponse(response, message) {
@@ -256,4 +527,20 @@ async function parseJsonResponse(response, message) {
   } catch {
     throw new Error(`${message}: HTTP ${response.status}`);
   }
+}
+
+function isLumiAuthFailure(response, payload) {
+  if (response?.status === 401 || response?.status === 403) return true;
+  if (payload?.success !== false) return false;
+  const detail = String(payload?.error || payload?.message || '').trim();
+  if (!detail) return false;
+  return /(invalid lumi signature|invalid signature|unauthorized|forbidden|auth(?:entication|orization)?)/i.test(detail);
+}
+
+function isActionFastEndpoint(endpoint) {
+  return String(endpoint || '').split('?')[0] === '/api/lumi/agent/action_fast';
+}
+
+function shouldForceActionPairingRefresh(config, endpoint) {
+  return config?.forceActionPairingRefreshOnAuthFailure === true && isActionFastEndpoint(endpoint);
 }

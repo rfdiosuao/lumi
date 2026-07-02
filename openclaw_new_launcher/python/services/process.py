@@ -266,6 +266,46 @@ class OpenClawProcessService:
                 "repairable": repairable and not exists,
             })
 
+        def tool_check(
+            check_id: str,
+            label: str,
+            bundled_path: str,
+            command_names: tuple[str, ...],
+            required: bool = True,
+            repairable: bool = False,
+        ) -> None:
+            if os.path.exists(bundled_path):
+                checks.append({
+                    "id": check_id,
+                    "label": label,
+                    "status": "ok",
+                    "message": "已找到",
+                    "detail": bundled_path,
+                    "repairable": False,
+                })
+                return
+
+            system_path = next((path for path in (shutil.which(name) for name in command_names) if path), "")
+            if system_path:
+                checks.append({
+                    "id": check_id,
+                    "label": label,
+                    "status": "ok",
+                    "message": "已找到系统工具",
+                    "detail": f"{system_path}；随包未找到: {bundled_path}",
+                    "repairable": False,
+                })
+                return
+
+            checks.append({
+                "id": check_id,
+                "label": label,
+                "status": "fail" if required else "warn",
+                "message": "缺失，可能导致启动失败" if required else "未找到，一键修复会尝试补齐",
+                "detail": bundled_path,
+                "repairable": repairable,
+            })
+
         def first_existing(candidates: list[str]) -> str:
             for candidate in candidates:
                 if candidate and os.path.exists(candidate):
@@ -274,33 +314,49 @@ class OpenClawProcessService:
 
         file_check("base_path", "安装目录", self.paths.base_path)
         checks.append(self._storage_health_check(write_test=True))
-        file_check("node", "Node.js 运行时", self.paths.node_exe)
-        file_check("npm", "npm 包管理器", self.paths.npm_cli)
+        tool_check("node", "Node.js 运行时", self.paths.node_exe, ("node.exe", "node"), repairable=True)
+        tool_check("npm", "npm 包管理器", self.paths.npm_cli, ("npm.cmd", "npm.exe", "npm"), repairable=True)
         file_check("start_js", "OpenClaw 启动脚本", self.paths.find_file("start.js", ("back", "backup", "")))
         file_check("openclaw_core", "OpenClaw 本体", self.paths.openclaw_mjs)
         file_check("data_dir", "数据目录", self.paths.data_dir, required=False, repairable=True)
-        git_path = shutil.which("git")
+        bundled_git_path = first_existing([
+            os.path.join(self.paths.base_path, "Git", "cmd", "git.exe"),
+            os.path.join(self.paths.base_path, "git", "cmd", "git.exe"),
+            os.path.join(self.paths.base_path, "SystemData", ".core", "Git", "cmd", "git.exe"),
+            os.path.join(self.paths.base_path, "SystemData", ".core", "git", "cmd", "git.exe"),
+        ])
+        git_path = bundled_git_path or shutil.which("git")
         checks.append({
             "id": "git",
             "label": "Git",
-            "status": "ok" if git_path else "warn",
-            "message": "已找到" if git_path else "未找到；部分编程智能体的仓库能力会受限",
+            "status": "ok" if git_path else "fail",
+            "message": "已找到" if git_path else "未找到；一键补齐会尝试安装 Git for Windows",
             "detail": git_path or "Git for Windows",
-            "repairable": False,
+            "repairable": not bool(git_path),
         })
-        git_bash_path = shutil.which("bash") or first_existing([
+        git_bash_path = first_existing([
+            os.path.join(self.paths.base_path, "Git", "bin", "bash.exe"),
+            os.path.join(self.paths.base_path, "Git", "usr", "bin", "bash.exe"),
+            os.path.join(self.paths.base_path, "git", "bin", "bash.exe"),
+            os.path.join(self.paths.base_path, "git", "usr", "bin", "bash.exe"),
+            os.path.join(self.paths.base_path, "SystemData", ".core", "Git", "bin", "bash.exe"),
+            os.path.join(self.paths.base_path, "SystemData", ".core", "Git", "usr", "bin", "bash.exe"),
             os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Git", "bin", "bash.exe"),
             os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Git", "usr", "bin", "bash.exe"),
             os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Git", "bin", "bash.exe"),
             os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Git", "usr", "bin", "bash.exe"),
         ])
+        if not git_bash_path:
+            path_bash = shutil.which("bash")
+            if path_bash and "git" in path_bash.replace("\\", "/").lower().split("/"):
+                git_bash_path = path_bash
         checks.append({
             "id": "git_bash",
             "label": "Git Bash",
-            "status": "ok" if git_bash_path else "warn",
-            "message": "已找到" if git_bash_path else "未找到；部分命令行智能体的 shell 能力会受限",
+            "status": "ok" if git_bash_path else "fail",
+            "message": "已找到" if git_bash_path else "未找到；一键补齐会尝试安装 Git Bash",
             "detail": git_bash_path or "Git for Windows bash.exe",
-            "repairable": False,
+            "repairable": not bool(git_bash_path),
         })
         uv_path = shutil.which("uv")
         checks.append({
@@ -309,7 +365,7 @@ class OpenClawProcessService:
             "status": "ok" if uv_path else "warn",
             "message": "已找到" if uv_path else "未找到；Python 组件安装会使用备用流程",
             "detail": uv_path or "Python uv package manager",
-            "repairable": False,
+            "repairable": not bool(uv_path),
         })
         checks.append(self._openclaw_config_check())
         checks.append(self._webview2_check())

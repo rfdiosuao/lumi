@@ -310,7 +310,11 @@
   <script>
     const DURATION = 2400;
     const params = new URLSearchParams(location.search);
-    const qaMode = params.has("t") || params.has("static") || params.has("qa");
+    const embedMode = params.has("embed");
+    const loopMode = params.has("loop") && !params.has("static") && !params.has("t");
+    const motionMode = params.get("motion") || "";
+    const readyNonce = params.get("nonce") || "";
+    const qaMode = embedMode || params.has("t") || params.has("static") || params.has("qa");
     if (qaMode) document.body.classList.add("qa-mode");
 
     const root = document.getElementById("logo-root");
@@ -318,6 +322,11 @@
     const replay = document.getElementById("replay");
     const slow = document.getElementById("slow");
     let slowMode = false;
+    let loopTimer = 0;
+
+    if (motionMode === "calm") {
+      speed.value = "0.72";
+    }
 
     function mainAnimations() {
       return root.getAnimations({ subtree: true });
@@ -346,13 +355,34 @@
       setRate(slowMode ? 0.25 : Number(speed.value));
     }
 
-    replay.addEventListener("click", () => {
+    function replayMotion() {
       for (const animation of mainAnimations()) {
         animation.cancel();
         animation.play();
       }
       requestAnimationFrame(applyDefaultSpeed);
-    });
+    }
+
+    function notifyReady() {
+      document.body.classList.add("motion-ready");
+      window.__p2mReady = true;
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: "loom-motion-ready",
+          source: "loom-motion-vector-v1",
+          nonce: readyNonce,
+        }, "*");
+      }
+    }
+
+    function startLoop() {
+      if (!loopMode || loopTimer) return;
+      const rate = Math.max(0.1, slowMode ? 0.25 : Number(speed.value));
+      const interval = Math.ceil(DURATION / rate) + 420;
+      loopTimer = window.setInterval(replayMotion, interval);
+    }
+
+    replay.addEventListener("click", replayMotion);
 
     slow.addEventListener("click", () => {
       slowMode = !slowMode;
@@ -364,7 +394,7 @@
       if (!slowMode) applyDefaultSpeed();
     });
 
-    root.addEventListener("click", () => replay.click());
+    root.addEventListener("click", replayMotion);
 
     requestAnimationFrame(() => {
       if (params.has("static")) {
@@ -373,8 +403,9 @@
         seek(Number(params.get("t")) || 0);
       } else {
         applyDefaultSpeed();
+        startLoop();
       }
-      window.__p2mReady = true;
+      notifyReady();
     });
   </script>
 </body>

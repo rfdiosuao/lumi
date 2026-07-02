@@ -1,8 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 
 let bridgeStartup: Promise<void> | null = null;
+let bridgeHttpBase = '';
 const BRIDGE_STARTUP_RETRIES = 480;
 const BRIDGE_STARTUP_INTERVAL_MS = 500;
+const BRIDGE_PORT_STORAGE_KEY = 'loom.bridge.port';
 
 function getErrorMessage(error: unknown): string {
   if (typeof error === 'string') return error;
@@ -90,14 +92,20 @@ function isTransientStatusReadError(error: unknown): boolean {
 
 async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) {
   const currentPort = await invoke<number>('get_bridge_port');
-  if (currentPort > 0) return;
+  if (currentPort > 0) {
+    rememberBridgePort(currentPort);
+    return;
+  }
 
   if (!bridgeStartup) {
     bridgeStartup = (async () => {
       await invoke<string>('start_bridge');
       for (let i = 0; i < BRIDGE_STARTUP_RETRIES; i += 1) {
         const port = await invoke<number>('get_bridge_port');
-        if (port > 0) return;
+        if (port > 0) {
+          rememberBridgePort(port);
+          return;
+        }
         await new Promise((resolve) => setTimeout(resolve, BRIDGE_STARTUP_INTERVAL_MS));
       }
       throw new Error('Bridge 启动超时，请到环境诊断里查看 Bridge 启动失败快照');
@@ -106,6 +114,36 @@ async function ensureBridgeStarted(invoke: <T>(cmd: string, args?: Record<string
     });
   }
   await bridgeStartup;
+}
+
+function rememberBridgePort(port: number) {
+  if (!Number.isFinite(port) || port <= 0) return;
+  bridgeHttpBase = `http://127.0.0.1:${port}`;
+  try {
+    window.localStorage.setItem(BRIDGE_PORT_STORAGE_KEY, String(port));
+  } catch {
+    // localStorage can be unavailable in tests or restricted webviews.
+  }
+}
+
+function bridgeStreamUrl(path: string): string {
+  let base = bridgeHttpBase;
+  if (!base) {
+    try {
+      const port = Number(window.localStorage.getItem(BRIDGE_PORT_STORAGE_KEY) || 0);
+      if (port > 0) base = `http://127.0.0.1:${port}`;
+    } catch {
+      base = '';
+    }
+  }
+  return base ? `${base}${path}` : path;
+}
+
+export async function ensureBridgeReadyForStreaming(): Promise<string> {
+  await ensureBridgeStarted(invoke);
+  const port = await invoke<number>('get_bridge_port');
+  rememberBridgePort(port);
+  return bridgeStreamUrl('');
 }
 
 async function proxyRequest(path: string, method: string = 'GET', body?: Record<string, unknown>) {
@@ -240,6 +278,75 @@ export const licenseApi = {
   clientConfig: (): Promise<{ cardSite?: { enabled?: boolean; label?: string; url?: string } }> => api('/api/license/client-config'),
   activate: (code: string): Promise<{ license: object }> => api('/api/license/activate', 'POST', { code }),
   authorized: (feature?: string): Promise<{ authorized: boolean }> => api('/api/license/authorized', 'POST', { feature }),
+};
+
+// === Media config API ===
+export interface MediaConfigSnapshot {
+  image: {
+    baseUrl?: string;
+    model?: string;
+    size?: string;
+    count?: number;
+    hasApiKey?: boolean;
+    updatedAt?: string;
+  };
+  video: {
+    providerId?: import('../types').VideoProviderId | string;
+    apiBase?: string;
+    model?: string;
+    mode?: string;
+    resolution?: string;
+    duration?: number;
+    ratio?: string;
+    hasApiKey?: boolean;
+    updatedAt?: string;
+  };
+}
+
+export const mediaApi = {
+  config: (): Promise<{ config: MediaConfigSnapshot }> => api('/api/media/config'),
+  saveConfig: (params: {
+    image?: {
+      baseUrl?: string;
+      apiKey?: string;
+      model?: string;
+      size?: string;
+      count?: number;
+    };
+    video?: {
+      providerId?: import('../types').VideoProviderId | string;
+      apiBase?: string;
+      apiKey?: string;
+      dashKey?: string;
+      model?: string;
+      mode?: string;
+      resolution?: string;
+      duration?: number;
+      ratio?: string;
+    };
+  }): Promise<{ config: MediaConfigSnapshot }> => api('/api/media/config', 'POST', params),
+  testConfig: (params: {
+    kind: 'image' | 'video';
+    image?: {
+      baseUrl?: string;
+      apiKey?: string;
+      model?: string;
+      size?: string;
+      count?: number;
+    };
+    video?: {
+      providerId?: import('../types').VideoProviderId | string;
+      apiBase?: string;
+      apiKey?: string;
+      dashKey?: string;
+      model?: string;
+      mode?: string;
+      resolution?: string;
+      duration?: number;
+      ratio?: string;
+    };
+  }): Promise<{ ok: boolean; message?: string; error?: string; config?: MediaConfigSnapshot }> =>
+    api('/api/media/test', 'POST', params),
 };
 
 // === Image API ===
@@ -416,20 +523,44 @@ export interface AccountSnapshot {
   stale?: boolean;
   lastOnlineAt?: string;
   graceExpiresAt?: string;
+  subscription?: AccountSubscriptionSnapshot;
+  purchaseUrl?: string;
   syncResults?: Array<{ target?: string; ok?: boolean; error?: string }>;
+}
+
+export interface AccountSubscriptionSnapshot {
+  loggedIn?: boolean;
+  mode?: 'native' | 'webview' | string;
+  plan?: string;
+  balance?: string | number;
+  expiresAt?: string;
+  purchaseUrl?: string;
+  webViewUrl?: string;
+  offline?: boolean;
+  stale?: boolean;
+  message?: string;
+  usage?: {
+    usedQuota?: string | number;
+    requestCount?: string | number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 }
 
 export const accountApi = {
   current: (): Promise<{ account: AccountSnapshot }> => api('/api/account/current'),
-  sendEmailCode: (params: { email: string; baseUrl?: string }): Promise<{ sent: boolean; email?: string; maskedEmail?: string; retryAfter?: number; expiresIn?: number; message?: string }> =>
+  sendEmailCode: (params: { email: string; baseUrl?: string; purpose?: 'login' | 'register' }): Promise<{ sent: boolean; email?: string; maskedEmail?: string; retryAfter?: number; expiresIn?: number; message?: string }> =>
     api('/api/account/email-code/send', 'POST', params),
   loginWithEmailCode: (params: { email: string; code: string; baseUrl?: string }): Promise<{ account: AccountSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
     api('/api/account/email-code/login', 'POST', params),
+  register: (params: { email: string; password: string; code: string; baseUrl?: string }): Promise<{ account: AccountSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
+    api('/api/account/register', 'POST', params),
   login: (params: { email?: string; username?: string; password: string; baseUrl?: string; apiToken?: string }): Promise<{ account: AccountSnapshot }> =>
     api('/api/account/login', 'POST', params),
   bindTicket: (params: { ticket: string; baseUrl?: string }): Promise<{ account: AccountSnapshot }> =>
     api('/api/account/bind-ticket', 'POST', params),
   sync: (): Promise<{ account: AccountSnapshot }> => api('/api/account/sync', 'POST'),
+  subscription: (): Promise<{ subscription: AccountSubscriptionSnapshot }> => api('/api/account/subscription'),
   selectModels: (params: { textModel?: string; imageModel?: string; videoModel?: string }): Promise<{ account: AccountSnapshot }> =>
     api('/api/account/models/select', 'POST', params),
   logout: (): Promise<{ account: AccountSnapshot; loggedOut?: boolean }> => api('/api/account/logout', 'POST'),
@@ -447,7 +578,13 @@ export interface BridgeJob<T = unknown> {
   progress?: {
     message?: string;
     tone?: string;
+    phase?: string;
+    commandId?: string;
+    executionLayer?: string;
+    currentStep?: string;
+    stepTimeoutSec?: number;
     history?: Array<{ message?: string; tone?: string; updatedAt?: number }>;
+    [key: string]: unknown;
   };
 }
 
@@ -527,10 +664,53 @@ export interface ComponentSnapshot {
   error?: string | null;
   warning?: string | null;
   manifestErrorCode?: string | null;
+  installLocked?: boolean;
+}
+
+export interface AgentModelConfigStatus {
+  componentId: string;
+  supported: boolean;
+  configured: boolean;
+  installed?: boolean;
+  status: 'unsupported' | 'not_installed' | 'no_wire' | 'unconfigured' | 'configured' | 'failed' | string;
+  message: string;
+  model?: string;
+  provider?: string;
+  baseUrl?: string;
+  managedBy?: string;
+  availableModels?: string[];
+  configPath?: string;
+  userConfigPath?: string;
+  expectedModel?: string;
+  actualModel?: string;
+  backupAvailable?: boolean;
+  updatedAt?: string;
+  componentStatus?: string;
+}
+
+function sanitizeComponentSnapshot(snapshot: ComponentSnapshot): ComponentSnapshot {
+  const warning = snapshot.warning || '';
+  if (
+    snapshot.manifestErrorCode === 'manifest_unavailable' ||
+    warning.includes('All manifest sources') ||
+    warning.includes('release-manifest.json')
+  ) {
+    return {
+      ...snapshot,
+      warning: '正式组件清单未就绪。当前仅支持本机检测；安装前请确认发布通道可访问。',
+    };
+  }
+  return snapshot;
 }
 
 export const componentApi = {
-  status: (): Promise<ComponentSnapshot> => api('/api/components/status'),
+  status: (): Promise<ComponentSnapshot> => api<ComponentSnapshot>('/api/components/status').then(sanitizeComponentSnapshot),
+  modelConfigStatus: (componentId: string): Promise<{ status: AgentModelConfigStatus }> =>
+    api(`/api/components/model-config/status?componentId=${encodeURIComponent(componentId)}`),
+  applyModelConfig: (params: { componentId: string; model?: string }): Promise<{ status: AgentModelConfigStatus }> =>
+    api('/api/components/model-config/apply', 'POST', { ...params, confirmed: true }),
+  rollbackModelConfig: (componentId: string): Promise<{ status: AgentModelConfigStatus }> =>
+    api('/api/components/model-config/rollback', 'POST', { componentId, confirmed: true }),
   install: async (
     componentId: string,
     options: { simulate?: boolean; confirmed?: boolean; onProgress?: (job: BridgeJob<{ catalog?: ComponentSnapshot }>) => void } = {},
@@ -647,6 +827,9 @@ export interface PhoneConfigSnapshot {
   devices: PhoneDeviceSummary[];
 }
 
+export type PhoneTaskMode = 'observe' | 'safe' | 'full';
+export type PhoneTaskProfile = 'fast' | 'standard' | 'deep';
+
 export const phoneApi = {
   config: (): Promise<PhoneConfigSnapshot> => api('/api/phone/config'),
   saveDevice: (params: {
@@ -661,9 +844,110 @@ export const phoneApi = {
   devices: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/devices', 'POST'),
   status: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/status', 'POST'),
   screenshot: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/screenshot', 'POST'),
-  read: (params: { prompt: string }): Promise<{ jobId: string; job: BridgeJob }> =>
+  read: (params: { prompt: string; profile?: PhoneTaskProfile }): Promise<{ jobId: string; job: BridgeJob }> =>
     api('/api/phone/read', 'POST', params),
+  task: (params: {
+    prompt: string;
+    mode?: PhoneTaskMode;
+    profile?: PhoneTaskProfile;
+    timeoutSec?: number;
+    maxWaitSec?: number;
+    maxRounds?: number;
+    pollMs?: number;
+    template?: string;
+    templateId?: string;
+    executionLayer?: 'direct' | 'template' | 'agent';
+    stepTimeoutSec?: number;
+    action?: 'back' | 'home' | string;
+    directAction?: 'back' | 'home' | string;
+  }): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/task', 'POST', params),
   history: (): Promise<{ jobId: string; job: BridgeJob }> => api('/api/phone/history', 'POST'),
+};
+
+// === Matrix control plane API ===
+export interface MatrixDeviceSummary {
+  deviceId: string;
+  name?: string;
+  group?: string;
+  groups?: string[];
+  online: boolean;
+  busy?: boolean;
+  heartbeatAt?: string;
+  lastEventAt?: string;
+  streamStatus?: string;
+  streamLatencyMs?: number;
+  currentPackage?: string;
+  foregroundApp?: string;
+  accessibilityRunning?: boolean | null;
+  screenOn?: boolean | null;
+  deviceLocked?: boolean | null;
+  runningTaskCount?: number;
+  currentTaskId?: string;
+  currentScreenSummary?: string;
+  failureCount?: number;
+  model?: string;
+  lastResult?: string;
+  updatedAt?: string;
+  source?: string;
+  selected?: boolean;
+  platform?: string;
+  account?: string;
+  progress?: number;
+  queue?: number;
+  elapsedMs?: number;
+}
+
+export interface MatrixStatusSnapshot {
+  schema: string;
+  updatedAt?: string;
+  devices: MatrixDeviceSummary[];
+  summary?: {
+    total?: number;
+    online?: number;
+    busy?: number;
+    failed?: number;
+  };
+  campaigns?: Array<Record<string, unknown>>;
+}
+
+export interface MatrixEvent {
+  eventId?: string;
+  timestamp?: string;
+  type: 'queued' | 'assigned' | 'running' | 'step' | 'result' | 'error' | 'cancelled' | string;
+  campaignId?: string;
+  missionId?: string;
+  deviceTaskId?: string;
+  deviceId?: string;
+  message?: string;
+}
+
+export const matrixApi = {
+  status: (): Promise<MatrixStatusSnapshot> => api('/api/matrix/status'),
+  ensureStreamReady: (): Promise<string> => ensureBridgeReadyForStreaming(),
+  eventsStreamUrl: (): string => bridgeStreamUrl('/api/matrix/events/stream'),
+  registerDevice: (params: {
+    deviceId?: string;
+    name?: string;
+    group?: string;
+    online?: boolean;
+    heartbeatAt?: string;
+    currentScreenSummary?: string;
+    failureCount?: number;
+    model?: string;
+  }): Promise<{ device: MatrixDeviceSummary; status: MatrixStatusSnapshot }> =>
+    api('/api/matrix/device/register', 'POST', params),
+  watch: (campaignId?: string): Promise<{ schema: string; events: MatrixEvent[] }> =>
+    api(`/api/matrix/watch${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ''}`),
+  dispatch: (params: {
+    prompt: string;
+    target?: { deviceIds?: string[]; groups?: string[] };
+    mode?: PhoneTaskMode;
+    profile?: PhoneTaskProfile;
+    template?: string;
+    confirmed?: boolean;
+  }): Promise<{ jobId?: string; job?: BridgeJob; task?: Record<string, unknown>; status?: MatrixStatusSnapshot }> =>
+    api('/api/matrix/dispatch', 'POST', params),
+  experience: (): Promise<Record<string, unknown>> => api('/api/matrix/experience'),
 };
 
 // === Runtime wire API ===
@@ -671,12 +955,19 @@ export interface WireSnapshot {
   ok?: boolean;
   managedBy?: string;
   provider?: string;
+  baseUrl?: string;
   tokenMasked?: string;
   models?: {
     text?: string;
     phone?: string;
     image?: string;
     video?: string;
+  };
+  modelLists?: {
+    text?: string[];
+    phone?: string[];
+    image?: string[];
+    video?: string[];
   };
   targets?: Record<string, boolean>;
   updatedAt?: string;

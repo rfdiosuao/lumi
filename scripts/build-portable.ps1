@@ -293,6 +293,17 @@ function Copy-PythonRuntime {
     }
 }
 
+function Remove-PythonRuntimeDevelopmentArtifacts {
+    param([string]$PackageDir)
+
+    foreach ($relative in @(
+        "_up_\python-runtime\Doc",
+        "_up_\python-runtime\Lib\test"
+    )) {
+        Remove-SafePath (Join-Path $PackageDir $relative)
+    }
+}
+
 function Write-PortableStartJs {
     param([string]$PackageDir)
 
@@ -696,11 +707,12 @@ function Copy-ThemeBundle {
 function Remove-PythonCacheFiles {
     param([string]$PackageDir)
 
-    Get-ChildItem -LiteralPath $PackageDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
-        Remove-Item -Recurse -Force
     Get-ChildItem -LiteralPath $PackageDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
         Remove-Item -Force
+    Get-ChildItem -LiteralPath $PackageDir -Recurse -Directory -Filter "__pycache__" -Force -ErrorAction SilentlyContinue |
+        Sort-Object { $_.FullName.Length } -Descending |
+        Remove-Item -Recurse -Force
 }
 
 function Remove-NodeCacheDirectories {
@@ -713,6 +725,32 @@ function Remove-NodeCacheDirectories {
         ForEach-Object {
             Remove-SafePath $_.FullName
         }
+}
+
+function Remove-PortableRuntimeStateArtifacts {
+    param([string]$PackageDir)
+
+    foreach ($relative in @(
+        "data\logs",
+        "data\.openclaw\logs",
+        "data\.openclaw\launcher\phone-agent.json",
+        "data\.openclaw\launcher\phone-agents.json",
+        "data\.openclaw\launcher\desktop-agent.json",
+        "data\.openclaw\launcher\bridge-session.json",
+        "data\.openclaw\launcher\member-session.json",
+        "data\.openclaw\launcher\wire-current.json",
+        "data\.openclaw\launcher\wire-last-good.json",
+        "data\.openclaw\launcher\agent-model-configs"
+    )) {
+        Remove-SafePath (Join-Path $PackageDir $relative)
+    }
+
+    $launcherStateDir = Join-Path $PackageDir "data\.openclaw\launcher"
+    if (Test-Path -LiteralPath $launcherStateDir) {
+        Get-ChildItem -LiteralPath $launcherStateDir -Recurse -Force -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in @(".jsonl", ".log", ".cache") -or $_.Name -match "(audit|ledger|trace)" } |
+            ForEach-Object { Remove-SafePath $_.FullName }
+    }
 }
 
 function Remove-LegacyScriptArtifacts {
@@ -999,6 +1037,28 @@ function Move-PortablePayload {
         }
 }
 
+function Write-McpConfig {
+    param([string]$PackageDir)
+
+    $config = [ordered]@{
+        mcpServers = [ordered]@{
+            loom = [ordered]@{
+                command = "python"
+                args = @("-B", "$PrimaryPayloadDirName/_up_/python/loom_mcp.py")
+                env = [ordered]@{
+                    LOOM_MCP_PERMISSION = "read"
+                    PYTHONDONTWRITEBYTECODE = "1"
+                    PYTHONUTF8 = "1"
+                    PYTHONIOENCODING = "utf-8"
+                }
+            }
+        }
+    }
+    $json = $config | ConvertTo-Json -Depth 12
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText((Join-Path $PackageDir ".mcp.json"), $json + [Environment]::NewLine, $utf8NoBom)
+}
+
 function Write-PortableReadme {
     param(
         [string]$PackageDir,
@@ -1218,6 +1278,7 @@ Invoke-Step "Create portable directory" {
         -ExcludeFiles @("*.pyc", "*.pyo")
 
     Copy-PythonRuntime -PackageDir $packageDir
+    Remove-PythonRuntimeDevelopmentArtifacts -PackageDir $packageDir
     Install-PythonBridgeDependencies -PackageDir $packageDir
     Remove-MemoryToolArtifacts -PackageDir $packageDir
 
@@ -1242,6 +1303,7 @@ Invoke-Step "Create portable directory" {
     Remove-NodeCacheDirectories -PackageDir $packageDir
 
     Write-CleanRuntimeConfig -PackageDir $packageDir -ProfileName $brand.Profile -ThemeId $brand.ThemeId -Edition $brand.Edition
+    Remove-PortableRuntimeStateArtifacts -PackageDir $packageDir
 
     $nodeVersion = Get-NodeVersion -PackageDir $packageDir
     $openclawVersion = Get-OpenClawVersion -PackageDir $packageDir
@@ -1254,6 +1316,8 @@ Invoke-Step "Create portable directory" {
     Remove-PythonCacheFiles -PackageDir $packageDir
     Remove-SafePath (Join-Path $packageDir $LegacyPayloadDirName)
     Move-PortablePayload -PackageDir $packageDir
+    Remove-PythonCacheFiles -PackageDir $packageDir
+    Write-McpConfig -PackageDir $packageDir
 }
 
 Invoke-Step "Verify portable directory" {
@@ -1273,13 +1337,10 @@ Invoke-Step "Smoke verify portable runtime" {
 Invoke-Step "Clean runtime cache after smoke" {
     $payloadDir = Join-Path $packageDir $PrimaryPayloadDirName
     if (Test-Path -LiteralPath $payloadDir) {
+        Remove-PortableRuntimeStateArtifacts -PackageDir $payloadDir
         Remove-PythonCacheFiles -PackageDir $payloadDir
     } else {
-        Remove-PythonCacheFiles -PackageDir $packageDir
-    }
-    if (Test-Path -LiteralPath $payloadDir) {
-        Remove-PythonCacheFiles -PackageDir $payloadDir
-    } else {
+        Remove-PortableRuntimeStateArtifacts -PackageDir $packageDir
         Remove-PythonCacheFiles -PackageDir $packageDir
     }
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import re
 import shutil
@@ -18,6 +19,7 @@ from urllib.request import Request, urlopen
 
 from core.component_state import ComponentState, ComponentStateStore
 from core.release_manifest import ReleaseComponent
+from core.secret_store import unprotect_secret
 
 
 ComponentFetcher = Callable[[str, float], bytes]
@@ -35,7 +37,7 @@ class ComponentInstallError(RuntimeError):
 WINDOWS_COMMAND_SUFFIXES = ("", ".cmd", ".exe", ".ps1", ".bat")
 
 KNOWN_COMPONENT_COMMANDS: dict[str, tuple[str, ...]] = {
-    "codex-desktop": ("codex",),
+    "codex-desktop": ("Codex", "codex"),
     "claude-code": ("claude",),
     "opencode": ("opencode",),
     "openclaw-companion": ("openclaw",),
@@ -51,6 +53,49 @@ KNOWN_NPM_PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
 }
 
 RETRY_DELAYS_SECONDS = (0.0, 0.8, 1.6)
+CODEX_DESKTOP_PACKAGE_NAME = "OpenAI.Codex"
+CODEX_DESKTOP_APP_ID = "App"
+PYTHON_SOURCE_CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
+MODEL_ENV_SCRUB_COMPONENTS = {"codex-desktop", "claude-code", "opencode", "openclaw-companion"}
+AGENT_MODEL_ENV_KEYS = (
+    "LOOM_CODEX_API_KEY",
+    "LOOM_CLAUDE_API_KEY",
+    "LOOM_OPENCODE_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_BASE",
+    "OPENAI_API_TYPE",
+    "OPENAI_API_VERSION",
+    "OPENAI_MODEL",
+    "OPENAI_ORG_ID",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_PROJECT",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "CLAUDE_API_KEY",
+    "CLAUDE_CODE_API_KEY",
+    "CLAUDE_CODE_MODEL",
+    "OPENCODE_API_KEY",
+    "OPENCODE_BASE_URL",
+    "OPENCODE_MODEL",
+    "OPENCODE_PROVIDER",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "DASHSCOPE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "MOONSHOT_API_KEY",
+    "OPENROUTER_API_KEY",
+    "SILICONFLOW_API_KEY",
+    "VOLCENGINE_ARK_API_KEY",
+    "XAI_API_KEY",
+    "ZHIPUAI_API_KEY",
+)
 
 
 @dataclass(frozen=True)
@@ -77,6 +122,7 @@ class ComponentInstaller:
         self.fetcher = fetcher or _default_fetcher
         self.health_checker = health_checker or _default_health_checker
         self.launcher = launcher or self._default_launcher
+        self._custom_launcher = launcher is not None
         self.installer_runner = installer_runner or _default_installer_runner
         self.retry_sleep = retry_sleep or time.sleep
         self.timeout = timeout
@@ -244,8 +290,10 @@ class ComponentInstaller:
                 on_progress(f"检测失败：{message}", "danger")
             raise ComponentInstallError(f"detect failed for {component.component_id}: {message}") from exc
 
+        entry_path = self._component_entry_path(component, install_path)
         installed_version = self._detect_installed_version(component, install_path)
-        if installed_version and not _versions_match(component.version, installed_version):
+        is_codex_desktop_app = component.component_id == "codex-desktop" and _is_codex_desktop_executable(entry_path)
+        if installed_version and not is_codex_desktop_app and not _versions_match(component.version, installed_version):
             state = self.state_store.mark(component.component_id, "upgrade_available", version=installed_version, job_id=job_id)
             if on_progress:
                 on_progress(f"{component.name} 已检测到旧版本 {installed_version}，建议升级到 {component.version}", "warning")
@@ -262,9 +310,14 @@ class ComponentInstaller:
             raise ComponentInstallError("组件尚未就绪，请先检测或安装")
         install_path = self._safe_install_path(component.install_path)
         entry_path = self._component_entry_path(component, install_path)
+        self._assert_component_sources_clean(component, install_path, entry_path)
         self.state_store.mark(component.component_id, "starting", version=state.version or component.version, job_id=job_id)
         try:
-            result = self.launcher(entry_path, self._component_cwd(install_path))
+            cwd = self._component_cwd(install_path)
+            if self._custom_launcher:
+                result = self.launcher(entry_path, cwd)
+            else:
+                result = self._default_component_launcher(component, entry_path, cwd)
         except Exception as exc:
             message = str(exc) or "组件启动失败"
             self.state_store.mark(
@@ -449,8 +502,12 @@ class ComponentInstaller:
         has_external_entry = bool(self._first_existing_external_entry(component))
         if not has_internal_install and not has_external_entry:
             raise ComponentInstallError("未找到组件目录，请先安装或重新安装")
+        entry_path = ""
         if component.entry:
-            self._component_entry_path(component, install_path)
+            entry_path = self._component_entry_path(component, install_path)
+        elif has_external_entry:
+            entry_path = self._component_entry_path(component, install_path)
+        self._assert_component_sources_clean(component, install_path, entry_path)
 
     def _component_entry_path(self, component: ReleaseComponent, install_path: str) -> str:
         if not component.entry:
@@ -472,8 +529,22 @@ class ComponentInstaller:
                 return candidate
         return None
 
+    def _assert_component_sources_clean(self, component: ReleaseComponent, install_path: str, entry_path: str = "") -> None:
+        if component.component_id != "hermes":
+            return
+        for root in _hermes_source_roots(install_path, entry_path):
+            conflict = _first_python_conflict_marker(root)
+            if conflict:
+                raise ComponentInstallError(
+                    f"Hermes 运行时包损坏：{conflict} 含有 Git 冲突标记，请重新安装 Hermes。"
+                )
+
     def _external_entry_candidates(self, component: ReleaseComponent) -> list[str]:
         candidates: list[str] = []
+        if component.component_id == "codex-desktop":
+            for candidate in self._codex_desktop_entry_candidates():
+                _append_unique(candidates, candidate)
+
         for raw_path in getattr(component, "external_paths", ()):
             candidate = self._expand_external_path(raw_path)
             self._append_external_path_variants(candidates, candidate)
@@ -497,6 +568,46 @@ class ComponentInstaller:
             if package_entry:
                 _append_unique(candidates, package_entry)
         return candidates
+
+    def _codex_desktop_entry_candidates(self) -> tuple[str, ...]:
+        candidates: list[str] = []
+        for install_location in self._codex_desktop_appx_locations():
+            for relative in ("app/Codex.exe", "Codex.exe"):
+                _append_unique(candidates, os.path.join(install_location, *relative.split("/")))
+
+        localappdata = os.environ.get("LOCALAPPDATA", "").strip()
+        program_files = os.environ.get("ProgramFiles", "").strip()
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", "").strip()
+        for root, suffixes in (
+            (localappdata, ("Programs/Codex/Codex.exe", "Programs/OpenAI Codex/Codex.exe", "OpenAI/Codex/Codex.exe")),
+            (program_files, ("Codex/Codex.exe", "OpenAI Codex/Codex.exe")),
+            (program_files_x86, ("Codex/Codex.exe", "OpenAI Codex/Codex.exe")),
+        ):
+            if not root:
+                continue
+            for suffix in suffixes:
+                _append_unique(candidates, os.path.abspath(os.path.join(root, *suffix.split("/"))))
+        return tuple(candidates)
+
+    def _codex_desktop_appx_locations(self) -> tuple[str, ...]:
+        command = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"Get-AppxPackage -Name {CODEX_DESKTOP_PACKAGE_NAME} | Select-Object -First 1 -ExpandProperty InstallLocation",
+        ]
+        try:
+            result = self.installer_runner(command, self.base_path, 15000)
+        except Exception:
+            return ()
+        if int(getattr(result, "returncode", 0) or 0) != 0:
+            return ()
+        locations: list[str] = []
+        for line in str(getattr(result, "stdout", "") or "").splitlines():
+            value = line.strip()
+            if value:
+                _append_unique(locations, self._expand_external_path(value))
+        return tuple(locations)
 
     def _external_command_names(self, component: ReleaseComponent) -> tuple[str, ...]:
         names: list[str] = []
@@ -565,6 +676,9 @@ class ComponentInstaller:
 
     def _common_command_directories(self) -> tuple[str, ...]:
         directories: list[str] = []
+        private_prefix = self._npm_private_prefix()
+        _append_unique(directories, private_prefix)
+        _append_unique(directories, os.path.join(private_prefix, "bin"))
         appdata = os.environ.get("APPDATA", "").strip()
         localappdata = os.environ.get("LOCALAPPDATA", "").strip()
         userprofile = os.environ.get("USERPROFILE", "").strip() or os.path.expanduser("~")
@@ -586,6 +700,9 @@ class ComponentInstaller:
 
     def _npm_global_bin_dirs(self) -> tuple[str, ...]:
         directories: list[str] = []
+        private_prefix = self._npm_private_prefix()
+        _append_unique(directories, private_prefix)
+        _append_unique(directories, os.path.join(private_prefix, "bin"))
         for command in (("npm", "prefix", "-g"), ("npm", "bin", "-g")):
             try:
                 result = self.installer_runner(self._resolve_command(list(command)), self.base_path, 15000)
@@ -667,6 +784,9 @@ class ComponentInstaller:
         return None
 
     def _npm_global_root(self) -> str:
+        private_root = os.path.join(self._npm_private_prefix(), "node_modules")
+        if os.path.isdir(private_root):
+            return private_root
         try:
             result = self.installer_runner(self._resolve_command(["npm", "root", "-g"]), self.base_path, 15000)
         except Exception:
@@ -678,6 +798,9 @@ class ComponentInstaller:
             if value:
                 return self._expand_external_path(value)
         return ""
+
+    def _npm_private_prefix(self) -> str:
+        return os.path.join(self.base_path, "data", ".installer", "npm-global")
 
     def _assert_external_install_available(self, component: ReleaseComponent) -> None:
         if not getattr(component, "external_paths", ()):
@@ -692,6 +815,9 @@ class ComponentInstaller:
 
     def _default_launcher(self, executable: str, cwd: str) -> dict:
         return _default_launcher(executable, cwd, base_path=self.base_path)
+
+    def _default_component_launcher(self, component: ReleaseComponent, executable: str, cwd: str) -> dict:
+        return _default_launcher(executable, cwd, base_path=self.base_path, component_id=component.component_id)
 
     def _run_silent_installer(self, component: ReleaseComponent, install_path: str) -> None:
         entry_path = self._component_entry_path(component, install_path)
@@ -714,7 +840,7 @@ class ComponentInstaller:
         if not command:
             return
         result = self.installer_runner(
-            self._resolve_command(command),
+            self._resolve_command(self._with_private_npm_prefix(command)),
             self.base_path,
             int(getattr(component, "command_timeout_ms", 900000) or 900000),
         )
@@ -737,7 +863,7 @@ class ComponentInstaller:
         if not command:
             return
         timeout_ms = int(getattr(component, "command_timeout_ms", 900000) or 900000)
-        resolved = self._resolve_command(command)
+        resolved = self._resolve_command(self._with_private_npm_prefix(command))
         last_error = ""
         for attempt_index, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
             if delay > 0:
@@ -753,9 +879,26 @@ class ComponentInstaller:
                 on_progress(f"安装命令失败，正在重试第 {attempt_index + 1} 次：{_short_error(output)}", "warning")
         raise ComponentInstallError(last_error or "安装命令失败")
 
+    def _with_private_npm_prefix(self, command: list[str]) -> list[str]:
+        if not command:
+            return command
+        executable = os.path.basename(command[0]).lower()
+        if executable not in {"npm", "npm.cmd", "npm.ps1"}:
+            return command
+        lowered = [part.lower() for part in command[1:]]
+        if not any(part in {"install", "i", "add", "uninstall", "remove", "rm"} for part in lowered):
+            return command
+        if "--prefix" in lowered:
+            return command
+        prefix = self._npm_private_prefix()
+        os.makedirs(prefix, exist_ok=True)
+        return [command[0], "--prefix", prefix, *command[1:]]
+
     def _detect_installed_version(self, component: ReleaseComponent, install_path: str) -> str | None:
         try:
             entry_path = self._component_entry_path(component, install_path)
+            if component.component_id == "codex-desktop" and _is_codex_desktop_executable(entry_path):
+                return _codex_desktop_version_from_path(entry_path)
             cwd = self._component_cwd(install_path)
             command = [*build_launcher_command(entry_path, cwd, base_path=self.base_path), "--version"]
             result = self.installer_runner(command, cwd, 15000)
@@ -949,6 +1092,67 @@ def _default_health_checker(component: ReleaseComponent, _install_path: str) -> 
             raise ComponentInstallError(f"health check returned HTTP {status}")
 
 
+def _hermes_source_roots(install_path: str, entry_path: str = "") -> tuple[str, ...]:
+    roots: list[str] = []
+    for candidate in (install_path, entry_path):
+        current = os.path.abspath(candidate) if candidate else ""
+        if not current:
+            continue
+        if os.path.isfile(current):
+            current = os.path.dirname(current)
+        for _ in range(6):
+            if not current or current == os.path.dirname(current):
+                break
+            if os.path.isdir(os.path.join(current, "hermes_cli")) or os.path.isfile(os.path.join(current, "utils.py")):
+                _append_unique(roots, current)
+            current = os.path.dirname(current)
+    return tuple(roots)
+
+
+def _first_python_conflict_marker(root: str) -> str:
+    if not root or not os.path.isdir(root):
+        return ""
+    ignored_dirs = {
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        "Lib",
+        "Scripts",
+        "bin",
+        "Include",
+        "site-packages",
+        "node_modules",
+    }
+    checked = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in ignored_dirs and not name.endswith(".dist-info")]
+        for filename in filenames:
+            if not filename.endswith(".py"):
+                continue
+            checked += 1
+            if checked > 1000:
+                return ""
+            path = os.path.join(dirpath, filename)
+            try:
+                with open(path, "r", encoding="utf-8-sig") as handle:
+                    for line in handle:
+                        if line.lstrip().startswith(PYTHON_SOURCE_CONFLICT_MARKERS):
+                            return path
+            except UnicodeDecodeError:
+                try:
+                    with open(path, "r", encoding="gb18030") as handle:
+                        for line in handle:
+                            if line.lstrip().startswith(PYTHON_SOURCE_CONFLICT_MARKERS):
+                                return path
+                except Exception:
+                    continue
+            except OSError:
+                continue
+    return ""
+
+
 def _default_installer_runner(command: list[str], cwd: str, timeout_ms: int) -> subprocess.CompletedProcess:
     return subprocess.run(
         command,
@@ -961,6 +1165,32 @@ def _default_installer_runner(command: list[str], cwd: str, timeout_ms: int) -> 
     )
 
 
+def _is_codex_desktop_executable(executable: str) -> bool:
+    path = os.path.abspath(str(executable or ""))
+    filename = os.path.basename(path)
+    if filename != "Codex.exe":
+        return False
+    lowered_parts = {part.lower() for part in path.replace("\\", "/").split("/")}
+    return not lowered_parts.intersection({"resources", "node_modules", "vendor", "bin", "npm"})
+
+
+def _codex_desktop_version_from_path(executable: str) -> str | None:
+    match = re.search(r"OpenAI\.Codex_(\d+(?:\.\d+){1,3})_", str(executable or ""), re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _codex_desktop_app_uri(executable: str) -> str | None:
+    match = re.search(
+        r"WindowsApps[\\/](OpenAI\.Codex)_[^\\/]+__([0-9a-z]+)[\\/]",
+        str(executable or ""),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    package_family = f"{match.group(1)}_{match.group(2)}"
+    return f"shell:AppsFolder\\{package_family}!{CODEX_DESKTOP_APP_ID}"
+
+
 def build_launcher_command(executable: str, cwd: str, *, base_path: str | None = None) -> list[str]:
     extension = os.path.splitext(executable)[1].lower()
     if extension in {".js", ".mjs", ".cjs"}:
@@ -969,6 +1199,7 @@ def build_launcher_command(executable: str, cwd: str, *, base_path: str | None =
             node_candidates.extend([
                 os.path.join(base_path, "node", "node.exe"),
                 os.path.join(base_path, "_up_", "node", "node.exe"),
+                os.path.join(base_path, "SystemData", ".core", "node", "node.exe"),
                 os.path.join(base_path, "runtime", "node", "node.exe"),
             ])
         node_from_path = shutil.which("node")
@@ -985,36 +1216,212 @@ def build_launcher_command(executable: str, cwd: str, *, base_path: str | None =
     return [executable]
 
 
+def build_agent_launcher_command(
+    component_id: str | None,
+    executable: str,
+    cwd: str,
+    *,
+    base_path: str | None = None,
+) -> list[str]:
+    if component_id == "codex-desktop" and _is_codex_desktop_executable(executable):
+        app_uri = _codex_desktop_app_uri(executable)
+        if app_uri and os.name == "nt":
+            return ["explorer.exe", app_uri]
+        return [executable]
+
+    command = build_launcher_command(executable, cwd, base_path=base_path)
+    if component_id == "opencode":
+        model = _require_opencode_default_model(base_path)
+        return [*command, "--pure", "-m", model]
+    if component_id == "openclaw-companion":
+        return [*command, "chat", "--local"]
+    if component_id == "hermes":
+        return [*command, "chat"]
+    return command
+
+
 def build_visible_launcher_command(
     executable: str,
     cwd: str,
     *,
     base_path: str | None = None,
+    component_id: str | None = None,
     force_windows: bool | None = None,
 ) -> list[str]:
-    command = build_launcher_command(executable, cwd, base_path=base_path)
+    command = build_agent_launcher_command(component_id, executable, cwd, base_path=base_path)
     use_windows_terminal = os.name == "nt" if force_windows is None else force_windows
+    if component_id == "codex-desktop" and _is_codex_desktop_executable(executable):
+        return command
     if not use_windows_terminal:
         return command
 
     command_line = subprocess.list2cmdline(command)
-    title = f"LOOM Agent - {os.path.basename(executable) or 'runtime'}"
-    return ["cmd.exe", "/c", "start", title, "cmd.exe", "/k", command_line]
+    title = f"LOOM Agent - {_launcher_title(component_id, executable)}"
+    return ["cmd.exe", "/k", f"title {title} && {command_line}"]
 
 
-def _default_launcher(executable: str, cwd: str, *, base_path: str | None = None) -> dict:
-    command = build_visible_launcher_command(executable, cwd, base_path=base_path)
-    creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if os.name == "nt" else 0
+def _default_launcher(executable: str, cwd: str, *, base_path: str | None = None, component_id: str | None = None) -> dict:
+    command = build_visible_launcher_command(executable, cwd, base_path=base_path, component_id=component_id)
+    use_windows_terminal = os.name == "nt"
+    creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if use_windows_terminal else 0
+    env = build_agent_launcher_environment(base_path, component_id)
+    stream_target = None if use_windows_terminal else subprocess.DEVNULL
     process = subprocess.Popen(
         command,
         cwd=cwd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
+        env=env,
+        stdout=stream_target,
+        stderr=stream_target,
+        stdin=stream_target,
         close_fds=True,
         creationflags=creationflags,
     )
-    return {"pid": process.pid, "visible": os.name == "nt", "command": subprocess.list2cmdline(command)}
+    return {"pid": process.pid, "visible": use_windows_terminal, "command": subprocess.list2cmdline(command)}
+
+
+def build_agent_launcher_environment(base_path: str | None, component_id: str | None) -> dict[str, str] | None:
+    if not base_path:
+        return None
+    root = os.path.abspath(base_path)
+    env = os.environ.copy()
+    if component_id in MODEL_ENV_SCRUB_COMPONENTS:
+        _scrub_agent_model_environment(env)
+    path_entries = [
+        os.path.join(root, "data", ".installer", "npm-global"),
+        os.path.join(root, "data", ".installer", "npm-global", "bin"),
+        os.path.join(root, "node"),
+        os.path.join(root, "_up_", "node"),
+        os.path.join(root, "SystemData", ".core", "node"),
+        os.path.join(root, "node_modules", ".bin"),
+        os.path.join(root, "_up_", "node_modules", ".bin"),
+        os.path.join(root, "SystemData", ".core", "node_modules", ".bin"),
+    ]
+    existing_path = env.get("Path") or env.get("PATH") or ""
+    prefix = os.pathsep.join(entry for entry in path_entries if os.path.isdir(entry))
+    if prefix:
+        merged_path = prefix if not existing_path else f"{prefix}{os.pathsep}{existing_path}"
+        env["PATH"] = merged_path
+        env["Path"] = merged_path
+
+    if component_id == "openclaw-companion":
+        data_dir = os.path.join(root, "data")
+        state_dir = os.path.join(data_dir, ".openclaw")
+        env["OPENCLAW_HOME"] = data_dir
+        env["OPENCLAW_STATE_DIR"] = state_dir
+        env["OPENCLAW_CONFIG_PATH"] = os.path.join(state_dir, "openclaw.json")
+    elif component_id == "opencode":
+        config_dir = os.path.join(root, "data", ".opencode")
+        config_file = os.path.join(config_dir, "opencode.json")
+        env["OPENCODE_CONFIG_DIR"] = config_dir
+        env["OPENCODE_CONFIG"] = config_file
+        api_key = _opencode_api_key_from_wire(root)
+        if api_key:
+            env["LOOM_OPENCODE_API_KEY"] = api_key
+    elif component_id == "codex-desktop":
+        wire = _agent_wire_from_root(root)
+        env["CODEX_HOME"] = os.path.join(root, "data", ".codex")
+        _inject_openai_compatible_env(env, wire, key_name="LOOM_CODEX_API_KEY")
+    elif component_id == "claude-code":
+        wire = _agent_wire_from_root(root)
+        api_key = _wire_api_key(wire)
+        base_url = _wire_base_url(wire)
+        model = _wire_text_model(wire)
+        if api_key:
+            env["LOOM_CLAUDE_API_KEY"] = api_key
+            env["ANTHROPIC_AUTH_TOKEN"] = api_key
+            env["ANTHROPIC_API_KEY"] = api_key
+        if base_url:
+            env["ANTHROPIC_BASE_URL"] = base_url
+        if model:
+            env["ANTHROPIC_MODEL"] = model
+    return env
+
+
+def _scrub_agent_model_environment(env: dict[str, str]) -> None:
+    stale_keys = {key.upper() for key in AGENT_MODEL_ENV_KEYS}
+    for key in list(env):
+        if key.upper() in stale_keys:
+            env.pop(key, None)
+
+
+def _require_opencode_default_model(base_path: str | None) -> str:
+    if not base_path:
+        raise ComponentInstallError("opencode 缺少 LOOM 安装根目录，无法加载模型配置")
+    config_path = os.path.join(os.path.abspath(base_path), "data", ".opencode", "opencode.json")
+    if not os.path.isfile(config_path):
+        raise ComponentInstallError("opencode 模型配置缺失，请先登录中转站并同步模型")
+    try:
+        with open(config_path, encoding="utf-8-sig") as handle:
+            config = json.load(handle)
+    except Exception as exc:
+        raise ComponentInstallError(f"opencode 模型配置无法读取：{exc}") from exc
+    model = str(config.get("model") or "").strip() if isinstance(config, dict) else ""
+    if "/" not in model:
+        raise ComponentInstallError("opencode 默认模型缺失，请先在模型账号页同步模型")
+    provider_id = model.split("/", 1)[0]
+    providers = config.get("provider") if isinstance(config, dict) else {}
+    provider = providers.get(provider_id) if isinstance(providers, dict) else None
+    if not isinstance(provider, dict):
+        raise ComponentInstallError(f"opencode Provider {provider_id} 缺失，请重新同步模型")
+    return model
+
+
+def _opencode_api_key_from_wire(base_path: str) -> str:
+    wire = _agent_wire_from_root(os.path.abspath(base_path))
+    return _wire_api_key(wire)
+
+
+def _agent_wire_from_root(root: str) -> dict:
+    wire_path = os.path.join(os.path.abspath(root), "data", ".openclaw", "launcher", "wire-current.json")
+    try:
+        with open(wire_path, encoding="utf-8-sig") as handle:
+            wire = json.load(handle)
+    except Exception:
+        return {}
+    return wire if isinstance(wire, dict) else {}
+
+
+def _wire_api_key(wire: dict) -> str:
+    if not isinstance(wire, dict):
+        return ""
+    return unprotect_secret(wire.get("apiKey"))
+
+
+def _wire_base_url(wire: dict) -> str:
+    if not isinstance(wire, dict):
+        return ""
+    value = str(wire.get("baseUrl") or "").strip().rstrip("/")
+    return value
+
+
+def _wire_text_model(wire: dict) -> str:
+    models = wire.get("models") if isinstance(wire.get("models"), dict) else {}
+    return str(models.get("text") or "").strip()
+
+
+def _inject_openai_compatible_env(env: dict[str, str], wire: dict, *, key_name: str) -> None:
+    api_key = _wire_api_key(wire)
+    base_url = _wire_base_url(wire)
+    model = _wire_text_model(wire)
+    if api_key:
+        env[key_name] = api_key
+        env["OPENAI_API_KEY"] = api_key
+    if base_url:
+        env["OPENAI_BASE_URL"] = base_url
+        env["OPENAI_API_BASE"] = base_url
+    if model:
+        env["OPENAI_MODEL"] = model
+
+
+def _launcher_title(component_id: str | None, executable: str) -> str:
+    titles = {
+        "codex-desktop": "Codex",
+        "claude-code": "Claude Code",
+        "opencode": "opencode",
+        "openclaw-companion": "OpenClaw",
+        "hermes": "Hermes",
+    }
+    return titles.get(str(component_id or ""), os.path.basename(executable) or "runtime")
 
 
 def _is_path_inside(path: str, root: str) -> bool:

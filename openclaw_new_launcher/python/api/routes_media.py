@@ -8,26 +8,162 @@ import os
 
 from fastapi import Request
 
+from core.storage import read_json, write_json
 from services.image_api import ImageApiError
 from services.video_api import VideoApiError
+
+
+def _text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _read_config(path: str) -> dict:
+    payload = read_json(path, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_merged_config(path: str, incoming: dict) -> dict:
+    current = _read_config(path)
+    merged = dict(current)
+    for key, value in incoming.items():
+        if key in {"apiKey", "dashKey"} and not _text(value):
+            continue
+        if value is None:
+            continue
+        merged[key] = value
+    write_json(path, merged)
+    return merged
+
+
+def _public_image_config(config: dict) -> dict:
+    return {
+        "baseUrl": _text(config.get("baseUrl")),
+        "model": _text(config.get("model")),
+        "size": _text(config.get("size")) or "1024x1024",
+        "count": int(config.get("count") or 1),
+        "hasApiKey": bool(_text(config.get("apiKey"))),
+        "updatedAt": _text(config.get("updatedAt")),
+    }
+
+
+def _public_video_config(config: dict) -> dict:
+    return {
+        "providerId": _text(config.get("providerId")) or "dashscope",
+        "apiBase": _text(config.get("apiBase")),
+        "model": _text(config.get("model")),
+        "mode": _text(config.get("mode")) or "t2v",
+        "resolution": _text(config.get("resolution")) or "720P",
+        "duration": int(config.get("duration") or 5),
+        "ratio": _text(config.get("ratio")) or "16:9",
+        "hasApiKey": bool(_text(config.get("apiKey")) or _text(config.get("dashKey"))),
+        "updatedAt": _text(config.get("updatedAt")),
+    }
+
+
+def _image_config_fallback(ctx) -> dict:
+    return _read_config(ctx.paths.image_config)
+
+
+def _video_config_fallback(ctx) -> dict:
+    config = _read_config(ctx.paths.video_config)
+    if not _text(config.get("apiKey")) and _text(config.get("dashKey")):
+        config["apiKey"] = _text(config.get("dashKey"))
+    return config
+
+
+def _media_config_snapshot(ctx) -> dict:
+    return {
+        "image": _public_image_config(_image_config_fallback(ctx)),
+        "video": _public_video_config(_video_config_fallback(ctx)),
+    }
+
+
+def _save_media_config(ctx, body: dict) -> dict:
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    image = body.get("image") if isinstance(body.get("image"), dict) else {}
+    video = body.get("video") if isinstance(body.get("video"), dict) else {}
+
+    if image:
+        try:
+            count = max(1, min(int(image.get("count", 1) or 1), 9))
+        except (TypeError, ValueError):
+            raise ValueError("图片数量必须是数字")
+        _write_merged_config(ctx.paths.image_config, {
+            "baseUrl": _text(image.get("baseUrl")),
+            "apiKey": _text(image.get("apiKey")),
+            "model": _text(image.get("model")),
+            "size": _text(image.get("size")) or "1024x1024",
+            "count": count,
+            "updatedAt": now,
+        })
+
+    if video:
+        try:
+            duration = max(1, min(int(video.get("duration", 5) or 5), 30))
+        except (TypeError, ValueError):
+            raise ValueError("视频时长必须是数字")
+        api_key = _text(video.get("apiKey")) or _text(video.get("dashKey"))
+        _write_merged_config(ctx.paths.video_config, {
+            "providerId": _text(video.get("providerId")) or "dashscope",
+            "apiBase": _text(video.get("apiBase")),
+            "apiKey": api_key,
+            "dashKey": api_key,
+            "model": _text(video.get("model")),
+            "mode": _text(video.get("mode")) or "t2v",
+            "resolution": _text(video.get("resolution")) or "720P",
+            "duration": duration,
+            "ratio": _text(video.get("ratio")) or "16:9",
+            "updatedAt": now,
+        })
+
+    return _media_config_snapshot(ctx)
+
+
+def _test_media_config(ctx, body: dict) -> dict:
+    kind = _text(body.get("kind")) or "image"
+    snapshot = _save_media_config(ctx, body) if ("image" in body or "video" in body) else _media_config_snapshot(ctx)
+    target = snapshot["video"] if kind == "video" else snapshot["image"]
+    missing = []
+    if kind == "video":
+        if not target.get("hasApiKey"):
+            missing.append("API Key")
+        if not target.get("model"):
+            missing.append("模型")
+    else:
+        if not target.get("baseUrl"):
+            missing.append("Base URL")
+        if not target.get("hasApiKey"):
+            missing.append("API Key")
+        if not target.get("model"):
+            missing.append("模型")
+    if missing:
+        return {"ok": False, "message": f"请补全：{'、'.join(missing)}", "config": snapshot}
+    return {"ok": True, "message": "配置已就绪，可提交生成任务验证", "config": snapshot}
 
 
 def _image_generate_payload(ctx, body: dict) -> dict:
     client = ctx.get_image_client()
     gateway_profile = ctx.get_license_mgr().current_gateway_profile()
+    saved_config = _image_config_fallback(ctx)
     base_url = (
         str(body.get("baseUrl", "") or "").strip()
+        or str(saved_config.get("baseUrl") or "").strip()
         or str((gateway_profile or {}).get("imageBaseUrl") or "").strip()
         or str((gateway_profile or {}).get("baseUrl") or "").strip()
     )
     api_key = (
         str(body.get("apiKey", "") or "").strip()
+        or str(saved_config.get("apiKey") or "").strip()
         or str((gateway_profile or {}).get("imageApiKey") or "").strip()
         or str((gateway_profile or {}).get("apiKey") or "").strip()
     )
     prompt = body.get("prompt", "")
-    size = body.get("size", "1024x1024")
-    model = str(body.get("model", "") or "").strip() or str((gateway_profile or {}).get("imageModel") or "").strip()
+    size = body.get("size") or saved_config.get("size") or "1024x1024"
+    model = (
+        str(body.get("model", "") or "").strip()
+        or str(saved_config.get("model") or "").strip()
+        or str((gateway_profile or {}).get("imageModel") or "").strip()
+    )
     edit_path = body.get("editImagePath")
     try:
         count = max(1, min(int(body.get("count", 1) or 1), 9))
@@ -75,30 +211,36 @@ def _image_generate_payload(ctx, body: dict) -> dict:
                 pass
 
 
-def _video_generate_payload(ctx, body: dict) -> dict:
+def _video_generate_payload(ctx, body: dict, on_status=None) -> dict:
     client = ctx.get_video_client()
-    provider_id = body.get("providerId", "dashscope")
+    saved_config = _video_config_fallback(ctx)
+    provider_id = body.get("providerId") or saved_config.get("providerId") or "dashscope"
     gateway_profile = ctx.get_license_mgr().current_gateway_profile()
     api_base = (
         str(body.get("apiBase", "") or "").strip()
+        or str(saved_config.get("apiBase") or "").strip()
         or str((gateway_profile or {}).get("videoBaseUrl") or "").strip()
         or str((gateway_profile or {}).get("baseUrl") or "").strip()
     )
     model = (
         str(body.get("model", "") or "").strip()
+        or str(saved_config.get("model") or "").strip()
         or str((gateway_profile or {}).get("videoDraftModel") or "").strip()
         or str((gateway_profile or {}).get("defaultModel") or "").strip()
     )
     dash_key = (
         str(body.get("dashKey", "") or "").strip()
+        or str(body.get("apiKey", "") or "").strip()
+        or str(saved_config.get("apiKey") or "").strip()
+        or str(saved_config.get("dashKey") or "").strip()
         or str((gateway_profile or {}).get("videoApiKey") or "").strip()
         or str((gateway_profile or {}).get("apiKey") or "").strip()
     )
     prompt = body.get("prompt", "")
-    mode = body.get("mode", "t2v")
-    resolution = body.get("resolution", "720P")
-    duration = body.get("duration", 5)
-    ratio = body.get("ratio", "16:9")
+    mode = body.get("mode") or saved_config.get("mode") or "t2v"
+    resolution = body.get("resolution") or saved_config.get("resolution") or "720P"
+    duration = body.get("duration") or saved_config.get("duration") or 5
+    ratio = body.get("ratio") or saved_config.get("ratio") or "16:9"
     image_path = body.get("imagePath")
 
     if not dash_key:
@@ -125,6 +267,7 @@ def _video_generate_payload(ctx, body: dict) -> dict:
             provider_id=provider_id,
             api_base=api_base,
             model=model,
+            on_status=on_status,
         )
         video_dir = os.path.join(ctx.paths.data_dir, "videos")
         os.makedirs(video_dir, exist_ok=True)
@@ -149,6 +292,32 @@ def _video_generate_payload(ctx, body: dict) -> dict:
 
 
 def register_media_routes(app, ctx) -> None:
+    @app.get("/api/media/config")
+    async def media_config(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json({"config": _media_config_snapshot(ctx)})
+
+    @app.post("/api/media/config")
+    async def media_config_save(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        try:
+            return ctx.fastapi_json({"config": _save_media_config(ctx, body)})
+        except ValueError as exc:
+            return ctx.fastapi_json({"error": str(exc)}, 400)
+
+    @app.post("/api/media/test")
+    async def media_config_test(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        try:
+            return ctx.fastapi_json(_test_media_config(ctx, body))
+        except ValueError as exc:
+            return ctx.fastapi_json({"ok": False, "error": str(exc)}, 400)
+
     @app.post("/api/image/generate")
     async def image_generate(request: Request):
         if error := ctx.auth_error(request):
@@ -201,8 +370,17 @@ def register_media_routes(app, ctx) -> None:
         body = await ctx.body(request)
 
         def target(job_id: str) -> dict:
-            ctx.get_job_mgr().progress(job_id, "正在生成视频", "neutral")
-            return _video_generate_payload(ctx, body)
+            ctx.get_job_mgr().progress(job_id, "正在提交视频任务", "neutral", phase="submitting")
+            return _video_generate_payload(
+                ctx,
+                body,
+                on_status=lambda message, tone="neutral": ctx.get_job_mgr().progress(
+                    job_id,
+                    message,
+                    tone,
+                    phase="generating",
+                ),
+            )
 
         job = ctx.get_job_mgr().submit_progress("video", "视频生成", target)
         return ctx.fastapi_json({"jobId": job["id"], "job": job})

@@ -92,6 +92,46 @@ html, body, #root {
   }
 }
 
+@keyframes matrix-heartbeat {
+  0%, 100% {
+    opacity: 0.58;
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.34);
+  }
+  45% {
+    opacity: 1;
+    box-shadow: 0 0 0 6px rgba(52, 211, 153, 0);
+  }
+}
+
+@keyframes matrix-dispatch-flow {
+  0%, 100% {
+    box-shadow: 0 12px 28px rgba(8, 60, 49, 0.2);
+  }
+  50% {
+    box-shadow: 0 12px 28px rgba(8, 60, 49, 0.24), 0 0 0 4px rgba(55, 230, 208, 0.08);
+  }
+}
+
+@keyframes creative-pulse {
+  0%, 100% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 rgba(11, 74, 62, 0.22), inset 0 0 18px rgba(55, 230, 208, 0.12);
+  }
+  45% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 12px rgba(11, 74, 62, 0), inset 0 0 24px rgba(55, 230, 208, 0.24);
+  }
+}
+
+@keyframes creative-progress {
+  0% {
+    transform: translateX(-72%);
+  }
+  100% {
+    transform: translateX(168%);
+  }
+}
+
 @keyframes toast-exit {
   from {
     opacity: 1;
@@ -109,6 +149,39 @@ main > div {
 
 .status-pulse {
   animation: status-pulse 2s ease-in-out infinite;
+}
+
+.matrix-heartbeat {
+  animation: matrix-heartbeat 1.8s ease-in-out infinite;
+}
+
+.matrix-dispatch {
+  animation: matrix-dispatch-flow 2.4s ease-in-out infinite;
+}
+
+.generationPulse {
+  animation: creative-pulse 1.25s ease-in-out infinite;
+}
+
+.generationPulse::before,
+.generationPulse::after {
+  content: '';
+  position: absolute;
+  inset: 12px;
+  border-radius: inherit;
+  border: 2px solid rgba(11, 74, 62, 0.35);
+  border-top-color: rgba(55, 230, 208, 0.95);
+  animation: loom-busy-spin 920ms linear infinite;
+}
+
+.generationPulse::after {
+  inset: 22px;
+  animation-duration: 1.4s;
+  animation-direction: reverse;
+}
+
+.creative-progress-bar {
+  animation: creative-progress 1.15s ease-in-out infinite;
 }
 
 .loom-splash-orbit {
@@ -192,6 +265,90 @@ main > div {
 
 .toast-enter {
   animation: toast-enter 200ms ease-out both;
+}
+
+.loom-white-page {
+  background:
+    linear-gradient(180deg, rgba(255, 252, 244, 0.88), rgba(246, 243, 234, 0.96)),
+    #F6F3EA;
+  color: #111815;
+}
+
+.loom-white-page header {
+  border-color: rgba(227, 222, 210, 0.92);
+}
+
+.loom-panel {
+  border-radius: 8px;
+  border-color: rgba(227, 222, 210, 0.94);
+  background: rgba(255, 252, 244, 0.72);
+  box-shadow: 0 18px 54px rgba(17, 24, 21, 0.055);
+}
+
+.loom-installer-shell > div {
+  max-width: 1240px;
+}
+
+.loom-installer-stage {
+  overflow: hidden;
+}
+
+.loom-installer-stage > section {
+  background: linear-gradient(180deg, rgba(255, 252, 244, 0.78), rgba(246, 243, 234, 0.42));
+}
+
+.loom-installer-stage button,
+.loom-account-layout button {
+  border-radius: 8px;
+}
+
+.loom-account-main {
+  background:
+    radial-gradient(circle at 82% 8%, rgba(11, 107, 91, 0.055), transparent 24rem),
+    #F6F3EA;
+}
+
+.loom-account-layout {
+  align-items: stretch;
+}
+
+.loom-account-layout > section {
+  border-radius: 8px;
+}
+
+.loom-subscription-frame {
+  border: 0;
+  background: #FFFCF4;
+}
+
+.loom-matrix-shell {
+  background:
+    linear-gradient(180deg, rgba(9, 24, 31, 0.96), rgba(7, 19, 27, 0.98)),
+    #07131B;
+}
+
+.loom-matrix-shell header {
+  background: rgba(7, 19, 27, 0.88);
+  backdrop-filter: none;
+}
+
+.loom-matrix-layout {
+  grid-template-columns: minmax(280px, 0.9fr) minmax(560px, 1.85fr) minmax(280px, 0.9fr);
+}
+
+.loom-matrix-composer,
+.loom-matrix-workers,
+.loom-matrix-stream,
+.loom-matrix-shell section[data-matrix-phone-app-download] {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(10, 27, 38, 0.72);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18);
+}
+
+.loom-matrix-composer select,
+.loom-matrix-composer textarea {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(5, 15, 22, 0.72);
 }
 
 ::selection {

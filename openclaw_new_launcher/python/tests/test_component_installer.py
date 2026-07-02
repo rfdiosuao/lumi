@@ -9,6 +9,7 @@ import io
 import tarfile
 import zipfile
 from dataclasses import dataclass
+from unittest import mock
 
 
 PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,10 +17,12 @@ if PYTHON_DIR not in sys.path:
     sys.path.insert(0, PYTHON_DIR)
 
 
-from core.component_installer import ComponentInstaller
+from core.component_installer import ComponentInstallError, ComponentInstaller
 from core import component_installer as component_installer_module
 from core.component_state import ComponentStateStore
+from core.paths import AppPaths
 from core.release_manifest import ComponentHealthCheck, ReleaseComponent
+from core.wire_config import WireService
 
 
 @dataclass
@@ -595,7 +598,62 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
             installer.install(component, job_id="job_install_npm_cmd")
 
-            self.assertEqual(calls[0][0], ["cmd", "/c", npm_cmd, "install", "-g", "openclaw@2026.6.10"])
+            self.assertEqual(calls[0][0][:3], ["cmd", "/c", npm_cmd])
+            self.assertIn("--prefix", calls[0][0])
+            self.assertEqual(calls[0][0][-3:], ["install", "-g", "openclaw@2026.6.10"])
+
+    def test_npm_install_command_uses_bundled_node_and_private_prefix(self) -> None:
+        payload = make_tgz_payload({"package/bin/claude.exe": b"claude package"})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            node_exe = os.path.join(temp_dir, "node", "node.exe")
+            npm_cli = os.path.join(temp_dir, "node", "node_modules", "npm", "bin", "npm-cli.js")
+            private_prefix = os.path.join(temp_dir, "data", ".installer", "npm-global")
+            external_entry = os.path.join(private_prefix, "claude.cmd")
+            os.makedirs(os.path.dirname(npm_cli), exist_ok=True)
+            with open(node_exe, "wb") as handle:
+                handle.write(b"node")
+            with open(npm_cli, "wb") as handle:
+                handle.write(b"npm cli")
+            component = ReleaseComponent(
+                component_id="claude-code",
+                name="Claude Code",
+                version="2.1.195",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                urls=("https://download.example.invalid/claude-code.tgz",),
+                install_path="agents/claude-code",
+                entry=None,
+                install_command=("npm", "install", "-g", "@anthropic-ai/claude-code@2.1.195"),
+                external_paths=(external_entry,),
+            )
+            calls: list[list[str]] = []
+
+            def installer_runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                if "install" in command:
+                    os.makedirs(os.path.dirname(external_entry), exist_ok=True)
+                    with open(external_entry, "wb") as handle:
+                        handle.write(b"claude")
+                return FakeCompletedProcess(returncode=0)
+
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=lambda _url, _timeout: payload,
+                installer_runner=installer_runner,
+            )
+
+            installer.install(component, job_id="job_private_npm_prefix")
+
+            install_call = next(command for command in calls if "install" in command)
+            self.assertEqual(install_call[:2], [node_exe, npm_cli])
+            self.assertIn("--prefix", install_call)
+            self.assertIn(private_prefix, install_call)
 
     def test_detect_existing_entry_marks_component_ready(self) -> None:
         component = make_component()
@@ -693,6 +751,62 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(state.status, "ready")
             self.assertEqual(state.version, "0.142.3")
             self.assertTrue(any(command[-2:] == ["prefix", "-g"] for command in calls))
+
+    def test_detect_prefers_codex_desktop_appx_over_cli_shim(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            appx_root = os.path.join(
+                temp_dir,
+                "WindowsApps",
+                "OpenAI.Codex_26.623.9142.0_x64__2p2nqsd0c76g0",
+            )
+            desktop_entry = os.path.join(appx_root, "app", "Codex.exe")
+            os.makedirs(os.path.dirname(desktop_entry), exist_ok=True)
+            with open(desktop_entry, "wb") as handle:
+                handle.write(b"desktop codex")
+
+            appdata = os.path.join(temp_dir, "AppData", "Roaming")
+            cli_shim = os.path.join(appdata, "npm", "codex.cmd")
+            os.makedirs(os.path.dirname(cli_shim), exist_ok=True)
+            with open(cli_shim, "wb") as handle:
+                handle.write(b"cli shim")
+
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex 桌面端",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="c" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                external_paths=("%APPDATA%/npm/codex.cmd",),
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            old_appdata = os.environ.get("APPDATA")
+            os.environ["APPDATA"] = appdata
+            try:
+                installer = ComponentInstaller(
+                    base_path=temp_dir,
+                    state_store=store,
+                    installer_runner=lambda command, _cwd, _timeout_ms: FakeCompletedProcess(
+                        returncode=0,
+                        stdout=f"{appx_root}\n" if command[:3] == ["powershell", "-NoProfile", "-Command"] else "",
+                    ),
+                )
+
+                state = installer.detect(component, job_id="job_detect_codex_desktop")
+            finally:
+                if old_appdata is None:
+                    os.environ.pop("APPDATA", None)
+                else:
+                    os.environ["APPDATA"] = old_appdata
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "26.623.9142.0")
 
     def test_detect_finds_codex_from_path_when_fixed_path_misses(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -954,6 +1068,42 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(state.status, "ready")
             self.assertEqual(state.version, "0.12.0")
 
+    def test_detect_rejects_hermes_runtime_with_python_merge_conflict_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime_root = os.path.join(temp_dir, "hermes", "hermes-agent")
+            external_entry = os.path.join(runtime_root, "venv", "Scripts", "hermes.EXE")
+            os.makedirs(os.path.dirname(external_entry), exist_ok=True)
+            with open(external_entry, "wb") as handle:
+                handle.write(b"hermes shim")
+            with open(os.path.join(runtime_root, "utils.py"), "w", encoding="utf-8") as handle:
+                handle.write("<<<<<<< Updated upstream\n")
+            component = ReleaseComponent(
+                component_id="hermes",
+                name="Hermes",
+                version="0.12.0",
+                platform="windows",
+                arch="x64",
+                archive_type="installer",
+                size=1024,
+                sha256="f" * 64,
+                urls=("https://download.example.invalid/hermes.exe",),
+                install_path="agents/hermes",
+                entry=None,
+                external_paths=(external_entry,),
+            )
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                installer_runner=lambda _command, _cwd, _timeout_ms: FakeCompletedProcess(
+                    returncode=0,
+                    stdout="Hermes Agent v0.12.0 (2026.4.30)\n",
+                ),
+            )
+
+            with self.assertRaisesRegex(ComponentInstallError, "Hermes 运行时包损坏"):
+                installer.detect(component, job_id="job_detect_hermes_bad")
+
     def test_launch_ready_component_uses_validated_entry_path(self) -> None:
         component = make_component()
         launched: list[tuple[str, str]] = []
@@ -983,21 +1133,21 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
     def test_launch_uses_external_entry_when_manifest_entry_is_empty(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            external_entry = os.path.join(temp_dir, "npm-global", "codex.CMD")
+            external_entry = os.path.join(temp_dir, "npm-global", "opencode.CMD")
             os.makedirs(os.path.dirname(external_entry), exist_ok=True)
             with open(external_entry, "wb") as handle:
-                handle.write(b"codex shim")
+                handle.write(b"opencode shim")
             component = ReleaseComponent(
-                component_id="codex-desktop",
-                name="Codex",
+                component_id="opencode",
+                name="opencode",
                 version="0.142.3",
                 platform="windows",
                 arch="x64",
                 archive_type="tgz",
                 size=1024,
                 sha256="d" * 64,
-                urls=("https://download.example.invalid/codex.tgz",),
-                install_path="agents/codex-desktop",
+                urls=("https://download.example.invalid/opencode.tgz",),
+                install_path="agents/opencode",
                 entry=None,
                 external_paths=(external_entry,),
             )
@@ -1088,9 +1238,182 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             build_command = getattr(component_installer_module, "build_visible_launcher_command", lambda *_args, **_kwargs: [])
             command = build_command(entry, os.path.dirname(entry), base_path=temp_dir, force_windows=True)
 
-            self.assertEqual(command[:5], ["cmd.exe", "/c", "start", "LOOM Agent - codex.cmd", "cmd.exe"])
-            self.assertEqual(command[5], "/k")
-            self.assertIn("codex.cmd", command[6])
+            self.assertEqual(command[:2], ["cmd.exe", "/k"])
+            self.assertIn("title LOOM Agent - codex.cmd", command[2])
+            self.assertIn("codex.cmd", command[2])
+
+    def test_codex_desktop_launcher_opens_app_without_cli_terminal(self) -> None:
+        entry = (
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.623.9142.0_x64__2p2nqsd0c76g0"
+            r"\app\Codex.exe"
+        )
+        build_command = getattr(component_installer_module, "build_visible_launcher_command", lambda *_args, **_kwargs: [])
+
+        command = build_command(entry, os.path.dirname(entry), component_id="codex-desktop", force_windows=True)
+
+        self.assertEqual(command, ["explorer.exe", r"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App"])
+
+    def test_default_windows_launcher_preserves_interactive_streams(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "agents", "codex", "codex.cmd")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            with open(entry, "w", encoding="utf-8") as handle:
+                handle.write("@echo off\n")
+
+            class FakeProcess:
+                pid = 1234
+
+            with (
+                mock.patch.object(component_installer_module.os, "name", "nt"),
+                mock.patch.object(component_installer_module.subprocess, "Popen", return_value=FakeProcess()) as popen,
+            ):
+                result = component_installer_module._default_launcher(
+                    entry,
+                    os.path.dirname(entry),
+                    base_path=temp_dir,
+                    component_id="codex-desktop",
+                )
+
+            _, kwargs = popen.call_args
+            self.assertIsNone(kwargs["stdin"])
+            self.assertIsNone(kwargs["stdout"])
+            self.assertIsNone(kwargs["stderr"])
+            self.assertTrue(result["visible"])
+
+    def test_opencode_launcher_uses_private_config_and_pure_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "agents", "opencode", "opencode.cmd")
+            config_dir = os.path.join(temp_dir, "data", ".opencode")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            os.makedirs(config_dir, exist_ok=True)
+            with open(entry, "w", encoding="utf-8") as handle:
+                handle.write("@echo off\n")
+            with open(os.path.join(config_dir, "opencode.json"), "w", encoding="utf-8") as handle:
+                handle.write('{"model":"loom/agnes-2.0-flash","provider":{"loom":{"options":{"apiKey":"{env:LOOM_OPENCODE_API_KEY}"}}}}')
+
+            build_command = getattr(component_installer_module, "build_agent_launcher_command", lambda *_args, **_kwargs: [])
+            build_env = getattr(component_installer_module, "build_agent_launcher_environment", lambda *_args, **_kwargs: {})
+            command = build_command("opencode", entry, os.path.dirname(entry), base_path=temp_dir)
+            env = build_env(temp_dir, "opencode")
+
+            self.assertEqual(command[:3], ["cmd", "/c", entry])
+            self.assertEqual(command[-3:], ["--pure", "-m", "loom/agnes-2.0-flash"])
+            self.assertEqual(env["OPENCODE_CONFIG_DIR"], config_dir)
+            self.assertEqual(env["OPENCODE_CONFIG"], os.path.join(config_dir, "opencode.json"))
+
+    def test_opencode_launcher_fails_without_private_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "agents", "opencode", "opencode.cmd")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            with open(entry, "w", encoding="utf-8") as handle:
+                handle.write("@echo off\n")
+
+            build_command = getattr(component_installer_module, "build_agent_launcher_command", lambda *_args, **_kwargs: [])
+
+            with self.assertRaises(ComponentInstallError):
+                build_command("opencode", entry, os.path.dirname(entry), base_path=temp_dir)
+
+    def test_claude_code_launcher_injects_gateway_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            secret = "sk-claude-test-token"
+            WireService(AppPaths(temp_dir)).sync_custom_provider(
+                provider="LOOM",
+                base_url="https://api.heang.top/v1",
+                api_key=secret,
+                text_model="qwen3.7-plus",
+            )
+
+            build_env = getattr(component_installer_module, "build_agent_launcher_environment", lambda *_args, **_kwargs: {})
+            env = build_env(temp_dir, "claude-code")
+
+            self.assertEqual(env["LOOM_CLAUDE_API_KEY"], secret)
+            self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], secret)
+            self.assertEqual(env["ANTHROPIC_API_KEY"], secret)
+            self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://api.heang.top/v1")
+            self.assertEqual(env["ANTHROPIC_MODEL"], "qwen3.7-plus")
+
+    def test_agent_launcher_environment_scrubs_stale_model_env_before_injecting_loom(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            secret = "sk-current-loom-token"
+            WireService(AppPaths(temp_dir)).sync_custom_provider(
+                provider="LOOM",
+                base_url="https://api.heang.top/v1",
+                api_key=secret,
+                text_model="qwen3.7-plus",
+            )
+            stale_env = {
+                "OPENAI_API_KEY": "sk-old-openai",
+                "OPENAI_BASE_URL": "https://old-openai.example/v1",
+                "OPENAI_API_BASE": "https://old-openai-base.example/v1",
+                "OPENAI_MODEL": "old-openai-model",
+                "ANTHROPIC_API_KEY": "sk-old-anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "sk-old-anthropic-token",
+                "ANTHROPIC_BASE_URL": "https://old-anthropic.example",
+                "ANTHROPIC_MODEL": "old-claude-model",
+                "LOOM_CODEX_API_KEY": "sk-old-loom-codex",
+                "LOOM_CLAUDE_API_KEY": "sk-old-loom-claude",
+                "LOOM_OPENCODE_API_KEY": "sk-old-loom-opencode",
+            }
+
+            build_env = getattr(component_installer_module, "build_agent_launcher_environment", lambda *_args, **_kwargs: {})
+            with mock.patch.dict(component_installer_module.os.environ, stale_env, clear=False):
+                codex_env = build_env(temp_dir, "codex-desktop")
+                claude_env = build_env(temp_dir, "claude-code")
+                opencode_env = build_env(temp_dir, "opencode")
+
+            self.assertEqual(codex_env["LOOM_CODEX_API_KEY"], secret)
+            self.assertEqual(codex_env["OPENAI_API_KEY"], secret)
+            self.assertEqual(codex_env["OPENAI_BASE_URL"], "https://api.heang.top/v1")
+            self.assertEqual(codex_env["OPENAI_API_BASE"], "https://api.heang.top/v1")
+            self.assertEqual(codex_env["OPENAI_MODEL"], "qwen3.7-plus")
+            self.assertNotIn("ANTHROPIC_API_KEY", codex_env)
+            self.assertNotIn("ANTHROPIC_AUTH_TOKEN", codex_env)
+            self.assertNotIn("ANTHROPIC_BASE_URL", codex_env)
+            self.assertNotIn("ANTHROPIC_MODEL", codex_env)
+            self.assertNotIn("LOOM_CLAUDE_API_KEY", codex_env)
+            self.assertNotIn("LOOM_OPENCODE_API_KEY", codex_env)
+
+            self.assertEqual(claude_env["LOOM_CLAUDE_API_KEY"], secret)
+            self.assertEqual(claude_env["ANTHROPIC_AUTH_TOKEN"], secret)
+            self.assertEqual(claude_env["ANTHROPIC_API_KEY"], secret)
+            self.assertEqual(claude_env["ANTHROPIC_BASE_URL"], "https://api.heang.top/v1")
+            self.assertEqual(claude_env["ANTHROPIC_MODEL"], "qwen3.7-plus")
+            self.assertNotIn("OPENAI_API_KEY", claude_env)
+            self.assertNotIn("OPENAI_BASE_URL", claude_env)
+            self.assertNotIn("OPENAI_API_BASE", claude_env)
+            self.assertNotIn("OPENAI_MODEL", claude_env)
+            self.assertNotIn("LOOM_CODEX_API_KEY", claude_env)
+            self.assertNotIn("LOOM_OPENCODE_API_KEY", claude_env)
+
+            self.assertEqual(opencode_env["LOOM_OPENCODE_API_KEY"], secret)
+            self.assertNotIn("OPENAI_API_KEY", opencode_env)
+            self.assertNotIn("OPENAI_BASE_URL", opencode_env)
+            self.assertNotIn("OPENAI_API_BASE", opencode_env)
+            self.assertNotIn("OPENAI_MODEL", opencode_env)
+            self.assertNotIn("ANTHROPIC_API_KEY", opencode_env)
+            self.assertNotIn("ANTHROPIC_AUTH_TOKEN", opencode_env)
+            self.assertNotIn("ANTHROPIC_BASE_URL", opencode_env)
+            self.assertNotIn("ANTHROPIC_MODEL", opencode_env)
+            self.assertNotIn("LOOM_CODEX_API_KEY", opencode_env)
+            self.assertNotIn("LOOM_CLAUDE_API_KEY", opencode_env)
+
+    def test_openclaw_launcher_uses_loom_state_and_local_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "agents", "openclaw", "openclaw.cmd")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            with open(entry, "w", encoding="utf-8") as handle:
+                handle.write("@echo off\n")
+
+            build_command = getattr(component_installer_module, "build_agent_launcher_command", lambda *_args, **_kwargs: [])
+            build_env = getattr(component_installer_module, "build_agent_launcher_environment", lambda *_args, **_kwargs: {})
+            command = build_command("openclaw-companion", entry, os.path.dirname(entry), base_path=temp_dir)
+            env = build_env(temp_dir, "openclaw-companion")
+
+            self.assertEqual(command[:3], ["cmd", "/c", entry])
+            self.assertEqual(command[-2:], ["chat", "--local"])
+            self.assertEqual(env["OPENCLAW_HOME"], os.path.join(temp_dir, "data"))
+            self.assertEqual(env["OPENCLAW_STATE_DIR"], os.path.join(temp_dir, "data", ".openclaw"))
+            self.assertEqual(env["OPENCLAW_CONFIG_PATH"], os.path.join(temp_dir, "data", ".openclaw", "openclaw.json"))
 
     def test_launch_failure_marks_component_start_failed(self) -> None:
         component = make_component()

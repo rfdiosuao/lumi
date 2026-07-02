@@ -1,13 +1,60 @@
 import React from 'react';
 import { BusyOverlay, Button, Input, Select, showToast } from '../common';
-import { accountApi, parseErrorText, wireApi, type AccountSnapshot } from '../../services/api';
+import { loomClient } from '../../services/loomClient';
+import { loomErrorText } from '../../services/loomErrors';
+import type { AccountSnapshot, WireSnapshot } from '../../services/loomContracts';
 import { useAppStore } from '../../stores/appStore';
+import { accountCacheUsable, loadCachedAccount, saveCachedAccount } from '../../services/startupCache';
 
 type SourceMode = 'off' | 'managed' | 'custom';
 
 function firstChoice(values?: string[], preferred?: string): string {
   if (preferred && values?.includes(preferred)) return preferred;
   return values?.[0] || '';
+}
+
+const PHONE_MODEL_IDS = new Set(['agnes-2.0-flash']);
+const IMAGE_MODEL_MARKERS = ['image', 'dall-e', 'gpt-image', 'flux', 'midjourney', 'mj-', 'stable-diffusion', 'sd-', 'imagen', 'seedream'];
+const VIDEO_MODEL_MARKERS = ['video', 'veo', 'sora', 'seedance', 'kling', 'wan', 'hailuo', 'runway', 'pika', 'luma', 'happyhorse'];
+
+function looksLikeNonTextModel(model?: string): boolean {
+  const value = (model || '').trim().toLowerCase();
+  if (!value) return false;
+  if (PHONE_MODEL_IDS.has(value)) return true;
+  return IMAGE_MODEL_MARKERS.some((marker) => value.includes(marker)) || VIDEO_MODEL_MARKERS.some((marker) => value.includes(marker));
+}
+
+function textModelValues(values?: string[]): string[] {
+  return (values || []).filter((model) => !looksLikeNonTextModel(model));
+}
+
+function firstTextChoice(values?: string[], preferred?: string): string {
+  const safeValues = textModelValues(values);
+  if (preferred && !looksLikeNonTextModel(preferred) && safeValues.includes(preferred)) return preferred;
+  return safeValues[0] || '';
+}
+
+function mergeModelOptions(values?: string[], ...extras: Array<string | undefined>): string[] {
+  const result: string[] = [];
+  [...(values || []), ...extras].forEach((model) => {
+    const value = model?.trim() || '';
+    if (value && !result.includes(value)) result.push(value);
+  });
+  return result;
+}
+
+function compactValues(...values: Array<string | undefined>): string[] {
+  return values.map((value) => value?.trim() || '').filter(Boolean);
+}
+
+function managedTextModelValues(account?: AccountSnapshot | null): string[] {
+  const values = textModelValues(account?.models?.text);
+  if (!account?.loggedIn) return values;
+  const selected = account.selectedModels?.text;
+  if (selected && !looksLikeNonTextModel(selected) && values.includes(selected)) {
+    return mergeModelOptions(values, selected).filter((model) => !looksLikeNonTextModel(model));
+  }
+  return values;
 }
 
 const ModelSelect: React.FC<{
@@ -19,24 +66,20 @@ const ModelSelect: React.FC<{
 }> = ({ label, value, values = [], disabled, onChange }) => (
   <label className="block">
     <div className="mb-2 text-xs font-bold text-text-muted">{label}</div>
-    <Select
-      className="w-full"
-      value={value}
-      disabled={disabled || values.length === 0}
-      onChange={(event) => onChange(event.target.value)}
-    >
+    <Select className="w-full" value={value} disabled={disabled || values.length === 0} onChange={(event) => onChange(event.target.value)}>
       {values.length === 0 ? <option value="">暂无可用模型</option> : null}
-      {values.map((model) => (
-        <option key={model} value={model}>{model}</option>
-      ))}
+      {values.map((model) => <option key={model} value={model}>{model}</option>)}
     </Select>
   </label>
 );
 
 export const ModelsPage: React.FC = () => {
-  const [account, setAccount] = React.useState<AccountSnapshot | null>(null);
-  const [loading, setLoading] = React.useState(true);
+  const cachedAccountRef = React.useRef<AccountSnapshot | null>(loadCachedAccount());
+  const [account, setAccount] = React.useState<AccountSnapshot | null>(cachedAccountRef.current);
+  const [loading, setLoading] = React.useState(!accountCacheUsable(cachedAccountRef.current));
   const [busy, setBusy] = React.useState(false);
+  const [usingCachedAccount, setUsingCachedAccount] = React.useState(accountCacheUsable(cachedAccountRef.current));
+  const [accountNotice, setAccountNotice] = React.useState('');
   const [textModel, setTextModel] = React.useState('');
   const [imageModel, setImageModel] = React.useState('');
   const [videoModel, setVideoModel] = React.useState('');
@@ -50,54 +93,105 @@ export const ModelsPage: React.FC = () => {
   const [customVideoModel, setCustomVideoModel] = React.useState('');
   const setCurrentPage = useAppStore((state) => state.setCurrentPage);
 
-  const applyAccount = React.useCallback((next: AccountSnapshot | null) => {
+  const applyAccount = React.useCallback((next: AccountSnapshot | null, options: { cached?: boolean; persist?: boolean } = {}) => {
     setAccount(next);
-    setTextModel(firstChoice(next?.models?.text, next?.selectedModels?.text));
+    setTextModel(firstTextChoice(managedTextModelValues(next), next?.selectedModels?.text));
     setImageModel(firstChoice(next?.models?.image, next?.selectedModels?.image));
     setVideoModel(firstChoice(next?.models?.video, next?.selectedModels?.videoDraft));
+    setUsingCachedAccount(Boolean(options.cached || next?.offline || next?.stale));
+    if (options.persist && accountCacheUsable(next)) {
+      saveCachedAccount(next);
+      cachedAccountRef.current = loadCachedAccount();
+    }
+  }, []);
+
+  const applyWireSnapshot = React.useCallback((wire?: WireSnapshot | null) => {
+    if (!wire?.ok) return;
+    if (wire.managedBy === 'custom_provider') {
+      setSourceMode('custom');
+      setCustomProvider(wire.provider || 'OpenAI 兼容');
+      setCustomBaseUrl(wire.baseUrl || '');
+      setCustomTextModel(wire.models?.text || '');
+      setCustomImageModel(wire.models?.image || '');
+      setCustomPhoneModel(wire.models?.phone && wire.models.phone !== 'agnes-2.0-flash' ? wire.models.phone : '');
+      setCustomVideoModel(wire.models?.video || '');
+      return;
+    }
+    if (wire.managedBy === 'heang_account' || wire.managedBy === 'newapi_account') {
+      setSourceMode('managed');
+      if (wire.models?.text && !looksLikeNonTextModel(wire.models.text)) setTextModel(wire.models.text);
+      if (wire.models?.image) setImageModel(wire.models.image);
+      if (wire.models?.video) setVideoModel(wire.models.video);
+    }
   }, []);
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await accountApi.current();
-      applyAccount(resp.account || null);
+      const resp = await loomClient.account.current();
+      const next = resp.account || null;
+      if (accountCacheUsable(next)) {
+        applyAccount(next, { persist: true });
+        setAccountNotice('');
+      } else {
+        const cached = loadCachedAccount() || cachedAccountRef.current;
+        if (accountCacheUsable(cached)) applyAccount(cached, { cached: true });
+        else applyAccount(next);
+        setAccountNotice('');
+      }
     } catch (error: any) {
-      showToast(parseErrorText(error) || '读取模型失败', 'error');
-    } finally {
-      setLoading(false);
+      const cached = loadCachedAccount() || cachedAccountRef.current;
+      if (accountCacheUsable(cached)) {
+        applyAccount(cached, { cached: true });
+        setAccountNotice('');
+      } else {
+        showToast(loomErrorText(error, '读取模型失败'), 'error');
+      }
     }
-  }, [applyAccount]);
+    try {
+      const wireResp = await loomClient.wire.current();
+      applyWireSnapshot(wireResp.wire);
+    } catch {
+      // Account snapshot is enough for offline browsing; wire status refreshes when Bridge is back.
+    }
+    setLoading(false);
+  }, [applyAccount, applyWireSnapshot]);
 
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
 
   const syncModels = async () => {
+    if (usingCachedAccount) {
+      showToast('当前只是离线账号快照，请重新登录后再同步模型。', 'info');
+      setCurrentPage('license');
+      return;
+    }
     setBusy(true);
     try {
-      const resp = await accountApi.sync();
-      applyAccount(resp.account || null);
+      const resp = await loomClient.account.sync();
+      applyAccount(resp.account || null, { persist: true });
       showToast('模型已同步', 'success');
     } catch (error: any) {
-      showToast(parseErrorText(error) || '同步失败', 'error');
+      showToast(loomErrorText(error, '同步失败'), 'error');
     } finally {
       setBusy(false);
     }
   };
 
   const saveSelection = async () => {
+    if (usingCachedAccount) {
+      showToast('当前只是离线账号快照，请重新登录后再保存模型选择。', 'info');
+      setCurrentPage('license');
+      return;
+    }
     setBusy(true);
     try {
-      const resp = await accountApi.selectModels({
-        textModel,
-        imageModel,
-        videoModel,
-      });
-      applyAccount(resp.account || null);
+      const resp = await loomClient.account.selectModels({ textModel, imageModel, videoModel });
+      applyAccount(resp.account || null, { persist: true });
       showToast('模型选择已保存', 'success');
     } catch (error: any) {
-      showToast(parseErrorText(error) || '保存失败', 'error');
+      showToast(loomErrorText(error, '保存失败'), 'error');
     } finally {
       setBusy(false);
     }
@@ -110,7 +204,7 @@ export const ModelsPage: React.FC = () => {
     }
     setBusy(true);
     try {
-      await wireApi.custom({
+      const resp = await loomClient.wire.custom({
         provider: customProvider.trim() || 'OpenAI 兼容',
         baseUrl: customBaseUrl.trim(),
         apiKey: customApiKey.trim(),
@@ -119,34 +213,48 @@ export const ModelsPage: React.FC = () => {
         phoneModel: customPhoneModel.trim(),
         videoModel: customVideoModel.trim(),
       });
+      applyWireSnapshot(resp.wire);
       setCustomApiKey('');
       showToast('第三方模型配置已应用', 'success');
     } catch (error: any) {
-      showToast(parseErrorText(error) || '应用第三方配置失败', 'error');
+      showToast(loomErrorText(error, '应用第三方配置失败'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disableModelSource = async () => {
+    setBusy(true);
+    try {
+      await loomClient.wire.rollback();
+      setSourceMode('off');
+      showToast('模型配置已回滚', 'success');
+    } catch (error: any) {
+      showToast(loomErrorText(error, '没有可回滚的模型配置'), 'error');
     } finally {
       setBusy(false);
     }
   };
 
   const loggedIn = Boolean(account?.loggedIn);
-  const total =
-    (account?.models?.text?.length || 0) +
-    (account?.models?.image?.length || 0) +
-    (account?.models?.video?.length || 0);
+  const managedWritable = loggedIn && !usingCachedAccount;
+  const managedTextModels = managedTextModelValues(account);
+  const managedImageModels = mergeModelOptions(account?.models?.image);
+  const managedVideoModels = mergeModelOptions(account?.models?.video);
+  const missingManagedTextModel = sourceMode === 'managed' && loggedIn && !usingCachedAccount && managedTextModels.length === 0;
+  const managedSaveEnabled = managedWritable && !missingManagedTextModel;
+  const textCount = sourceMode === 'custom' ? compactValues(customTextModel).length : managedTextModels.length;
+  const imageCount = sourceMode === 'custom' ? compactValues(customImageModel).length : managedImageModels.length;
+  const videoCount = sourceMode === 'custom' ? compactValues(customVideoModel).length : managedVideoModels.length;
+  const summaryTextModels = sourceMode === 'custom' ? compactValues(customTextModel) : managedTextModels;
+  const summaryImageModels = sourceMode === 'custom' ? compactValues(customImageModel) : managedImageModels;
+  const summaryVideoModels = sourceMode === 'custom' ? compactValues(customVideoModel) : managedVideoModels;
 
-  const busyOverlayTitle = loading
-    ? '正在读取模型'
-    : sourceMode === 'custom'
-      ? '正在应用第三方配置'
-      : '正在同步模型';
+  const busyOverlayTitle = loading ? '正在读取模型' : sourceMode === 'custom' ? '正在应用第三方配置' : '正在同步模型';
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface">
-      <BusyOverlay
-        active={loading || busy}
-        title={busyOverlayTitle}
-        detail="LOOM 正在读取或写入模型配置。"
-      />
+      <BusyOverlay active={loading || busy} title={busyOverlayTitle} detail="LOOM 正在读取或写入模型配置。" />
       <header className="shrink-0 border-b border-border/70 bg-surface px-8 py-7">
         <div className="flex items-end justify-between gap-6">
           <div>
@@ -155,7 +263,7 @@ export const ModelsPage: React.FC = () => {
           </div>
           <div className="flex items-center gap-3">
             <span className="rounded-full border border-border/70 bg-surface-alt/50 px-3 py-2 text-xs font-bold text-text">
-              {loggedIn ? `${total} 个模型` : '未登录'}
+              {loggedIn ? `文本 ${textCount} / 图像 ${imageCount} / 视频 ${videoCount}` : '未登录'}
             </span>
             <Button variant="quiet" onClick={refresh} disabled={loading || busy}>刷新</Button>
           </div>
@@ -171,7 +279,7 @@ export const ModelsPage: React.FC = () => {
                 <p className="mt-1 text-sm text-text-muted">托管账号可一键配置，也可以接入自己的第三方 OpenAI 兼容接口。</p>
               </div>
               <div className="flex rounded-[14px] border border-border/80 bg-surface/35 p-1">
-                <SourceModeButton active={sourceMode === 'off'} onClick={() => setSourceMode('off')}>关闭</SourceModeButton>
+                <SourceModeButton active={sourceMode === 'off'} onClick={() => void disableModelSource()}>关闭</SourceModeButton>
                 <SourceModeButton active={sourceMode === 'managed'} onClick={() => setSourceMode('managed')}>一键配置</SourceModeButton>
                 <SourceModeButton active={sourceMode === 'custom'} onClick={() => setSourceMode('custom')}>自定义</SourceModeButton>
               </div>
@@ -209,18 +317,16 @@ export const ModelsPage: React.FC = () => {
                   </label>
                   <label className="block">
                     <div className="mb-2 text-xs font-bold text-text-muted">手机模型</div>
-                    <Input value={customPhoneModel} onChange={(event) => setCustomPhoneModel(event.target.value)} placeholder="可选，默认跟随文本模型" />
+                    <Input data-custom-phone-model-input value={customPhoneModel} onChange={(event) => setCustomPhoneModel(event.target.value)} placeholder="可选，留空使用手机默认模型" />
                   </label>
                   <label className="block md:col-span-2">
                     <div className="mb-2 text-xs font-bold text-text-muted">视频模型草案</div>
                     <Input value={customVideoModel} onChange={(event) => setCustomVideoModel(event.target.value)} placeholder="可选，仅保存草案，不切换视频 provider" />
                   </label>
                 </div>
-                <div>
-                  <Button variant="primary" onClick={applyCustomProvider} disabled={busy || loading}>
-                    {busy ? '处理中...' : '应用第三方配置'}
-                  </Button>
-                </div>
+                <Button variant="primary" onClick={applyCustomProvider} disabled={busy || loading}>
+                  {busy ? '处理中...' : '应用第三方配置'}
+                </Button>
               </div>
             ) : !loggedIn ? (
               <div className="mt-6 rounded-[16px] border border-border/80 bg-surface/35 p-5">
@@ -230,16 +336,23 @@ export const ModelsPage: React.FC = () => {
               </div>
             ) : (
               <div className="mt-6 grid gap-5">
-                <ModelSelect label="默认文本模型" value={textModel} values={account?.models?.text} disabled={busy} onChange={setTextModel} />
-                <ModelSelect label="默认图像模型" value={imageModel} values={account?.models?.image} disabled={busy} onChange={setImageModel} />
-                <ModelSelect label="视频模型草案" value={videoModel} values={account?.models?.video} disabled={busy} onChange={setVideoModel} />
+                {accountNotice ? (
+                  <div className="rounded-[16px] border border-border/70 bg-surface/50 p-4 text-sm leading-6 text-text-muted">
+                    {accountNotice}
+                    <Button className="ml-0 mt-3 md:ml-3 md:mt-0" variant="quiet" onClick={() => setCurrentPage('license')}>重新登录</Button>
+                  </div>
+                ) : null}
+                {missingManagedTextModel ? (
+                  <div className="rounded-[16px] border border-status-danger/30 bg-status-danger/10 p-4 text-sm leading-6 text-status-danger">
+                    当前中转站账号没有可用文本模型。请在中转站生成包含文本模型的专用 Key，或切到自定义 API Key。
+                  </div>
+                ) : null}
+                <ModelSelect label="默认文本模型" value={textModel} values={managedTextModels} disabled={busy} onChange={setTextModel} />
+                <ModelSelect label="默认图像模型" value={imageModel} values={managedImageModels} disabled={busy} onChange={setImageModel} />
+                <ModelSelect label="视频模型草案" value={videoModel} values={managedVideoModels} disabled={busy} onChange={setVideoModel} />
                 <div className="flex flex-wrap gap-3">
-                  <Button variant="primary" onClick={saveSelection} disabled={busy || loading}>
-                    {busy ? '处理中...' : '保存选择'}
-                  </Button>
-                  <Button variant="quiet" onClick={syncModels} disabled={busy || loading}>
-                    同步模型
-                  </Button>
+                  <Button variant="primary" onClick={saveSelection} disabled={busy || loading || !managedSaveEnabled}>{busy ? '处理中...' : '保存选择'}</Button>
+                  <Button variant="quiet" onClick={syncModels} disabled={busy || loading || !managedWritable}>同步模型</Button>
                 </div>
                 <div className="rounded-[16px] border border-status-warning/30 bg-status-warning/10 p-4 text-sm text-status-warning">
                   视频模型仅保存为草案选择，不会写入视频 provider 或 API Key 配置。
@@ -249,9 +362,9 @@ export const ModelsPage: React.FC = () => {
           </section>
 
           <aside className="space-y-4">
-            <SummaryPanel title="文本" values={account?.models?.text} selected={textModel || customTextModel} />
-            <SummaryPanel title="图像" values={account?.models?.image} selected={imageModel || customImageModel} />
-            <SummaryPanel title="视频" values={account?.models?.video} selected={videoModel || customVideoModel} />
+            <SummaryPanel title="文本" values={summaryTextModels} selected={sourceMode === 'custom' ? customTextModel : textModel} />
+            <SummaryPanel title="图像" values={summaryImageModels} selected={sourceMode === 'custom' ? customImageModel : imageModel} />
+            <SummaryPanel title="视频" values={summaryVideoModels} selected={sourceMode === 'custom' ? customVideoModel : videoModel} />
           </aside>
         </div>
       </div>
@@ -273,15 +386,11 @@ const SummaryPanel: React.FC<{ title: string; values?: string[]; selected: strin
   <div className="rounded-[20px] border border-border/80 bg-surface-alt/30 p-5">
     <div className="flex items-center justify-between gap-3">
       <h2 className="text-base font-black text-text">{title}</h2>
-      <span className="rounded-full border border-border/70 bg-surface/35 px-3 py-1 text-xs font-bold text-text-muted">
-        {values.length}
-      </span>
+      <span className="rounded-full border border-border/70 bg-surface/35 px-3 py-1 text-xs font-bold text-text-muted">{values.length}</span>
     </div>
     <div className="mt-3 truncate text-sm font-bold text-text" title={selected || '暂无'}>{selected || '暂无'}</div>
     <div className="mt-3 space-y-1">
-      {values.slice(0, 6).map((model) => (
-        <div key={model} className="truncate text-xs text-text-muted" title={model}>{model}</div>
-      ))}
+      {values.slice(0, 6).map((model) => <div key={model} className="truncate text-xs text-text-muted" title={model}>{model}</div>)}
     </div>
   </div>
 );

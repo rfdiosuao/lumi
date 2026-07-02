@@ -36,7 +36,7 @@ class ComponentCatalog:
         overrides = {state.component_id: state for state in state_overrides}
         try:
             manifest, manifest_warning = load_installable_manifest(self.manifest_path)
-        except Exception as exc:
+        except Exception:
             states = self.state_store.load()
             states.update(overrides)
             return {
@@ -45,8 +45,9 @@ class ComponentCatalog:
                     _component_payload(component, states.get(component.component_id) or _default_state(component))
                     for component in self.fallback_components
                 ],
-                "warning": f"正式组件清单未就绪。请提供已签名的 release-manifest.json 和 release-public-key.txt，或确认 release-channel 可访问；当前仅支持本机检测。{exc}",
+                "warning": "正式组件清单未就绪。当前仅支持本机检测；安装前请确认发布通道可访问。",
                 "manifestErrorCode": "manifest_unavailable",
+                "installLocked": True,
             }
 
         states = {state.component_id: state for state in self.state_store.snapshot_for_manifest(manifest)}
@@ -56,17 +57,32 @@ class ComponentCatalog:
             "components": [_component_payload(component, states[component.component_id]) for component in manifest.components],
             "warning": manifest_warning,
             "manifestErrorCode": None,
+            "installLocked": False,
         }
 
 
 def default_manifest_path(base_path: str) -> str:
-    parent_path = os.path.dirname(os.path.abspath(base_path))
-    candidates = [
-        os.path.join(base_path, "release-manifest.json"),
-        os.path.join(base_path, "_up_", "release-manifest.json"),
-        os.path.join(parent_path, "release-manifest.json"),
-        os.path.join(parent_path, "_up_", "release-manifest.json"),
-    ]
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add_candidate(path: str) -> None:
+        normalized = os.path.normpath(path)
+        key = os.path.normcase(os.path.abspath(normalized))
+        if key not in seen:
+            seen.add(key)
+            candidates.append(normalized)
+
+    current = os.path.abspath(base_path)
+    for _depth in range(8):
+        add_candidate(os.path.join(current, "release-manifest.json"))
+        add_candidate(os.path.join(current, "_up_", "release-manifest.json"))
+        add_candidate(os.path.join(current, "LOOMFiles", "release-manifest.json"))
+
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+
     for path in candidates:
         if os.path.exists(path):
             return path

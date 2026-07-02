@@ -26,16 +26,21 @@ class JobManager:
     def submit(self, kind: str, label: str, target: Callable[[], dict]) -> dict:
         return self.submit_progress(kind, label, lambda _job_id: target())
 
-    def submit_progress(self, kind: str, label: str, target: Callable[[str], dict]) -> dict:
+    def submit_progress(self, kind: str, label: str, target: Callable[[str], dict], initial_progress: dict | None = None) -> dict:
         job_id = f"job_{uuid.uuid4().hex}"
         now = time.time()
+        initial_progress = dict(initial_progress or {})
+        initial_message = str(initial_progress.pop("message", "queued") or "queued")
+        initial_tone = str(initial_progress.pop("tone", "neutral") or "neutral")
+        initial_phase = str(initial_progress.get("phase") or "queued")
+        initial_entry = {"message": initial_message, "tone": initial_tone, "updatedAt": now}
         job = {
             "id": job_id,
             "kind": kind,
             "type": kind,
             "label": label,
             "status": "queued",
-            "phase": "queued",
+            "phase": initial_phase,
             "createdAt": now,
             "updatedAt": now,
             "startedAt": None,
@@ -44,11 +49,11 @@ class JobManager:
             "error": None,
             "failure": None,
             "attempt": 1,
-            "message": "queued",
+            "message": initial_message,
             "progress": {
-                "message": "queued",
-                "tone": "neutral",
-                "history": [],
+                **initial_progress,
+                **initial_entry,
+                "history": [initial_entry] if initial_progress else [],
                 "updatedAt": now,
             },
         }

@@ -6,6 +6,7 @@ import { useAppStore } from '../../stores/appStore';
 import { parseErrorText, updateApi } from '../../services/api';
 import type { BuiltinThemeMode } from '../../theme/default';
 import type { AppLanguage } from '../../i18n/language';
+import { APP_VERSION } from '../../version';
 
 type SettingsTab = 'appearance' | 'updates' | 'data' | 'about';
 type UpdateBusy = 'check' | 'install' | null;
@@ -65,6 +66,9 @@ interface SettingsCopy {
     componentsTitle: string;
     componentsDesc: string;
     componentsButton: string;
+    developerTitle: string;
+    developerDesc: string;
+    developerButton: string;
   };
   about: {
     appTitle: string;
@@ -109,8 +113,8 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
       },
     },
     updates: {
-      checkTitle: '应用更新',
-      checkDesc: '检查 GitHub 发布通道中的最新在线包，并在确认后执行更新。',
+      checkTitle: '智能体运行时更新',
+      checkDesc: '检查智能体运行时组件版本，并在确认后执行更新。',
       checkButton: '检查更新',
       installButton: '立即更新',
       checking: '正在检查更新...',
@@ -121,10 +125,10 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
       failedCheck: '检查更新失败',
       failedInstall: '更新失败',
       confirmTitle: '确认更新',
-      confirmMessage: '更新会下载并替换本机 LOOM 文件。更新前请保存正在运行的任务。',
+      confirmMessage: '更新会下载并替换智能体运行时组件。更新前请保存正在运行的任务。',
       confirmText: '立即更新',
-      current: '当前版本',
-      latest: '最新版本',
+      current: '当前运行时',
+      latest: '最新运行时',
       checkedAt: '检查时间',
       logTitle: '更新日志',
     },
@@ -136,9 +140,12 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
       accountTitle: '账号与模型',
       accountDesc: '中转站登录、模型同步和运行配置都集中在模型账号页。',
       accountButton: '打开模型账号',
-      componentsTitle: '组件数据',
-      componentsDesc: 'Agent 组件由安装页统一检测、安装、启动、升级、卸载和回滚。',
-      componentsButton: '打开安装器',
+      componentsTitle: '安装数据',
+      componentsDesc: '智能体由安装页统一检测、安装、启动、升级、卸载和回滚。',
+      componentsButton: '打开安装',
+      developerTitle: '开发者接入',
+      developerDesc: 'Codex / Claude Code 的高级接入配置集中在这里，普通用户可以忽略。',
+      developerButton: '打开开发者接入',
     },
     about: {
       appTitle: '应用',
@@ -146,7 +153,7 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
       name: '名称：',
       version: '版本：',
       positioning: '定位：',
-      positioningValue: '多智能体安装器与手机控制启动器',
+      positioningValue: '智能体安装与手机控制启动器',
       capabilitiesTitle: '开放能力',
       capabilitiesDesc: '第一版演示只保留安装器、手机控制、模型账号和诊断。',
       capabilities: ['安装器', '手机控制', '模型账号', '诊断'],
@@ -181,8 +188,8 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
       },
     },
     updates: {
-      checkTitle: 'App Updates',
-      checkDesc: 'Check the GitHub release channel and run the updater after confirmation.',
+      checkTitle: 'Agent Runtime Updates',
+      checkDesc: 'Check the agent runtime component version and run the updater after confirmation.',
       checkButton: 'Check',
       installButton: 'Update Now',
       checking: 'Checking for updates...',
@@ -193,10 +200,10 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
       failedCheck: 'Update check failed',
       failedInstall: 'Update failed',
       confirmTitle: 'Confirm Update',
-      confirmMessage: 'LOOM will download and replace local files. Save running work before continuing.',
+      confirmMessage: 'LOOM will download and replace agent runtime components. Save running work before continuing.',
       confirmText: 'Update Now',
-      current: 'Current',
-      latest: 'Latest',
+      current: 'Current Runtime',
+      latest: 'Latest Runtime',
       checkedAt: 'Checked At',
       logTitle: 'Update Log',
     },
@@ -211,6 +218,9 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
       componentsTitle: 'Components',
       componentsDesc: 'Agent components are detected, installed, launched, updated, removed, and rolled back from the installer.',
       componentsButton: 'Open Installer',
+      developerTitle: 'Developer Access',
+      developerDesc: 'Advanced Codex / Claude Code access settings live here. Most users can ignore this.',
+      developerButton: 'Open Developer Access',
     },
     about: {
       appTitle: 'App',
@@ -404,7 +414,7 @@ export const SettingsPage: React.FC = () => {
                   </Button>
                   <Button
                     variant={updateStatus?.hasUpdate ? 'success' : 'quiet'}
-                    disabled={Boolean(updateBusy) || updateStatus?.hasUpdate === false}
+                    disabled={Boolean(updateBusy) || updateStatus?.hasUpdate !== true}
                     onClick={handleInstallUpdate}
                   >
                     {updateBusy === 'install' ? copy.updates.installing : copy.updates.installButton}
@@ -452,6 +462,9 @@ export const SettingsPage: React.FC = () => {
               <SettingRow title={copy.data.componentsTitle} desc={copy.data.componentsDesc}>
                 <Button variant="primary" onClick={() => setCurrentPage('agents')}>{copy.data.componentsButton}</Button>
               </SettingRow>
+              <SettingRow title={copy.data.developerTitle} desc={copy.data.developerDesc}>
+                <Button variant="quiet" onClick={() => setCurrentPage('agentAccess')}>{copy.data.developerButton}</Button>
+              </SettingRow>
             </>
           ) : null}
 
@@ -460,7 +473,7 @@ export const SettingsPage: React.FC = () => {
               <SettingRow title={copy.about.appTitle} desc={copy.about.appDesc}>
                 <div className="space-y-2 text-sm text-text-muted">
                   <div><span className="font-black text-text">{copy.about.name}</span>LOOM / 麓鸣</div>
-                  <div><span className="font-black text-text">{copy.about.version}</span>2.1.24</div>
+                  <div><span className="font-black text-text">{copy.about.version}</span>{APP_VERSION}</div>
                   <div><span className="font-black text-text">{copy.about.positioning}</span>{copy.about.positioningValue}</div>
                 </div>
               </SettingRow>

@@ -69,6 +69,22 @@ class ComponentCatalogFallbackTests(unittest.TestCase):
 
             self.assertEqual(default_manifest_path(launcher_dir), parent_manifest)
 
+    def test_default_manifest_path_finds_repo_manifest_from_tauri_debug_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            debug_dir = os.path.join(
+                temp_dir,
+                "openclaw_new_launcher",
+                "src-tauri",
+                "target",
+                "debug",
+            )
+            os.makedirs(debug_dir)
+            parent_manifest = os.path.join(temp_dir, "release-manifest.json")
+            with open(parent_manifest, "w", encoding="utf-8") as file:
+                file.write("{}")
+
+            self.assertEqual(default_manifest_path(debug_dir), parent_manifest)
+
     def test_missing_manifest_exposes_five_simulation_targets_without_state_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             state_path = os.path.join(temp_dir, "components-state.json")
@@ -82,8 +98,10 @@ class ComponentCatalogFallbackTests(unittest.TestCase):
 
             self.assertEqual(status["manifest"], None)
             self.assertEqual(status["manifestErrorCode"], "manifest_unavailable")
+            self.assertTrue(status["installLocked"])
             self.assertIn("正式组件清单未就绪", status["warning"])
             self.assertNotIn("模拟安装", status["warning"])
+            self.assertNotIn("All manifest sources", status["warning"])
             self.assertEqual(
                 [component["id"] for component in status["components"]],
                 ["codex-desktop", "claude-code", "opencode", "openclaw-companion", "hermes"],
@@ -148,6 +166,7 @@ class ComponentCatalogFallbackTests(unittest.TestCase):
 
             self.assertEqual(status["manifest"], None)
             self.assertEqual(status["manifestErrorCode"], "manifest_unavailable")
+            self.assertTrue(status["installLocked"])
             self.assertIn("清单", status["warning"])
 
 

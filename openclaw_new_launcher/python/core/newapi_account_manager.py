@@ -19,7 +19,7 @@ from core.openclaw_model_sync import sync_openclaw_models
 from core.paths import AppPaths
 from core.secret_store import protect_secret, unprotect_secret
 from core.storage import read_json, write_json
-from core.wire_config import WireService
+from core.wire_config import WireService, clear_agent_user_env_keys
 
 
 class NewApiAccountError(RuntimeError):
@@ -28,12 +28,24 @@ class NewApiAccountError(RuntimeError):
 
 DEFAULT_BASE_URL = "https://api.heang.top"
 DEFAULT_API_BASE = "https://api.heang.top/v1"
+DEFAULT_ACCOUNT_CENTER_PATH = "/wallet"
 ACCOUNT_SOURCE = "newapi_account"
 LEGACY_ACCOUNT_SOURCE = "heang_account"
 SESSION_GRACE_DAYS = 14
 DEFAULT_TEXT_MODEL = "qwen3.7-plus"
 DEFAULT_PHONE_MODEL = "agnes-2.0-flash"
+LAUNCHER_TOKEN_NAME_PREFIX = "LOOM Launcher"
+TEXT_MODEL_PRIORITY = (
+    "qwen3.7-plus",
+    "qwen3.6-plus",
+    "qwen3.5-plus",
+    "glm-4-flash",
+    "kimi-k2.5",
+    "MiniMax-M2.5",
+)
+PHONE_MODEL_IDS = {DEFAULT_PHONE_MODEL.lower()}
 MANAGED_ACCOUNT_SOURCES = {ACCOUNT_SOURCE, LEGACY_ACCOUNT_SOURCE}
+NEWAPI_EMAIL_CODE_SEND_PATH = "/api/verification"
 OPENCLAW_EMAIL_CODE_SEND_PATHS = (
     "/api/openclaw/auth/email-code/send",
     "/api/openclaw/email-code/send",
@@ -41,6 +53,19 @@ OPENCLAW_EMAIL_CODE_SEND_PATHS = (
 OPENCLAW_EMAIL_CODE_LOGIN_PATHS = (
     "/api/openclaw/auth/email-code/login",
     "/api/openclaw/email-code/login",
+)
+OPENCLAW_EMAIL_CODE_REGISTER_PATHS = (
+    "/api/user/register",
+    "/api/openclaw/auth/email-code/register",
+    "/api/openclaw/email-code/register",
+    "/api/openclaw/auth/register",
+    "/api/openclaw/register",
+)
+OPENCLAW_SUBSCRIPTION_PATHS = (
+    "/api/user/subscription",
+    "/api/user/self",
+    "/api/openclaw/account/subscription",
+    "/api/openclaw/subscription",
 )
 SESSION_SECRET_PATHS = (
     ("memberToken",),
@@ -53,6 +78,7 @@ SESSION_SECRET_PATHS = (
     ("newApi", "launcherToken"),
     ("phoneAgent", "apiKey"),
 )
+DEFAULT_RUNTIME_SYNC_TARGETS = ("openclaw", "opencode", "codex", "claude", "image", "desktop", "phone")
 
 
 def _utc_now() -> datetime:
@@ -87,6 +113,23 @@ def _should_retry_email_login(error: Exception) -> bool:
             "invalid parameters",
             "missing",
             "required",
+        )
+    )
+
+
+def _should_try_openclaw_email_fallback(error: Exception) -> bool:
+    text = str(error or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "http_404",
+            "http_405",
+            "http_501",
+            "not found",
+            "invalid url",
+            "endpoint_unavailable",
+            "newapi_network_error",
+            "urlopen error",
         )
     )
 
@@ -249,34 +292,189 @@ def _extract_best_api_key(payload: Any, preferred_name: str = "") -> str:
     return ""
 
 
+def _token_name(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    return _pick_text(item.get("name"), item.get("tokenName"), item.get("token_name"))
+
+
+def _is_launcher_token_item(item: Any) -> bool:
+    name = _token_name(item).lower()
+    return name.startswith(LAUNCHER_TOKEN_NAME_PREFIX.lower())
+
+
+def _extract_launcher_api_key(payload: Any) -> str:
+    launcher_items = [item for item in _candidate_items(payload) if _is_launcher_token_item(item)]
+    if not launcher_items:
+        return ""
+    for item in launcher_items:
+        if not _token_is_usable(item):
+            continue
+        token = _extract_api_key(item)
+        if token:
+            return token
+    return ""
+
+
 def _extract_models(payload: Any) -> list[str]:
     models: list[str] = []
-    raw = _candidate_items(payload)
-    if not raw and isinstance(payload, dict):
-        raw = payload.get("models") if isinstance(payload.get("models"), list) else []
-    for item in raw:
-        model_id = _pick_text(item.get("id"), item.get("model"), item.get("name")) if isinstance(item, dict) else _pick_text(item)
+    for item in _iter_model_items(payload):
+        model_id = _model_id_from_item(item)
         if model_id and model_id not in models:
             models.append(model_id)
     return models
 
 
 def _model_ids_from_group(value: Any) -> list[str]:
-    if isinstance(value, dict):
-        value = _candidate_items(value) or value.get("models") or value.get("items") or value.get("data")
-    if not isinstance(value, list):
-        value = [value] if value else []
     result: list[str] = []
-    for item in value:
-        model_id = _pick_text(
-            item.get("id") if isinstance(item, dict) else "",
-            item.get("model") if isinstance(item, dict) else "",
-            item.get("name") if isinstance(item, dict) else "",
-            item,
-        )
+    for item in _iter_model_items(value):
+        model_id = _model_id_from_item(item)
         if model_id and model_id not in result:
             result.append(model_id)
     return result
+
+
+MODEL_CONTAINER_KEYS = {
+    "data",
+    "items",
+    "tokens",
+    "rows",
+    "list",
+    "models",
+    "model",
+    "text",
+    "chat",
+    "llm",
+    "image",
+    "images",
+    "video",
+    "videos",
+    "phone",
+    "phone_models",
+    "modelClasses",
+    "classifiedModels",
+}
+
+MODEL_METADATA_KEYS = {
+    "success",
+    "message",
+    "error",
+    "code",
+    "quota",
+    "usage",
+    "subscription",
+    "account",
+    "api",
+    "defaults",
+}
+
+MODEL_ID_PREFIXES = (
+    "gpt",
+    "o1",
+    "o3",
+    "o4",
+    "qwen",
+    "claude",
+    "gemini",
+    "glm",
+    "kimi",
+    "moonshot",
+    "deepseek",
+    "doubao",
+    "agnes",
+    "seedream",
+    "seedance",
+    "sora",
+    "veo",
+    "kling",
+    "wan",
+    "hailuo",
+    "runway",
+    "pika",
+    "luma",
+    "flux",
+    "imagen",
+    "dall-e",
+    "text-",
+    "chat-",
+)
+
+
+def _iter_model_items(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (str, int, float)):
+        return [value]
+    if not isinstance(value, dict):
+        return []
+
+    direct = _candidate_items(value)
+    if direct:
+        return direct
+
+    result: list[Any] = []
+    for key in (
+        "models",
+        "model",
+        "data",
+        "items",
+        "tokens",
+        "rows",
+        "list",
+        "text",
+        "chat",
+        "llm",
+        "image",
+        "images",
+        "video",
+        "videos",
+        "phone",
+        "phone_models",
+        "modelClasses",
+        "classifiedModels",
+    ):
+        nested = value.get(key)
+        for item in _iter_model_items(nested):
+            if item not in result:
+                result.append(item)
+
+    for key, nested in value.items():
+        if not _looks_like_model_map_entry(key, nested):
+            continue
+        if key not in result:
+            result.append(key)
+        for item in _iter_model_items(nested):
+            if item not in result:
+                result.append(item)
+    return result
+
+
+def _model_id_from_item(item: Any) -> str:
+    if isinstance(item, dict):
+        return _pick_text(
+            item.get("id"),
+            item.get("model"),
+            item.get("model_id"),
+            item.get("modelId"),
+            item.get("name"),
+        )
+    return _pick_text(item)
+
+
+def _looks_like_model_map_entry(key: Any, value: Any) -> bool:
+    text = str(key or "").strip()
+    if not text:
+        return False
+    if text in MODEL_CONTAINER_KEYS or text in MODEL_METADATA_KEYS:
+        return False
+    if isinstance(value, dict) and _model_id_from_item(value):
+        return True
+    lowered = text.lower()
+    if lowered.startswith(MODEL_ID_PREFIXES):
+        return True
+    return any(char.isdigit() for char in lowered) and any(char in lowered for char in ("-", ".", "/", "_"))
 
 
 def _merge_model_ids(*groups: list[str]) -> list[str]:
@@ -314,8 +512,21 @@ def _classified_models_from_catalog(catalog: Any) -> dict[str, list[str]]:
 
 def _flatten_model_catalog(catalog: Any) -> list[str]:
     classes = _classified_models_from_catalog(catalog)
-    phone = _model_ids_from_group(catalog.get("phone") if isinstance(catalog, dict) else None)
+    phone = _phone_model_ids_from_catalog(catalog)
     return _merge_model_ids(classes["text"], classes["image"], classes["video"], phone)
+
+
+def _phone_model_ids_from_catalog(catalog: Any) -> list[str]:
+    if not isinstance(catalog, dict):
+        return []
+    result = _merge_model_ids(
+        _model_ids_from_group(catalog.get("phone")),
+        _model_ids_from_group(catalog.get("phone_models")),
+    )
+    for nested in catalog.values():
+        if isinstance(nested, dict):
+            result = _merge_model_ids(result, _phone_model_ids_from_catalog(nested))
+    return result
 
 
 def _looks_like_image_model(model_id: str) -> bool:
@@ -337,20 +548,146 @@ def _classify_models(models: list[str]) -> dict[str, list[str]]:
             classified["video"].append(model)
         elif _looks_like_image_model(model):
             classified["image"].append(model)
+        elif _looks_like_phone_model(model):
+            continue
         else:
             classified["text"].append(model)
     return classified
 
 
+def _models_have_text(models: list[str]) -> bool:
+    return bool(_classify_models(models)["text"])
+
+
+def _text_models_with_default(classes: dict[str, Any], *, selected: str = "") -> list[str]:
+    values = classes.get("text") if isinstance(classes.get("text"), list) else []
+    text_models = [model for model in values if isinstance(model, str) and not _looks_like_non_text_model(model)]
+    selected_model = _choose_model(text_models, _pick_text(selected), [])
+    if selected_model and selected_model not in text_models:
+        text_models = [selected_model, *text_models]
+    return text_models
+
+
+def _looks_like_non_text_model(model_id: str) -> bool:
+    return _looks_like_phone_model(model_id) or _looks_like_image_model(model_id) or _looks_like_video_model(model_id)
+
+
 def _choose_model(candidates: list[str], preferred: str, fallback: list[str] | None = None) -> str:
+    candidates = [model for model in candidates if not _looks_like_non_text_model(model)]
+    fallback = [model for model in (fallback or []) if not _looks_like_non_text_model(model)]
     if preferred in candidates:
         return preferred
+    for model in TEXT_MODEL_PRIORITY:
+        if model in candidates:
+            return model
     if candidates:
         return candidates[0]
-    fallback = fallback or []
     if preferred in fallback:
         return preferred
-    return fallback[0] if fallback else preferred
+    for model in TEXT_MODEL_PRIORITY:
+        if model in fallback:
+            return model
+    return fallback[0] if fallback else ""
+
+
+def _looks_like_phone_model(model_id: str) -> bool:
+    text = str(model_id or "").strip().lower()
+    return bool(text) and text in PHONE_MODEL_IDS
+
+
+def _extract_subscription_snapshot(payload: Any, *, base_url: str, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
+    fallback = fallback if isinstance(fallback, dict) else {}
+    data = _unwrap(payload)
+    if not isinstance(data, dict):
+        data = {}
+    account = data.get("account") if isinstance(data.get("account"), dict) else {}
+    subscription = data.get("subscription") if isinstance(data.get("subscription"), dict) else {}
+    quota = data.get("quota") if isinstance(data.get("quota"), dict) else {}
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    fallback_usage = fallback.get("usage") if isinstance(fallback.get("usage"), dict) else {}
+    plan = _pick_text(
+        subscription.get("plan"),
+        subscription.get("name"),
+        account.get("plan"),
+        account.get("group"),
+        data.get("plan"),
+        fallback.get("plan"),
+        "default",
+    )
+    balance = _pick_text(
+        subscription.get("balance"),
+        subscription.get("remaining"),
+        quota.get("remaining"),
+        data.get("balance"),
+        fallback_usage.get("quota"),
+    )
+    used = _pick_text(
+        subscription.get("used"),
+        usage.get("used"),
+        usage.get("usedQuota"),
+        usage.get("used_quota"),
+        quota.get("used"),
+        data.get("used_quota"),
+        data.get("usedQuota"),
+        fallback_usage.get("usedQuota"),
+    )
+    expires_at = _pick_text(
+        subscription.get("expiresAt"),
+        subscription.get("expiredAt"),
+        subscription.get("expireAt"),
+        subscription.get("expired_time"),
+        data.get("expiresAt"),
+        fallback.get("expiresAt"),
+        fallback.get("leaseExpiresAt"),
+    )
+    purchase_url = _safe_purchase_url(
+        _pick_text(
+            subscription.get("purchaseUrl"),
+            subscription.get("checkoutUrl"),
+            subscription.get("url"),
+            data.get("purchaseUrl"),
+            _default_purchase_url(base_url),
+        ),
+        base_url=base_url,
+    )
+    return {
+        "mode": "native",
+        "plan": plan,
+        "balance": balance,
+        "expiresAt": expires_at,
+        "usage": {
+            "usedQuota": used,
+            "requestCount": _pick_text(
+                usage.get("requestCount"),
+                usage.get("request_count"),
+                data.get("request_count"),
+                data.get("requestCount"),
+                fallback_usage.get("requestCount"),
+            ),
+        },
+        "purchaseUrl": purchase_url,
+        "updatedAt": _iso(_utc_now()),
+    }
+
+
+def _default_purchase_url(base_url: str) -> str:
+    base = str(base_url or DEFAULT_BASE_URL).strip().rstrip("/") or DEFAULT_BASE_URL
+    return f"{base}{DEFAULT_ACCOUNT_CENTER_PATH}"
+
+
+def _safe_purchase_url(value: Any, *, base_url: str) -> str:
+    text = _pick_text(value)
+    if not text:
+        return _default_purchase_url(base_url)
+    try:
+        parsed = urllib.parse.urlparse(urllib.parse.urljoin(base_url, text))
+    except Exception:
+        return _default_purchase_url(base_url)
+    if parsed.scheme not in {"http", "https"}:
+        return _default_purchase_url(base_url)
+    if parsed.netloc == "api.heang.top" and parsed.path.rstrip("/") == "/topup":
+        return _default_purchase_url(base_url)
+    return urllib.parse.urlunparse(parsed)
 
 
 class NewApiAccountManager:
@@ -531,23 +868,75 @@ class NewApiAccountManager:
                 errors.append(_redact_secret_text(error))
         raise NewApiAccountError("; ".join(errors[-2:]) or "openclaw_auth_endpoint_unavailable")
 
-    def send_email_code(self, email: str, *, base_url: str = "") -> dict[str, Any]:
+    def send_email_code(self, email: str, *, base_url: str = "", purpose: str = "register") -> dict[str, Any]:
         email = email.strip()
         if not _looks_like_email(email):
             raise NewApiAccountError("请输入有效的中转站邮箱")
 
         base_url = self.normalize_base_url(base_url)
         opener = urllib.request.build_opener()
-        payload = self._request_openclaw_auth_endpoint(
-            opener,
-            base_url,
-            OPENCLAW_EMAIL_CODE_SEND_PATHS,
-            {
+        normalized_purpose = str(purpose or "").strip().lower()
+        normalized_purpose = "login" if normalized_purpose in {"login", "email", "signin", "sign_in"} else "register"
+        if normalized_purpose == "login":
+            try:
+                payload = self._request_openclaw_auth_endpoint(
+                    opener,
+                    base_url,
+                    OPENCLAW_EMAIL_CODE_SEND_PATHS,
+                    {
+                        "email": email,
+                        "purpose": "login",
+                        "scene": "login",
+                        "type": "login",
+                        "mode": "login",
+                        "action": "login",
+                        "authType": "email_code_login",
+                        "product": "LOOM",
+                        "app": "LOOM",
+                    },
+                )
+            except NewApiAccountError as error:
+                if "not found" in str(error).lower() or "openclaw_auth_endpoint_unavailable" in str(error).lower():
+                    raise NewApiAccountError("当前中转站暂未开放验证码登录，请使用密码登录，或切到邮箱注册创建新账号。") from error
+                raise
+            data = _unwrap(payload)
+            data = data if isinstance(data, dict) else {}
+            result = {
+                "sent": bool(data.get("sent", payload.get("success", True))),
                 "email": email,
-                "product": "LOOM",
-                "app": "LOOM",
-            },
-        )
+                "maskedEmail": _pick_text(data.get("maskedEmail"), data.get("masked_email")),
+                "retryAfter": data.get("retryAfter") or data.get("retry_after"),
+                "expiresIn": data.get("expiresIn") or data.get("expires_in"),
+                "message": _pick_text(data.get("message"), payload.get("message")),
+            }
+            return {key: value for key, value in result.items() if value not in ("", None)}
+
+        try:
+            payload = self._request_json(
+                opener,
+                f"{base_url}{NEWAPI_EMAIL_CODE_SEND_PATH}?{urllib.parse.urlencode({'email': email})}",
+                method="GET",
+                timeout=20,
+            )
+        except NewApiAccountError as first_error:
+            if not _should_try_openclaw_email_fallback(first_error):
+                raise
+            self.append_log(f"[Account] New API verification endpoint unavailable: {_redact_secret_text(first_error)}\n")
+            payload = self._request_openclaw_auth_endpoint(
+                opener,
+                base_url,
+                OPENCLAW_EMAIL_CODE_SEND_PATHS,
+                {
+                    "email": email,
+                    "purpose": "register",
+                    "scene": "register",
+                    "type": "register",
+                    "mode": "register",
+                    "action": "register",
+                    "product": "LOOM",
+                    "app": "LOOM",
+                },
+            )
         data = _unwrap(payload)
         data = data if isinstance(data, dict) else {}
         result = {
@@ -644,7 +1033,7 @@ class NewApiAccountManager:
             flat_models,
             cookie_jar,
         )
-        text_model = _pick_text(defaults.get("textModel"), defaults.get("launcherTextModel"), session.get("gatewayDefaultModel"))
+        text_model = _choose_model(classified["text"], DEFAULT_TEXT_MODEL, flat_models)
         image_model = _pick_text(defaults.get("imageModel"), session.get("gatewayImageModel"))
         video_model = _pick_text(defaults.get("videoDraftModel"), defaults.get("videoModel"), session.get("gatewayVideoDraftModel"))
         phone_model = _pick_text(defaults.get("phoneModel"), phone_models[0] if phone_models else "", DEFAULT_PHONE_MODEL)
@@ -697,21 +1086,117 @@ class NewApiAccountManager:
         base_url = self.normalize_base_url(base_url)
         cookie_jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        try:
+            payload = self._request_openclaw_auth_endpoint(
+                opener,
+                base_url,
+                OPENCLAW_EMAIL_CODE_LOGIN_PATHS,
+                {
+                    "email": email,
+                    "code": code,
+                    "purpose": "login",
+                    "scene": "login",
+                    "type": "login",
+                    "mode": "login",
+                    "action": "login",
+                    "authType": "email_code_login",
+                    "product": "LOOM",
+                    "app": "LOOM",
+                },
+            )
+        except NewApiAccountError as error:
+            if "not found" in str(error).lower() or "openclaw_auth_endpoint_unavailable" in str(error).lower():
+                raise NewApiAccountError("当前中转站暂未开放验证码登录，请使用密码登录") from error
+            raise
+        # The current api.heang.top deployment exposes email verification for
+        # registration but not passwordless login. Keep this route for future
+        # launcher-specific support and translate missing endpoints in routes.
+        session = self._build_email_code_session(base_url, email, payload, cookie_jar)
+        self._write_session(session)
+        self.sync_targets(session, targets=DEFAULT_RUNTIME_SYNC_TARGETS)
+        return session
+
+    def register_with_email_code(self, email: str, password: str, code: str, *, base_url: str = "") -> dict[str, Any]:
+        email = email.strip()
+        password = password.strip()
+        code = code.strip()
+        if not _looks_like_email(email):
+            raise NewApiAccountError("请输入有效的中转站邮箱")
+        if len(password) < 6:
+            raise NewApiAccountError("密码至少需要 6 位")
+        if not code:
+            raise NewApiAccountError("请输入邮箱验证码")
+
+        base_url = self.normalize_base_url(base_url)
+        cookie_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
         payload = self._request_openclaw_auth_endpoint(
             opener,
             base_url,
-            OPENCLAW_EMAIL_CODE_LOGIN_PATHS,
+            OPENCLAW_EMAIL_CODE_REGISTER_PATHS,
             {
                 "email": email,
+                "username": email,
+                "password": password,
                 "code": code,
+                "verification_code": code,
                 "product": "LOOM",
                 "app": "LOOM",
             },
         )
-        session = self._build_email_code_session(base_url, email, payload, cookie_jar)
+        try:
+            session = self._build_email_code_session(base_url, email, payload, cookie_jar)
+        except NewApiAccountError:
+            session = self.login(email, password, base_url=base_url)
+            return session
         self._write_session(session)
-        self.sync_targets(session)
+        self.sync_targets(session, targets=DEFAULT_RUNTIME_SYNC_TARGETS)
         return session
+
+    def subscription_snapshot(self) -> dict[str, Any]:
+        session = self.current()
+        if not session:
+            return {
+                "mode": "native",
+                "loggedIn": False,
+                "plan": "",
+                "balance": "",
+                "expiresAt": "",
+                "usage": {},
+                "purchaseUrl": _default_purchase_url(DEFAULT_BASE_URL),
+                "webViewUrl": _default_purchase_url(DEFAULT_BASE_URL),
+            }
+        newapi = session.get("newApi") if isinstance(session.get("newApi"), dict) else {}
+        base_url = self.normalize_base_url(newapi.get("baseUrl") or DEFAULT_BASE_URL)
+        opener = urllib.request.build_opener()
+        headers = self._session_headers(session)
+        fallback = {
+            "plan": session.get("plan"),
+            "expiresAt": session.get("expiresAt") or session.get("leaseExpiresAt"),
+            "usage": session.get("usage") if isinstance(session.get("usage"), dict) else {},
+            "leaseExpiresAt": session.get("leaseExpiresAt"),
+        }
+        errors: list[str] = []
+        for path in OPENCLAW_SUBSCRIPTION_PATHS:
+            try:
+                payload = self._request_json(opener, f"{base_url}{path}", headers=headers, timeout=20)
+                snapshot = _extract_subscription_snapshot(payload, base_url=base_url, fallback=fallback)
+                snapshot["loggedIn"] = True
+                snapshot["offline"] = False
+                return snapshot
+            except NewApiAccountError as error:
+                errors.append(_redact_secret_text(error))
+        snapshot = _extract_subscription_snapshot({}, base_url=base_url, fallback=fallback)
+        snapshot.update({
+            "loggedIn": True,
+            "offline": True,
+            "stale": True,
+            "webViewUrl": snapshot.get("purchaseUrl") or _default_purchase_url(base_url),
+            "message": "暂时无法连接中转站，订阅信息稍后刷新",
+        })
+        if errors:
+            snapshot["diagnostic"] = "; ".join(errors[-2:])
+        return snapshot
 
     def _create_launcher_token(
         self,
@@ -719,7 +1204,7 @@ class NewApiAccountManager:
         base_url: str,
         headers: dict[str, str],
     ) -> str:
-        token_name = f"LOOM Launcher {int(time.time())}"
+        token_name = f"{LAUNCHER_TOKEN_NAME_PREFIX} {int(time.time())}"
         attempts = [
             {"name": token_name, "remain_quota": 0, "expired_time": -1, "unlimited_quota": True},
             {"name": token_name, "remain_quota": 500000, "expired_time": -1, "unlimited_quota": False},
@@ -787,16 +1272,36 @@ class NewApiAccountManager:
         except NewApiAccountError as error:
             self.append_log(f"[Account] launcher token bridge unavailable: {_redact_secret_text(error)}\n")
 
+        list_payload: dict[str, Any] | None = None
         try:
-            payload = self._request_json(opener, f"{base_url}/api/token/?p=0&page_size=100", headers=headers)
-            token = _extract_best_api_key(payload)
+            list_payload = self._request_json(opener, f"{base_url}/api/token/?p=0&page_size=100", headers=headers)
+            token = _extract_launcher_api_key(list_payload)
             if token:
-                return token, {"source": "existing", "raw": _candidate_items(payload)}
-        except NewApiAccountError:
-            pass
+                return token, {"source": "existing_launcher", "raw": _candidate_items(list_payload)}
+        except NewApiAccountError as error:
+            self.append_log(f"[Account] token list unavailable: {_redact_secret_text(error)}\n")
 
-        token = self._create_launcher_token(opener, base_url, headers)
-        return token, {"source": "created"}
+        create_error: NewApiAccountError | None = None
+        try:
+            token = self._create_launcher_token(opener, base_url, headers)
+            return token, {"source": "created_launcher"}
+        except NewApiAccountError as error:
+            create_error = error
+            self.append_log(f"[Account] launcher token create unavailable: {_redact_secret_text(error)}\n")
+
+        if list_payload is None:
+            try:
+                list_payload = self._request_json(opener, f"{base_url}/api/token/?p=0&page_size=100", headers=headers)
+            except NewApiAccountError:
+                list_payload = None
+        if list_payload is not None:
+            token = _extract_best_api_key(list_payload)
+            if token:
+                return token, {"source": "existing_fallback", "raw": _candidate_items(list_payload)}
+
+        if create_error:
+            raise create_error
+        raise NewApiAccountError("无法读取或创建中转站 API Token")
 
     def _fetch_models(self, opener: urllib.request.OpenerDirector, base_url: str, api_token: str, headers: dict[str, str]) -> list[str]:
         model_ids: list[str] = []
@@ -950,9 +1455,23 @@ class NewApiAccountManager:
         models = token_meta.get("models") if isinstance(token_meta.get("models"), list) else []
         if not models:
             models = self._fetch_models(opener, base_url, api_token_value, headers)
+        if (
+            not api_token.strip()
+            and not _models_have_text(models)
+            and token_meta.get("source") not in {"supplied", "created_launcher", "created_launcher_after_model_check"}
+        ):
+            try:
+                fresh_token = self._create_launcher_token(opener, base_url, headers)
+                fresh_models = self._fetch_models(opener, base_url, fresh_token, headers)
+                if _models_have_text(fresh_models):
+                    api_token_value = fresh_token
+                    token_meta = {"source": "created_launcher_after_model_check"}
+                    models = fresh_models
+            except NewApiAccountError as error:
+                self.append_log(f"[Account] launcher token model check failed: {_redact_secret_text(error)}\n")
         session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
         self._write_session(session)
-        self.sync_targets(session)
+        self.sync_targets(session, targets=DEFAULT_RUNTIME_SYNC_TARGETS)
         return session
 
     def bind_ticket(self, ticket: str, *, base_url: str = "") -> dict[str, Any]:
@@ -990,7 +1509,7 @@ class NewApiAccountManager:
         }
         session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
         self._write_session(session)
-        self.sync_targets(session)
+        self.sync_targets(session, targets=DEFAULT_RUNTIME_SYNC_TARGETS)
         return session
 
     def refresh_current(self) -> dict[str, Any]:
@@ -1021,6 +1540,30 @@ class NewApiAccountManager:
             last_good = session.get("lastGoodModels") if isinstance(session.get("lastGoodModels"), dict) else {}
             if isinstance(last_good.get("models"), list):
                 models = list(last_good.get("models") or [])
+        lease = session.get("lease") if isinstance(session.get("lease"), dict) else {}
+        if not _models_have_text(models) and lease.get("tokenSource") != "supplied":
+            try:
+                fresh_token = self._create_launcher_token(opener, base_url, headers)
+                fresh_models = self._fetch_models(opener, base_url, fresh_token, headers)
+                if _models_have_text(fresh_models):
+                    api_token = fresh_token
+                    models = fresh_models
+                    online = True
+                    session["memberToken"] = fresh_token
+                    session["gatewayImageAccessToken"] = fresh_token
+                    session["gatewayVideoAccessToken"] = ""
+                    gateway_for_token = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
+                    gateway_for_token["accessToken"] = fresh_token
+                    gateway_for_token["imageAccessToken"] = fresh_token
+                    gateway_for_token["videoAccessToken"] = ""
+                    session["gateway"] = gateway_for_token
+                    phone_agent_for_token = session.get("phoneAgent") if isinstance(session.get("phoneAgent"), dict) else {}
+                    phone_agent_for_token["apiKey"] = fresh_token
+                    session["phoneAgent"] = phone_agent_for_token
+                    lease["tokenSource"] = "created_launcher_after_refresh_model_check"
+                    session["lease"] = lease
+            except NewApiAccountError as error:
+                self.append_log(f"[Account] refresh launcher token model check failed: {_redact_secret_text(error)}\n")
         classified = _classify_models(models)
         now = _utc_now()
         session["gatewayModels"] = models
@@ -1072,7 +1615,7 @@ class NewApiAccountManager:
         session["newApi"] = newapi
         session["updatedAt"] = _iso(now)
         self._write_session(session)
-        self.sync_targets(session)
+        self.sync_targets(session, targets=DEFAULT_RUNTIME_SYNC_TARGETS)
         return session
 
     def _write_session(self, session: dict[str, Any]) -> None:
@@ -1126,6 +1669,21 @@ class NewApiAccountManager:
         classes = gateway.get("classifiedModels") if isinstance(gateway.get("classifiedModels"), dict) else newapi.get("modelClasses")
         if not isinstance(classes, dict):
             classes = _classify_models(session.get("gatewayModels") if isinstance(session.get("gatewayModels"), list) else [])
+        text_models = _text_models_with_default(
+            classes,
+            selected=_pick_text(session.get("gatewayDefaultModel"), gateway.get("defaultModel")),
+        )
+        selected_text_model = _choose_model(text_models, _pick_text(session.get("gatewayDefaultModel"), gateway.get("defaultModel")), [])
+        subscription = _extract_subscription_snapshot(
+            {},
+            base_url=_pick_text(newapi.get("baseUrl"), DEFAULT_BASE_URL),
+            fallback={
+                "plan": session.get("plan"),
+                "expiresAt": session.get("expiresAt") or session.get("leaseExpiresAt"),
+                "usage": session.get("usage") if isinstance(session.get("usage"), dict) else {},
+                "leaseExpiresAt": session.get("leaseExpiresAt"),
+            },
+        )
         return {
             "loggedIn": True,
             "source": ACCOUNT_SOURCE,
@@ -1137,12 +1695,12 @@ class NewApiAccountManager:
             "gatewayBaseUrl": _pick_text(session.get("gatewayBaseUrl")),
             "tokenMasked": _mask_secret(session.get("memberToken")),
             "models": {
-                "text": classes.get("text") if isinstance(classes.get("text"), list) else [],
+                "text": text_models,
                 "image": classes.get("image") if isinstance(classes.get("image"), list) else [],
                 "video": classes.get("video") if isinstance(classes.get("video"), list) else [],
             },
             "selectedModels": {
-                "text": _pick_text(session.get("gatewayDefaultModel"), gateway.get("defaultModel")),
+                "text": selected_text_model,
                 "image": _pick_text(session.get("gatewayImageModel"), gateway.get("imageModel")),
                 "videoDraft": _pick_text(
                     session.get("gatewayVideoDraftModel"),
@@ -1152,6 +1710,8 @@ class NewApiAccountManager:
                 ),
             },
             "usage": session.get("usage") if isinstance(session.get("usage"), dict) else {},
+            "subscription": subscription,
+            "purchaseUrl": subscription.get("purchaseUrl"),
             "lastOnlineAt": _pick_text(newapi.get("lastOnlineAt")),
             "graceExpiresAt": _pick_text(newapi.get("graceExpiresAt"), session.get("leaseExpiresAt")),
             "offline": bool(newapi.get("offline")),
@@ -1188,7 +1748,7 @@ class NewApiAccountManager:
         session["gateway"] = gateway
         session["updatedAt"] = _iso(_utc_now())
         self._write_session(session)
-        self.sync_targets(session, targets=("openclaw", "image", "desktop", "phone"))
+        self.sync_targets(session, targets=DEFAULT_RUNTIME_SYNC_TARGETS)
         return self.public_session()
 
     @staticmethod
@@ -1202,8 +1762,12 @@ class NewApiAccountManager:
         classes = gateway.get("classifiedModels") if isinstance(gateway.get("classifiedModels"), dict) else newapi.get("modelClasses")
         if not isinstance(classes, dict):
             classes = _classify_models(session.get("gatewayModels") if isinstance(session.get("gatewayModels"), list) else [])
+        text_models = _text_models_with_default(
+            classes,
+            selected=_pick_text(session.get("gatewayDefaultModel"), gateway.get("defaultModel")),
+        )
         return {
-            "text": classes.get("text") if isinstance(classes.get("text"), list) else [],
+            "text": text_models,
             "image": classes.get("image") if isinstance(classes.get("image"), list) else [],
             "video": classes.get("video") if isinstance(classes.get("video"), list) else [],
         }
@@ -1241,7 +1805,7 @@ class NewApiAccountManager:
         sync_openclaw_models(self.paths, self.license_mgr.current_gateway_profile())
 
     def _sync_desktop_agent_config(self, session: dict[str, Any]) -> None:
-        model = _pick_text(session.get("gatewayDefaultModel"), DEFAULT_TEXT_MODEL)
+        model = _pick_text(session.get("gatewayDefaultModel"))
         base_url = _pick_text(session.get("gatewayBaseUrl"), DEFAULT_API_BASE)
         api_key = _pick_text(session.get("memberToken"))
         path = os.path.join(self.paths.launcher_dir, "desktop-agent.json")
@@ -1282,7 +1846,7 @@ class NewApiAccountManager:
         })
         write_json(path, current)
 
-    def sync_targets(self, session: dict[str, Any] | None = None, *, targets: tuple[str, ...] = ("openclaw", "image", "desktop", "phone")) -> list[dict[str, Any]]:
+    def sync_targets(self, session: dict[str, Any] | None = None, *, targets: tuple[str, ...] = DEFAULT_RUNTIME_SYNC_TARGETS) -> list[dict[str, Any]]:
         session = session or self.current()
         if not session:
             raise NewApiAccountError("not_logged_in")
@@ -1321,3 +1885,37 @@ class NewApiAccountManager:
             data = read_json(path, {})
             if isinstance(data, dict) and data.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
                 write_json(path, {})
+
+        wire = read_json(self.paths.wire_current, {})
+        if isinstance(wire, dict) and wire.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
+            write_json(self.paths.wire_current, {})
+            clear_agent_user_env_keys(self.paths)
+
+        self._clear_managed_launcher_config(os.path.join(self.paths.launcher_dir, "phone-agent.json"))
+        self._clear_managed_launcher_config(os.path.join(self.paths.launcher_dir, "desktop-agent.json"))
+
+    def _clear_managed_launcher_config(self, path: str) -> None:
+        data = read_json(path, {})
+        if not isinstance(data, dict):
+            return
+
+        changed = False
+        for key in ("provider", "llm", "chatProvider"):
+            value = data.get(key)
+            if not isinstance(value, dict):
+                continue
+            if key == "chatProvider":
+                config = value.get("config") if isinstance(value.get("config"), dict) else {}
+                if config.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
+                    value["config"] = {}
+                    changed = True
+            elif value.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
+                data[key] = {}
+                changed = True
+
+        if data.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
+            data = {}
+            changed = True
+
+        if changed:
+            write_json(path, data)

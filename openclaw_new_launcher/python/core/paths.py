@@ -233,6 +233,7 @@ class AppPaths:
         env["OPENCLAW_HOME"] = self.data_dir
         env["OPENCLAW_STATE_DIR"] = self.state_dir
         env["OPENCLAW_CONFIG_PATH"] = self.openclaw_config
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         path_entries = [
             self.node_dir,
             os.path.join(self.base_path, "node_modules", ".bin"),

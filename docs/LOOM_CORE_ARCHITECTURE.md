@@ -267,8 +267,87 @@ Runtime Registry 是“安装器形态”的核心。
 - UI 可以触发能力。
 - 外部 Agent 可以通过 CLI / MCP 调用能力。
 - 运行时可以消费能力，但不拥有能力。
+- 所有 CLI / MCP / Bridge 能力调用必须进入经验引擎记录，不允许绕过审计和复盘。
 
-### 4.8 诊断与回滚层
+### 4.8 经验引擎
+
+经验引擎不是聊天记忆系统。
+
+LOOM 不需要记住用户所有对话，也不应该把私人聊天塞进长期上下文。LOOM 需要记录的是“任务经验”：一次目标如何被拆解、调用了哪些能力、哪些步骤成功、哪里慢、哪里失败、下次应该怎么更快。
+
+目标：
+
+- Codex、Claude Code 或其他 Agent 给出目标后，可以通过 MCP / CLI 调用 LOOM 能力。
+- LOOM 根据历史经验在 `直接动作 -> 模板任务 -> Agent 推理` 三条路径中选择最快的安全路径。
+- 每次任务结束后形成可复盘记录，并把稳定路径沉淀成任务模板。
+- 自动获客、定时任务、手机控制、桌面 RPA 和媒体生成都可以复用经验，但必须保留用户确认边界。
+
+```mermaid
+flowchart LR
+  Goal["User / Codex / Claude Code Goal"]
+  MCP["LOOM MCP / CLI"]
+  Orchestrator["Task Orchestrator"]
+  Router["Direct / Template / Agent Router"]
+  Caps["Phone / RPA / Media / Runtime Capabilities"]
+  Ledger["Task Ledger"]
+  Trace["Action Trace"]
+  Optimizer["Template Optimizer"]
+  Leads["Lead / Customer Records"]
+  Report["Optimizer Report"]
+
+  Goal --> MCP
+  MCP --> Orchestrator
+  Orchestrator --> Router
+  Router --> Caps
+  Caps --> Ledger
+  Ledger --> Trace
+  Trace --> Optimizer
+  Optimizer --> Router
+  Ledger --> Leads
+  Ledger --> Report
+```
+
+核心模块：
+
+| 模块 | 记录什么 | 用来做什么 | 禁止做什么 |
+| --- | --- | --- | --- |
+| Task Ledger | 任务目标、来源、模式、耗时、结果、失败原因 | 形成可追溯任务账本 | 记录明文密钥和不必要隐私 |
+| Action Trace | 截图摘要、动作序列、工具调用、等待时间 | 定位慢点和失败点 | 无审计地执行高风险动作 |
+| Template Optimizer | 稳定成功路径、参数、等待策略、模型选择 | 把重复任务变成模板 | 未确认就改变业务话术和触达策略 |
+| Lead / Customer Records | 线索状态、跟进阶段、任务关联 | 支持合规获客和复盘 | 批量骚扰、绕平台规则、隐藏来源 |
+| Optimizer Report | 成功率、平均耗时、失败 TopN、改进建议 | 给用户和 Agent 下一步依据 | 把建议伪装成已执行结果 |
+| Safety Gate | 权限、确认、速率、授权状态 | 控制 MCP / CLI 能力边界 | 让外部 Agent 绕过授权 |
+
+路径选择规则：
+
+- `Direct`：确定性强的动作直接执行，例如打开应用、截图、读取状态、启动组件。
+- `Template`：重复业务流程优先走模板，例如咸鱼擦亮、定时发布、固定获客流程。
+- `Agent`：界面变化大、需要判断语义或异常处理时才进入推理循环。
+
+可自动优化：
+
+- 缩短无意义等待。
+- 合并重复截图和状态读取。
+- 复用上次成功模板。
+- 选择更快的模型或 provider。
+- 调整轮询频率、超时分段和失败重试。
+
+必须确认：
+
+- 批量发送消息、评论、私信、自动回复。
+- 修改获客话术、报价、承诺、售后说明。
+- 新增或扩大定时任务范围。
+- 登录、支付、授权、删除、卸载、覆盖配置。
+- 任何可能违反平台规则或用户授权边界的动作。
+
+验收：
+
+- MCP / CLI 每次能力调用都有任务 ID、来源、参数摘要、结果、耗时和风险等级。
+- 同一模板连续成功后可以生成“建议固化模板”，但固化前需要用户确认。
+- 失败任务能输出下一步建议，而不是只显示 traceback。
+- 断网或重启后仍能看到最近任务、最近模板和上次模型同步快照。
+
+### 4.9 诊断与回滚层
 
 稳定交付不靠“希望它没问题”，靠诊断和回滚。
 
@@ -567,12 +646,16 @@ sequenceDiagram
 - 手机、桌面、媒体能力可通过 CLI 调用。
 - 后续补 MCP server。
 - 授权门控从页面下沉到能力工具层。
+- CLI / MCP 调用统一写入经验引擎。
+- 建立任务模板固化流程：运行记录 -> 复盘建议 -> 用户确认 -> 模板入库。
 
 验收：
 
 - 外部 Agent 可以调用手机截图、桌面观察、生成任务。
 - 未授权能力返回可理解提示。
 - 能力调用有日志、Job、结果和失败恢复。
+- 重复任务可以从历史记录生成模板建议。
+- 高风险模板和批量触达任务必须要求用户确认。
 
 ## 10. 验收清单
 
@@ -610,6 +693,9 @@ sequenceDiagram
 - 手机 Agent 命令可提交。
 - 桌面 RPA 状态/截图/启动可提交。
 - CLI 高风险动作需要确认。
+- MCP / CLI 能力调用进入 Task Ledger。
+- 重复手机任务可以生成模板建议。
+- 自动获客相关任务保留线索记录、触达记录和确认边界。
 
 ### 工程验收
 

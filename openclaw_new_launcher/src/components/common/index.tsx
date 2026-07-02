@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -7,7 +8,7 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 export const Button: React.FC<ButtonProps> = ({ variant = 'default', children, className = '', ...props }) => {
-  const base = 'px-4 py-2 rounded-xl font-semibold transition-all cursor-pointer text-sm disabled:opacity-50 disabled:cursor-not-allowed';
+  const base = 'px-4 py-2 rounded-xl font-semibold transition-all cursor-pointer text-sm disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-alt/60 disabled:text-text-subtle disabled:shadow-none';
   const variants: Record<string, string> = {
     primary: 'border border-[#0B4A3E]/45 bg-[#0B4A3E] text-[#F5FFF9] shadow-[0_12px_28px_rgba(8,60,49,0.20)] hover:border-[#146650]/60 hover:bg-[#12604F]',
     danger: 'bg-status-danger/12 hover:bg-status-danger/22 text-status-danger border border-status-danger/35',
@@ -287,15 +288,26 @@ export const BusyOverlay: React.FC<{
 }) => {
   if (!active) return null;
 
-  return (
-    <div className="pointer-events-none fixed inset-0 z-[80] flex items-center justify-center bg-[#F6F1E8]/42 px-6 backdrop-blur-[1.5px]">
-      <div className="flex min-w-[260px] max-w-[360px] flex-col items-center rounded-[18px] border border-[#0B4A3E]/18 bg-surface/94 px-6 py-5 text-center shadow-[0_24px_72px_rgba(5,35,29,0.22)]">
+  const overlay = (
+    <div
+      data-busy-overlay
+      role="status"
+      aria-live="polite"
+      className="pointer-events-auto fixed inset-0 z-[99940] flex items-center justify-center bg-[#071916]/64 px-6"
+    >
+      <div
+        data-busy-overlay-card
+        className="flex min-w-[260px] max-w-[360px] max-h-[min(80vh,420px)] flex-col items-center overflow-auto rounded-[18px] border border-[#0B4A3E]/18 bg-surface/98 px-6 py-5 text-center shadow-[0_24px_72px_rgba(5,35,29,0.22)]"
+      >
         <span className="loom-busy-ring" aria-hidden="true" />
         <div className="mt-4 text-base font-black text-text">{title}</div>
-        {detail ? <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div> : null}
+        {detail ? <div className="mt-1 max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-text-muted">{detail}</div> : null}
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') return overlay;
+  return createPortal(overlay, document.body);
 };
 
 export const SectionLabel: React.FC<{ text: string }> = ({ text }) => (

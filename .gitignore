@@ -55,6 +55,7 @@ release/
 *.zip
 
 # Local scratch / downloaded runtimes
+/artifacts/
 /scratch/
 /.understand-anything/
 /_research/

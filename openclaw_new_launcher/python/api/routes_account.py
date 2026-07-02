@@ -75,6 +75,48 @@ def _redact_secret_text(value: str) -> str:
     return text
 
 
+def _friendly_account_error(value: object, context: str = "") -> str:
+    text = _redact_secret_text(str(value or "").strip())
+    lower = text.lower()
+    context_lower = str(context or "").lower()
+    if not text:
+        return "账号请求失败，请稍后重试"
+    email_taken_markers = (
+        "邮箱地址已被占用",
+        "邮箱已被占用",
+        "邮箱已存在",
+        "email already",
+        "already exists",
+        "already registered",
+        "occupied",
+    )
+    if any(marker.lower() in lower for marker in email_taken_markers):
+        if "login" in context_lower:
+            return "验证码登录接口返回了注册校验结果。请改用密码登录，或联系管理员开启登录验证码接口。"
+        return "这个邮箱已经注册过，请切到验证码登录或密码登录。"
+    if "newapi_network_error" in lower or "timed out" in lower or "urlopen error" in lower:
+        return "无法连接中转站，请检查网络后重试"
+    if "username or password is incorrect" in lower or "password" in lower and "incorrect" in lower:
+        return "用户名、邮箱或密码错误"
+    if "email domain" in lower or "whitelist" in lower or "special symbols" in lower:
+        return "邮箱域名未开放或邮箱格式不符合中转站要求，请换用已允许的邮箱或联系管理员。"
+    if "turnstile" in lower or "verification failed" in lower:
+        return "中转站需要额外验证，请改用密码登录，或稍后重试验证码。"
+    if "verification code" in lower or "email code" in lower:
+        return "验证码无效或已过期，请重新发送后再试。"
+    if "launcher_token_bridge_no_key" in lower or "no_key" in lower:
+        return "中转站未返回可用模型凭证，请稍后重试或联系管理员"
+    if "openclaw_auth_endpoint_unavailable" in lower:
+        return "中转站账号接口暂不可用，请稍后重试"
+    if "not found" in lower or "invalid url" in lower:
+        return "中转站账号接口暂不可用，请使用密码登录或稍后重试"
+    if "http_429" in lower or "too many" in lower:
+        return "操作过于频繁，请稍后再试"
+    if "http_401" in lower or "unauthorized" in lower:
+        return "登录状态已失效，请重新登录"
+    return text
+
+
 def _public_email_code_response(payload: dict, email: str) -> dict:
     result = {
         key: value
@@ -100,14 +142,16 @@ def register_account_routes(app, ctx) -> None:
         body = await ctx.body(request)
         email = str(body.get("email") or "").strip()
         base_url = str(body.get("baseUrl") or "").strip()
+        purpose = str(body.get("purpose") or body.get("mode") or body.get("scene") or "").strip()
         try:
             result = ctx.get_newapi_account_mgr().send_email_code(
                 email,
                 base_url=base_url,
+                purpose=purpose,
             )
             return ctx.fastapi_json(_public_email_code_response(result, email))
         except NewApiAccountError as exc:
-            return ctx.fastapi_json({"error": _redact_secret_text(str(exc))}, 400)
+            return ctx.fastapi_json({"error": _friendly_account_error(exc, f"email_code_send:{purpose}")}, 400)
 
     @app.post("/api/account/email-code/login")
     async def account_email_code_login(request: Request):
@@ -125,7 +169,27 @@ def register_account_routes(app, ctx) -> None:
             )
             return ctx.fastapi_json(_account_response(account=ctx.get_newapi_account_mgr().public_session(), session=session))
         except NewApiAccountError as exc:
-            return ctx.fastapi_json({"error": _redact_secret_text(str(exc))}, 400)
+            return ctx.fastapi_json({"error": _friendly_account_error(exc, "email_code_login")}, 400)
+
+    @app.post("/api/account/register")
+    async def account_register(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        email = str(body.get("email") or body.get("username") or "").strip()
+        password = str(body.get("password") or "").strip()
+        code = str(body.get("code") or body.get("emailCode") or "").strip()
+        base_url = str(body.get("baseUrl") or "").strip()
+        try:
+            session = ctx.get_newapi_account_mgr().register_with_email_code(
+                email,
+                password,
+                code,
+                base_url=base_url,
+            )
+            return ctx.fastapi_json(_account_response(account=ctx.get_newapi_account_mgr().public_session(), session=session))
+        except NewApiAccountError as exc:
+            return ctx.fastapi_json({"error": _friendly_account_error(exc, "register")}, 400)
 
     @app.post("/api/account/login")
     async def account_login(request: Request):
@@ -145,7 +209,7 @@ def register_account_routes(app, ctx) -> None:
             )
             return ctx.fastapi_json(_account_response(account=ctx.get_newapi_account_mgr().public_session(), session=session))
         except NewApiAccountError as exc:
-            return ctx.fastapi_json({"error": _redact_secret_text(str(exc))}, 400)
+            return ctx.fastapi_json({"error": _friendly_account_error(exc, "password_login")}, 400)
 
     @app.post("/api/account/bind-ticket")
     async def account_bind_ticket(request: Request):
@@ -161,7 +225,7 @@ def register_account_routes(app, ctx) -> None:
             )
             return ctx.fastapi_json(_account_response(account=ctx.get_newapi_account_mgr().public_session(), session=session))
         except NewApiAccountError as exc:
-            return ctx.fastapi_json({"error": _redact_secret_text(str(exc))}, 400)
+            return ctx.fastapi_json({"error": _friendly_account_error(exc, "bind_ticket")}, 400)
 
     @app.post("/api/account/sync")
     async def account_sync(request: Request):
@@ -176,9 +240,9 @@ def register_account_routes(app, ctx) -> None:
                 )
             )
         except NewApiAccountError as exc:
-            return ctx.fastapi_json({"error": _redact_secret_text(str(exc))}, 400)
+            return ctx.fastapi_json({"error": _friendly_account_error(exc, "sync")}, 400)
         except Exception as exc:
-            return ctx.fastapi_json({"error": _redact_secret_text(str(exc))}, 500)
+            return ctx.fastapi_json({"error": _friendly_account_error(exc)}, 500)
 
     @app.post("/api/account/models/select")
     async def account_select_models(request: Request):
@@ -193,7 +257,16 @@ def register_account_routes(app, ctx) -> None:
             )
             return ctx.fastapi_json({"account": account})
         except NewApiAccountError as exc:
-            return ctx.fastapi_json({"error": _redact_secret_text(str(exc))}, 400)
+            return ctx.fastapi_json({"error": _friendly_account_error(exc)}, 400)
+
+    @app.api_route("/api/account/subscription", methods=["GET", "POST"])
+    async def account_subscription(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        try:
+            return ctx.fastapi_json({"subscription": ctx.get_newapi_account_mgr().subscription_snapshot()})
+        except NewApiAccountError as exc:
+            return ctx.fastapi_json({"error": _friendly_account_error(exc)}, 400)
 
     @app.post("/api/account/logout")
     async def account_logout(request: Request):

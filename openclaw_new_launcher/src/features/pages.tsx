@@ -13,21 +13,27 @@ function lazyNamed(
 
 const TerminalPage = lazyNamed(() => import('../components/terminal/TerminalPage'), 'TerminalPage');
 const AgentInstallerPage = lazyNamed(() => import('../components/agents/AgentInstallerPage'), 'AgentInstallerPage');
+const CreativeMediaPage = lazyNamed(() => import('../components/creative/CreativeMediaPage'), 'CreativeMediaPage');
 const PhoneDemoPage = lazyNamed(() => import('../components/phone/PhoneDemoPage'), 'PhoneDemoPage');
+const MatrixWorkbenchPage = lazyNamed(() => import('../components/matrix/MatrixWorkbenchPage'), 'MatrixWorkbenchPage');
 const CapabilityCenterPage = lazyNamed(() => import('../components/capabilities/CapabilityCenterPage'), 'CapabilityCenterPage');
 const LicensePage = lazyNamed(() => import('../components/license/LicensePage'), 'LicensePage');
 const ModelsPage = lazyNamed(() => import('../components/models/ModelsPage'), 'ModelsPage');
 const DiagnosticsPage = lazyNamed(() => import('../components/diagnostics/DiagnosticsPage'), 'DiagnosticsPage');
 const SettingsPage = lazyNamed(() => import('../components/settings/SettingsPage'), 'SettingsPage');
+const AgentAccessPage = lazyNamed(() => import('../components/agentAccess/AgentAccessPage'), 'AgentAccessPage');
 
 const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
   dashboard: DashboardPage,
   agents: AgentInstallerPage,
+  creative: CreativeMediaPage,
   phone: PhoneDemoPage,
+  workbench: MatrixWorkbenchPage,
   capabilities: CapabilityCenterPage,
   terminal: TerminalPage,
   license: LicensePage,
   models: ModelsPage,
+  agentAccess: AgentAccessPage,
   diagnostics: DiagnosticsPage,
   settings: SettingsPage,
 };

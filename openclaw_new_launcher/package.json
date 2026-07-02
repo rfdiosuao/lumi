@@ -1,6 +1,6 @@
 {
   "name": "loom-launcher",
-  "version": "2.1.24",
+  "version": "2.1.42",
   "private": true,
   "type": "module",
   "scripts": {
@@ -23,6 +23,8 @@
     "phone:demo:game": "node scripts/openclaw-phone-demo.mjs game",
     "desktop:agent": "node scripts/openclaw-desktop-agent.mjs",
     "desktop:reply": "node scripts/openclaw-desktop-agent.mjs reply",
+    "loom:cli": "python python/loom_cli.py",
+    "loom:mcp": "python python/loom_mcp.py",
     "loom:context": "node scripts/openclaw-context.mjs",
     "loom:phone": "node scripts/openclaw-phone-agent.mjs",
     "loom:phone:fleet": "node scripts/openclaw-phone-fleet.mjs",

@@ -18,17 +18,21 @@ export interface FeatureDefinition {
 }
 
 const GROUP_CORE = 'LOOM';
+const HIDDEN = false;
 
 export const FEATURE_DEFINITIONS: FeatureDefinition[] = [
   { key: 'dashboard', label: '总览', desc: '状态 / 演示', icon: 'HOME', group: GROUP_CORE, action: { type: 'page' } },
-  { key: 'agents', label: '安装', desc: '智能体运行时', icon: 'INS', group: GROUP_CORE, accent: true, action: { type: 'page' } },
-  { key: 'phone', label: '手机', desc: '连接 / 截图 / 读取', icon: 'PHN', group: GROUP_CORE, action: { type: 'page' } },
+  { key: 'agents', label: '安装', desc: '智能体运行时', icon: 'INS', group: GROUP_CORE, action: { type: 'page' } },
+  { key: 'creative', label: '创作', desc: '生图 / 生视频', icon: 'CRT', group: GROUP_CORE, action: { type: 'page' }, requiresLicense: true },
+  { key: 'phone', label: '手机', desc: '连接 / 截图 / 读屏', icon: 'PHN', group: GROUP_CORE, action: { type: 'page' }, requiresLicense: true, visible: HIDDEN },
+  { key: 'workbench', label: '工作台', desc: '手机矩阵 / 任务发布', icon: 'MATRIX', group: GROUP_CORE, accent: true, action: { type: 'page' }, requiresLicense: true },
   { key: 'license', label: '模型账号', desc: '登录 / 模型', icon: 'ACC', group: GROUP_CORE, action: { type: 'page' } },
-  { key: 'capabilities', label: '其他', desc: '暂未开放', icon: 'CAP', group: GROUP_CORE, action: { type: 'page' } },
-  { key: 'settings', label: '设置', desc: '系统设置', icon: 'SET', group: GROUP_CORE, action: { type: 'page' }, visible: false },
-  { key: 'models', label: '模型', desc: '模型选择', icon: 'MDL', group: GROUP_CORE, action: { type: 'page' }, visible: false },
-  { key: 'diagnostics', label: '诊断', desc: '环境 / 日志', icon: 'FIX', group: GROUP_CORE, action: { type: 'page' }, visible: false },
-  { key: 'terminal', label: '日志', desc: '运行日志', icon: 'LOG', group: GROUP_CORE, action: { type: 'page' }, visible: false },
+  { key: 'agentAccess', label: 'Agent 接入', desc: 'MCP / CLI / 提示词', icon: 'MCP', group: GROUP_CORE, action: { type: 'page' }, requiresLicense: true },
+  { key: 'capabilities', label: '其他', desc: '暂未开放', icon: 'CAP', group: GROUP_CORE, action: { type: 'page' }, requiresLicense: true },
+  { key: 'settings', label: '设置', desc: '系统设置', icon: 'SET', group: GROUP_CORE, action: { type: 'page' }, visible: HIDDEN },
+  { key: 'models', label: '模型', desc: '模型选择', icon: 'MDL', group: GROUP_CORE, action: { type: 'page' }, visible: HIDDEN },
+  { key: 'diagnostics', label: '诊断', desc: '环境 / 日志', icon: 'FIX', group: GROUP_CORE, action: { type: 'page' }, visible: HIDDEN },
+  { key: 'terminal', label: '日志', desc: '运行日志', icon: 'LOG', group: GROUP_CORE, action: { type: 'page' }, visible: HIDDEN },
 ];
 
 const FEATURE_BY_KEY = new Map(FEATURE_DEFINITIONS.map((feature) => [feature.key, feature]));

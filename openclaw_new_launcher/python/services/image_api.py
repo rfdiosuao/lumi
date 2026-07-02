@@ -28,6 +28,13 @@ def _http_error_message(error: urllib.error.HTTPError) -> str:
         return f"HTTP {error.code}"
 
 
+def _openai_endpoint(base_url: str, path: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/v1") and path.startswith("/v1/"):
+        return f"{base}{path[3:]}"
+    return f"{base}{path}"
+
+
 class ImageApiClient:
     REQUEST_TIMEOUT_SEC = 600
 
@@ -77,7 +84,7 @@ class ImageApiClient:
 
     def _build_generation_request(self, base_url: str, prompt: str, size: str, *, count: int = 1, model: str = "") -> urllib.request.Request:
         body = json.dumps({"model": model or IMAGE_MODEL, "prompt": prompt, "n": count, "size": size}).encode("utf-8")
-        return urllib.request.Request(f"{base_url}/v1/images/generations", data=body, headers={"Content-Type": "application/json"})
+        return urllib.request.Request(_openai_endpoint(base_url, "/v1/images/generations"), data=body, headers={"Content-Type": "application/json"})
 
     def _build_edit_request(self, base_url: str, prompt: str, size: str, image_path: str | None, *, model: str = "") -> urllib.request.Request:
         if not image_path:
@@ -103,7 +110,7 @@ class ImageApiClient:
         parts.append(file_data)
         parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
         return urllib.request.Request(
-            f"{base_url}/v1/images/edits",
+            _openai_endpoint(base_url, "/v1/images/edits"),
             data=b"".join(parts),
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         )

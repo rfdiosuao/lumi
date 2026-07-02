@@ -17,6 +17,7 @@ from api.routes_license import register_license_routes
 from api.routes_member import register_member_routes
 from api.routes_log import register_log_routes
 from api.routes_media import register_media_routes
+from api.routes_matrix import register_matrix_routes
 from api.routes_phone import register_phone_routes
 from api.routes_process import register_process_routes
 from api.routes_skills import register_skills_routes
@@ -44,6 +45,7 @@ def register_fastapi_routes(app, ctx) -> None:
     register_cli_routes(app, ctx)
     register_component_routes(app, ctx)
     register_phone_routes(app, ctx)
+    register_matrix_routes(app, ctx)
     register_media_routes(app, ctx)
     register_theme_routes(app, ctx)
     register_config_routes(app, ctx)

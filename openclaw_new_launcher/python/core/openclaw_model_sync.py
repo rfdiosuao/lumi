@@ -12,6 +12,7 @@ from core.storage import read_json, write_json
 
 
 DEFAULT_OPENCLAW_TEXT_MODEL = "qwen3.7-plus"
+PHONE_MODEL_IDS = {"agnes-2.0-flash"}
 MANAGED_ACCOUNT_SOURCES = {"newapi_account", "heang_account"}
 
 
@@ -41,9 +42,6 @@ def sync_openclaw_models_from_gateway_profile(paths: AppPaths, gateway_profile: 
         "api": "openai-completions",
         "models": [_model_definition(model_id) for model_id in model_ids],
     }
-    if managed_by:
-        provider_config["managedBy"] = managed_by
-
     _write_openclaw_model_files(paths, provider_id, provider_config, model_ref, primary_model)
     profiles = read_json(paths.auth_profiles, {"models": {"providers": {}}})
     if not isinstance(profiles, dict):
@@ -95,9 +93,6 @@ def sync_openclaw_models_from_auth_profiles(paths: AppPaths) -> bool:
 
     raw_models = provider.get("models") if isinstance(provider.get("models"), list) else []
     model_ids = _text_model_ids(raw_models, str(provider.get("defaultModel") or "").strip())
-    for default_model in (DEFAULT_OPENCLAW_TEXT_MODEL, "claude-opus-4-7-medium", "kimi-k2.5", "gpt-4o"):
-        if default_model not in model_ids:
-            model_ids.append(default_model)
     if not model_ids:
         return False
 
@@ -142,6 +137,10 @@ def _write_openclaw_model_files(
     defaults.setdefault("model", {})
     defaults["model"]["primary"] = model_ref
     defaults.setdefault("models", {})
+    for model in provider_config.get("models", []):
+        model_id = str(model.get("id") if isinstance(model, dict) else "").strip()
+        if model_id:
+            defaults["models"][f"{provider_id}/{model_id}"] = {"alias": model_id}
     defaults["models"][model_ref] = {"alias": primary_model}
     write_json(paths.openclaw_config, openclaw_config)
 
@@ -157,10 +156,9 @@ def _provider_id_from_base_url(base_url: str, fallback: str) -> str:
 def _model_definition(model_id: str) -> dict[str, Any]:
     is_reasoning = model_id.startswith(("claude", "o1", "o3", "o4", "deepseek-reasoner"))
     context_window = 200000 if model_id.startswith("claude") else 128000
-    max_tokens = 32000
     if model_id.startswith("qwen3"):
-        context_window = 16000000
-        max_tokens = 4096000
+        context_window = 200000
+    context_tokens = 160000 if context_window >= 200000 else 96000
     return {
         "id": model_id,
         "name": f"{model_id} (Custom Provider)",
@@ -168,13 +166,16 @@ def _model_definition(model_id: str) -> dict[str, Any]:
         "input": ["text"],
         "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
         "contextWindow": context_window,
-        "maxTokens": max_tokens,
+        "contextTokens": context_tokens,
+        "maxTokens": 32000,
         "api": "openai-completions",
     }
 
 
 def _looks_like_non_text_model(model_id: str) -> bool:
     text = model_id.lower()
+    if text in PHONE_MODEL_IDS:
+        return True
     markers = (
         "image",
         "dall-e",
@@ -212,8 +213,8 @@ def _text_model_ids(raw_models: list[Any], default_model: str = "") -> list[str]
     default_model = default_model.strip()
     if default_model and not _looks_like_non_text_model(default_model):
         model_ids = [default_model] + [model_id for model_id in model_ids if model_id != default_model]
+    if model_ids and default_model and not _looks_like_non_text_model(default_model):
+        return model_ids
     if DEFAULT_OPENCLAW_TEXT_MODEL in model_ids:
         model_ids = [DEFAULT_OPENCLAW_TEXT_MODEL] + [model_id for model_id in model_ids if model_id != DEFAULT_OPENCLAW_TEXT_MODEL]
-    elif not model_ids:
-        model_ids = [DEFAULT_OPENCLAW_TEXT_MODEL]
     return model_ids

@@ -1,14 +1,15 @@
 ﻿param(
     [Parameter(Mandatory = $true)]
     [string]$Path,
-    [switch]$AllowPhoneAgentApk
+    [switch]$AllowPhoneAgentApk,
+    [switch]$Online
 )
 
 $ErrorActionPreference = "Stop"
 $allowPhoneAgentApkEnv = if ([string]::IsNullOrWhiteSpace($env:OPENCLAW_ALLOW_PHONE_AGENT_APK)) { '' } else { $env:OPENCLAW_ALLOW_PHONE_AGENT_APK.Trim().ToLowerInvariant() }
 $allowPhoneAgentApkEffective = $AllowPhoneAgentApk.IsPresent -or @('1', 'true', 'yes', 'on') -contains $allowPhoneAgentApkEnv
 
-$requiredFiles = @(
+$offlineRequiredFiles = @(
     "LOOM.exe",
     "node/node.exe",
     "node_modules/openclaw/openclaw.mjs",
@@ -52,9 +53,63 @@ $requiredFiles = @(
     "video_config.json"
 )
 
-$allowedTopLevelEntries = @(
+$onlineRequiredFiles = @(
     "LOOM.exe",
+    ".mcp.json",
+    "start.js",
+    "scripts/openclaw-context.mjs",
+    "scripts/openclaw-image-phone.mjs",
+    "scripts/openclaw-phone-agent.mjs",
+    "scripts/openclaw-phone-fleet.mjs",
+    "scripts/openclaw-phone-game.mjs",
+    "scripts/openclaw-phone-secure.mjs",
+    "scripts/openclaw-phone-video.mjs",
+    "scripts/openclaw-phone-vision.mjs",
+    "scripts/verify-phone-agent.ps1",
+    "release-manifest.json",
+    "release-public-key.txt",
+    "_up_/python/bridge.py",
+    "_up_/python/loom_cli.py",
+    "_up_/python/loom_mcp.py",
+    "_up_/python/api/routes_components.py",
+    "_up_/python/api/routes_jobs.py",
+    "_up_/python/core/component_catalog.py",
+    "_up_/python/core/component_installer.py",
+    "_up_/python/core/component_state.py",
+    "_up_/python/core/release_manifest.py",
+    "_up_/python/core/reliability.py",
+    "_up_/python/services/jobs.py",
+    "_up_/python-runtime/python.exe",
+    "data/.openclaw/dist-cache/manifest.json",
+    "data/.openclaw/openclaw.json",
+    "data/.openclaw/workspace/AGENTS.md",
+    "data/.openclaw/workspace/SOUL.md",
+    "data/.openclaw/workspace/TOOLS.md",
+    "data/.openclaw/workspace/CAPABILITIES.md",
+    "data/.openclaw/workspace/runtime-context.json",
+    "data/.openclaw/workspace/skills/openclaw-image-to-phone/SKILL.md",
+    "data/.openclaw/workspace/skills/openclaw-phone-agent/SKILL.md",
+    "data/.openclaw/workspace/skills/openclaw-portable-runtime/SKILL.md",
+    "data/brand_profile.json",
+    "data/launcher_runtime.json",
+    "data/themes/default/theme.json",
+    "data/themes/default/logo.png",
+    "redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+    "imgapi_config.json",
+    "video_config.json"
+)
+
+$offlineAllowedTopLevelEntries = @(
+    "LOOM.exe",
+    ".mcp.json",
     "LOOMFiles"
+)
+
+$onlineAllowedTopLevelEntries = @(
+    "LOOM.exe",
+    ".mcp.json",
+    "LOOMFiles",
+    "README-ONLINE.txt"
 )
 
 $forbiddenPatterns = @(
@@ -62,6 +117,21 @@ $forbiddenPatterns = @(
     "(?i)(^|/)data/install_id\.txt$",
     "(?i)(^|/)data/\.openclaw/launcher/phone-agent\.json$",
     "(?i)(^|/)data/\.openclaw/launcher/phone-agents\.json$",
+    "(?i)(^|/)data/\.openclaw/launcher/desktop-agent\.json$",
+    "(?i)(^|/)data/\.openclaw/launcher/bridge-session\.json$",
+    "(?i)(^|/)data/\.openclaw/launcher/member-session\.json$",
+    "(?i)(^|/)data/\.openclaw/launcher/wire-current\.json$",
+    "(?i)(^|/)data/\.openclaw/launcher/wire-last-good\.json$",
+    "(?i)(^|/)data/\.openclaw/launcher/agent-model-configs(/|$)",
+    "(?i)(^|/)data/\.openclaw/launcher/.*audit.*\.jsonl$",
+    "(?i)(^|/)data/\.openclaw/launcher/.*\.(json|log|jsonl|cache)$",
+    "(?i)(^|/)data/\.openclaw/launcher/loom-task-ledger\.jsonl$",
+    "(?i)(^|/)data/\.openclaw/launcher/loom-action-trace\.jsonl$",
+    "(?i)(^|/)data/\.openclaw/launcher/loom-template-optimizer\.json$",
+    "(?i)(^|/)data/logs/.*\.(log|jsonl)$",
+    "(?i)(^|/)data/logs/loom-task-ledger\.jsonl$",
+    "(?i)(^|/)data/logs/loom-action-trace\.jsonl$",
+    "(?i)(^|/)data/logs/loom-template-optimizer\.json$",
     "(?i)(^|/)data/theme\.json$",
     "(?i)(^|/)LOOMFiles/(Lumi|YongHao|yonghao_tech)(/|$)",
     "(?i)(^|/)LOOMFiles/agents/sightflow-desktop(/|$)",
@@ -69,6 +139,7 @@ $forbiddenPatterns = @(
     "(?i)(^|/)LOOMFiles/scripts/bot-plugin-helper\.mjs$",
     "(?i)(^|/)LOOMFiles/scripts/openclaw-publish-(phone|relay|relay-check|relay-smoke)\.mjs$",
     "(?i)(^|/)LOOMFiles/scripts/package-mac-(complete|online)\.mjs$",
+    "(?i)(^|/)LOOMFiles/_up_/python-runtime/(Doc|Lib/test)(/|$)",
     "(?i)(^|/)__pycache__(/|$)",
     "(?i)\.pyc$",
     "(?i)(^|/)\.npm-cache-update(/|$)",
@@ -118,7 +189,7 @@ $script:LauncherRuntimeVersion = $null
 $script:LauncherRuntimePackageName = $null
 $script:RuntimeContextLauncherVersion = $null
 
-$sensitiveContentPattern = '(?i)\b(sk-[A-Za-z0-9_\-]{24,}|(?:OPENAI|DASHSCOPE|ANTHROPIC|GOOGLE|GITHUB|AZURE|COHERE)_API_KEY\s*[:=]\s*["'']?[A-Za-z0-9_\-]{16,})\b'
+$sensitiveContentPattern = '(?i)\b(AQAAANCM[A-Za-z0-9+/=]{32,}|sk-[A-Za-z0-9_\-]{24,}|(?:OPENAI|DASHSCOPE|ANTHROPIC|GOOGLE|GITHUB|AZURE|COHERE)_API_KEY\s*[:=]\s*["'']?[A-Za-z0-9_\-]{16,})\b'
 
 function Convert-ToPortablePath {
     param([string]$Value)
@@ -391,6 +462,15 @@ if (-not (Test-Path -LiteralPath $Path)) {
 }
 
 $item = Get-Item -LiteralPath $Path
+$packageNameForMode = if ($item.PSIsContainer) {
+    $item.Name
+}
+else {
+    [System.IO.Path]::GetFileNameWithoutExtension($item.Name)
+}
+$isOnlinePackage = $Online.IsPresent -or $packageNameForMode.StartsWith("LOOM-Online-", [System.StringComparison]::OrdinalIgnoreCase)
+$requiredFiles = if ($isOnlinePackage) { $onlineRequiredFiles } else { $offlineRequiredFiles }
+$allowedTopLevelEntries = if ($isOnlinePackage) { $onlineAllowedTopLevelEntries } else { $offlineAllowedTopLevelEntries }
 $errors = New-Object System.Collections.Generic.List[string]
 $warnings = New-Object System.Collections.Generic.List[string]
 $allPaths = @()
@@ -627,27 +707,39 @@ if ($null -ne $script:PackageJsonVersion -and $null -ne $script:RuntimeContextLa
 }
 
 if ($null -ne $script:LauncherRuntimePackageName) {
-    $packageName = if ($item.PSIsContainer) {
-        $item.Name
-    }
-    else {
-        [System.IO.Path]::GetFileNameWithoutExtension($item.Name)
-    }
-    if ($script:LauncherRuntimePackageName -ne $packageName) {
-        $errors.Add("launcher_runtime.json packageName mismatch: launcher_runtime.json=$($script:LauncherRuntimePackageName), archive=$packageName")
-    }
-    if ($packageName -match '^LOOM-Portable-v(?<version>\d+(?:\.\d+){1,3})-') {
-        $packageNameVersion = [string]$Matches.version
-        if ($script:PackageJsonVersion -and $packageNameVersion -ne $script:PackageJsonVersion) {
-            $errors.Add("Package name version mismatch: packageName=$packageName, package.json=$($script:PackageJsonVersion)")
+    $packageName = $packageNameForMode
+    if ($isOnlinePackage) {
+        if ($script:LauncherRuntimePackageName -ne $packageName) {
+            $errors.Add("launcher_runtime.json packageName mismatch: launcher_runtime.json=$($script:LauncherRuntimePackageName), archive=$packageName")
+        }
+        if ($packageName -match '^LOOM-Online-v(?<version>\d+(?:\.\d+){1,3})-') {
+            $packageNameVersion = [string]$Matches.version
+            if ($script:PackageJsonVersion -and $packageNameVersion -ne $script:PackageJsonVersion) {
+                $errors.Add("Package name version mismatch: packageName=$packageName, package.json=$($script:PackageJsonVersion)")
+            }
+        }
+        else {
+            $errors.Add("Online package name must encode version: $packageName")
         }
     }
     else {
-        $errors.Add("Portable package name must encode version: $packageName")
+        if ($script:LauncherRuntimePackageName -ne $packageName) {
+            $errors.Add("launcher_runtime.json packageName mismatch: launcher_runtime.json=$($script:LauncherRuntimePackageName), archive=$packageName")
+        }
+        if ($packageName -match '^LOOM-Portable-v(?<version>\d+(?:\.\d+){1,3})-') {
+            $packageNameVersion = [string]$Matches.version
+            if ($script:PackageJsonVersion -and $packageNameVersion -ne $script:PackageJsonVersion) {
+                $errors.Add("Package name version mismatch: packageName=$packageName, package.json=$($script:PackageJsonVersion)")
+            }
+        }
+        else {
+            $errors.Add("Portable package name must encode version: $packageName")
+        }
     }
 }
 
 Write-Host "Release verification target: $($item.FullName)"
+Write-Host "Release verification mode: $(if ($isOnlinePackage) { 'online' } else { 'portable' })"
 Write-Host "Checked paths: $($allPaths.Count)"
 Write-Host "Payload paths: $($payloadPaths.Count)"
 

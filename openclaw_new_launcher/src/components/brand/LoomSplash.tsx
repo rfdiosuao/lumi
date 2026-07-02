@@ -4,7 +4,7 @@ import { LumingWordmarkImage } from './LoomBrand';
 const MIN_SPLASH_DURATION_MS = 4400;
 const MAX_SPLASH_DURATION_MS = 10000;
 const MOTION_READY_EVENT = 'loom-motion-ready';
-const MOTION_READY_NONCE = 'loom-motion-20260629';
+const MOTION_READY_NONCE = 'loom-motion-20260630-v1';
 
 export const LoomSplash: React.FC = () => {
   const [motionReady, setMotionReady] = React.useState(false);
@@ -26,7 +26,7 @@ export const LoomSplash: React.FC = () => {
       if (
         event.source === iframeRef.current?.contentWindow &&
         event.data?.type === MOTION_READY_EVENT &&
-        event.data?.source === 'loom-motion-single' &&
+        event.data?.source === 'loom-motion-vector-v1' &&
         event.data?.nonce === MOTION_READY_NONCE
       ) {
         setMotionReady(true);
@@ -60,7 +60,7 @@ export const LoomSplash: React.FC = () => {
             <iframe
               ref={iframeRef}
               title="LOOM 麓鸣启动动画"
-              src={`/loom-motion/logo_motion_single.html?embed=1&loop=1&motion=calm&v=20260629&nonce=${MOTION_READY_NONCE}`}
+              src={`/loom-motion/logo_motion_vector-v1.html?embed=1&loop=1&motion=calm&v=20260630-v1&nonce=${MOTION_READY_NONCE}`}
               className="h-full w-full border-0"
               sandbox="allow-scripts"
               loading="eager"

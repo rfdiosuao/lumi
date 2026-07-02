@@ -10,12 +10,12 @@ import {
   type ComponentSummary,
 } from '../../services/api';
 import { AgentLogo } from '../agents/AgentLogo';
+import { APP_VERSION } from '../../version';
 
-const PACKAGE_VERSION = '2.1.24';
 const REQUIRED_AGENT_IDS = ['codex-desktop', 'claude-code', 'opencode', 'openclaw-companion', 'hermes'];
 
 const FALLBACK_AGENTS: Record<string, { name: string; description: string }> = {
-  'codex-desktop': { name: 'Codex', description: 'OpenAI 编程智能体' },
+  'codex-desktop': { name: 'Codex 桌面端', description: 'OpenAI Codex 桌面应用' },
   'claude-code': { name: 'Claude Code', description: 'Anthropic 命令行编程智能体' },
   opencode: { name: 'opencode', description: '终端优先的 AI 编程工具' },
   'openclaw-companion': { name: 'OpenClaw 兼容运行时', description: 'OpenClaw 协议兼容组件' },
@@ -120,7 +120,6 @@ export const DashboardPage: React.FC = () => {
   const accountReady = Boolean(account?.loggedIn || isAuthorized);
   const modelsReady = modelCount(account) > 0 || Boolean(licenseInfo?.gatewayBaseUrl);
   const agentsReady = agents.length > 0 && readyAgents === agents.length;
-  const activeStep = !accountReady ? 1 : !agentsReady ? 2 : 3;
   const overall = refreshError
     ? '状态异常'
     : !accountReady
@@ -146,7 +145,7 @@ export const DashboardPage: React.FC = () => {
             <div className="text-[11px] font-bold uppercase tracking-[0.42em] text-accent">LOOM</div>
             <h1 className="mt-2 text-[32px] font-black leading-tight text-text">总览</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-text-muted">
-              查看模型账号、智能体安装、手机演示和本地运行状态。
+              先安装智能体，再连接手机。其他能力暂时收在高级入口里。
             </p>
           </div>
           <div className="flex flex-col items-end gap-3">
@@ -157,7 +156,7 @@ export const DashboardPage: React.FC = () => {
               disabled={loading}
               className="min-w-[140px] rounded-[14px] border border-border/80 bg-surface-alt/50 px-5 py-2.5 text-sm font-black text-text transition hover:border-accent/60 hover:text-accent disabled:cursor-not-allowed disabled:opacity-55"
             >
-              {!accountReady ? '登录模型账号' : !agentsReady ? '打开安装' : '打开手机'}
+              {!accountReady ? '登录模型账号' : !agentsReady ? '安装智能体' : '连接手机'}
             </button>
           </div>
         </div>
@@ -175,71 +174,56 @@ export const DashboardPage: React.FC = () => {
           </div>
         ) : null}
 
-        <section className="mb-7 grid grid-cols-4 gap-3">
-          <StepCard
-            index={1}
-            title="模型账号"
-            detail={accountReady ? (account?.account || licenseInfo?.licensee || '已接入') : '支持访客浏览'}
-            active={activeStep === 1}
-            done={accountReady}
-            onClick={() => setCurrentPage('license')}
-          />
-          <StepCard
-            index={2}
-            title="安装"
-            detail={`${readyAgents}/${agents.length} 已就绪`}
-            active={activeStep === 2}
-            done={agentsReady}
-            danger={failedAgents > 0}
+        <section className="grid gap-5 xl:grid-cols-2">
+          <PathCard
+            eyebrow="第一步"
+            title="安装智能体"
+            detail="一键安装、更新和启动 Codex / Claude Code / opencode / OpenClaw / Hermes。"
+            state={failedAgents ? '需要处理' : agentsReady ? '全部就绪' : `${readyAgents}/${agents.length} 已就绪`}
+            primaryLabel={agentsReady ? '查看安装状态' : '开始安装'}
+            tone={failedAgents ? 'danger' : agentsReady ? 'ok' : 'warn'}
             onClick={() => setCurrentPage('agents')}
           />
-          <StepCard
-            index={3}
-            title="手机"
-            detail="连接 / 截图 / 读取"
-            active={activeStep === 3}
-            done={false}
+          <PathCard
+            eyebrow="第二步"
+            title="连接手机"
+            detail="保存手机 IP 和令牌后，可以截图、读取屏幕，并执行一个简单任务。"
+            state={agentsReady ? '可连接' : '建议先安装智能体'}
+            primaryLabel="打开手机控制"
+            tone={agentsReady ? 'ok' : 'warn'}
             onClick={() => setCurrentPage('phone')}
           />
-          <StepCard
-            index={4}
-            title="其他"
-            detail="暂未开放"
-            active={false}
-            done={false}
-            onClick={() => setCurrentPage('capabilities')}
-          />
         </section>
 
-        <section className="mb-7 grid grid-cols-4 gap-3">
-          <StatusTile label="中转站" value={accountReady ? '已接入' : '未登录'} hint={account?.account || licenseInfo?.licensee || '访客模式'} tone={accountReady ? 'ok' : 'warn'} />
+        <section className="mt-7 grid gap-3 md:grid-cols-4">
+          <StatusTile label="模型账号" value={accountReady ? '已登录' : '访客'} hint={account?.account || licenseInfo?.licensee || '可稍后登录'} tone={accountReady ? 'ok' : 'warn'} />
           <StatusTile label="模型" value={modelsReady ? '已同步' : '未同步'} hint={account?.models?.text?.[0] || licenseInfo?.gatewayDefaultModel || '登录后同步'} tone={modelsReady ? 'ok' : 'warn'} />
-          <StatusTile label="智能体" value={`${readyAgents}/${agents.length}`} hint={components?.manifest?.version || '组件清单'} tone={failedAgents ? 'danger' : agentsReady ? 'ok' : 'warn'} />
-          <StatusTile label="核心服务" value={serviceRunning ? '运行中' : serviceStatus === 'starting' ? '启动中' : '未启动'} hint="本地能力内核" tone={serviceRunning ? 'ok' : 'warn'} />
+          <StatusTile label="智能体" value={`${readyAgents}/${agents.length}`} hint={failedAgents ? '有失败项' : agentsReady ? '可启动' : '待安装'} tone={failedAgents ? 'danger' : agentsReady ? 'ok' : 'warn'} />
+          <StatusTile label="本地服务" value={serviceRunning ? '运行中' : serviceStatus === 'starting' ? '启动中' : '待启动'} hint={`LOOM ${APP_VERSION}`} tone={serviceRunning ? 'ok' : 'warn'} />
         </section>
 
-        <section className="grid grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-5">
-          <div className="rounded-[18px] border border-border/80 bg-surface-alt/30 p-5">
-            <div className="mb-4 flex items-center justify-between gap-4">
+        <section className="mt-7 grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="border-t border-border/70 bg-surface/40 pt-5">
+            <div className="mb-3 flex items-center justify-between gap-4">
               <div>
-                <div className="text-[10px] font-bold tracking-[0.24em] text-text-subtle">智能体</div>
-                <h2 className="mt-1 text-lg font-black text-text">安装状态</h2>
+                <div className="text-[10px] font-bold tracking-[0.24em] text-text-subtle">安装状态</div>
+                <h2 className="mt-1 text-lg font-black text-text">五个智能体</h2>
               </div>
               <button
                 type="button"
                 onClick={() => setCurrentPage('agents')}
                 className="rounded-[13px] border border-border/80 bg-surface-alt/50 px-3 py-2 text-xs font-bold text-text transition hover:border-accent/60 hover:text-accent"
               >
-                智能体
+                去安装
               </button>
             </div>
-            <div className="space-y-2">
+            <div className="grid gap-2 md:grid-cols-2">
               {agents.map((agent) => (
                 <button
                   key={agent.id}
                   type="button"
                   onClick={() => setCurrentPage('agents')}
-                  className="flex w-full items-center justify-between gap-4 rounded-[14px] border border-border/70 bg-surface/25 px-4 py-3 text-left transition hover:border-border-strong hover:bg-surface-alt/50"
+                  className="flex w-full items-center justify-between gap-4 border-t border-border/60 py-3 text-left transition hover:border-border-strong"
                 >
                   <div className="flex min-w-0 items-center gap-3">
                     <AgentLogo id={agent.id} />
@@ -262,46 +246,13 @@ export const DashboardPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="rounded-[18px] border border-border/80 bg-surface-alt/30 p-5">
-            <div className="text-[10px] font-bold tracking-[0.24em] text-text-subtle">启动器</div>
-            <h2 className="mt-1 text-lg font-black text-text">运行摘要</h2>
-            <div className="mt-5 space-y-3">
-              <SummaryRow label="核心服务" value={serviceRunning || serviceStatus === 'starting' ? (serviceRunning ? '运行中' : '启动中') : '未启动'} />
-              <SummaryRow label="模型数量" value={`${modelCount(account)} 个`} />
-              <SummaryRow label="组件清单" value={components?.manifest?.version || '未读取'} />
-              <SummaryRow label="演示入口" value="安装 / 手机 / 模型账号" />
-              <SummaryRow label="暂未开放" value="生图 / 生视频 / 桌面 RPA / CLI" />
-              <SummaryRow label="包版本" value={PACKAGE_VERSION} />
-            </div>
-            <div className="mt-5 flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() => void refresh()}
-                className="rounded-[13px] border border-border/80 bg-surface-alt/50 px-3 py-2 text-xs font-bold text-text transition hover:border-accent/60 hover:text-accent"
-              >
-                刷新
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentPage('phone')}
-                className="rounded-[13px] border border-border/80 bg-surface-alt/50 px-3 py-2 text-xs font-bold text-text transition hover:border-accent/60 hover:text-accent"
-              >
-                手机
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentPage('capabilities')}
-                className="rounded-[13px] border border-border/80 bg-surface-alt/50 px-3 py-2 text-xs font-bold text-text transition hover:border-accent/60 hover:text-accent"
-              >
-                其他
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentPage('diagnostics')}
-                className="rounded-[13px] border border-border/70 bg-surface/30 px-3 py-2 text-xs font-bold text-text-muted transition hover:border-border-strong hover:text-text"
-              >
-                高级诊断
-              </button>
+          <div className="border-t border-border/70 pt-5">
+            <div className="text-[10px] font-bold tracking-[0.24em] text-text-subtle">高级</div>
+            <h2 className="mt-1 text-lg font-black text-text">更多入口</h2>
+            <div className="mt-4 grid gap-2">
+              <SmallAction label="模型账号" onClick={() => setCurrentPage('license')} />
+              <SmallAction label="其他能力" onClick={() => setCurrentPage('capabilities')} />
+              <SmallAction label="高级诊断" onClick={() => setCurrentPage('diagnostics')} muted />
             </div>
           </div>
         </section>
@@ -310,38 +261,54 @@ export const DashboardPage: React.FC = () => {
   );
 };
 
-const StepCard: React.FC<{
-  index: number;
+const PathCard: React.FC<{
+  eyebrow: string;
   title: string;
   detail: string;
-  done: boolean;
-  active: boolean;
-  danger?: boolean;
-  disabled?: boolean;
+  state: string;
+  primaryLabel: string;
+  tone: 'ok' | 'warn' | 'danger';
   onClick: () => void;
-}> = ({ index, title, detail, done, active, danger, disabled = false, onClick }) => (
+}> = ({ eyebrow, title, detail, state, primaryLabel, tone, onClick }) => (
   <button
     type="button"
     onClick={onClick}
-    disabled={disabled}
-    className={`min-h-[128px] rounded-[18px] border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
-      danger
-        ? 'border-status-danger/40 bg-status-danger/10'
-        : done
-          ? 'border-status-success/35 bg-status-success/10'
-          : active
-            ? 'border-accent/55 bg-accent/[0.07]'
-            : 'border-border/80 bg-surface-alt/30 hover:border-border-strong hover:bg-surface-alt/50'
+    className={`min-h-[220px] rounded-[20px] border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-[0_18px_48px_rgba(5,35,29,0.12)] ${
+      tone === 'danger'
+        ? 'border-status-danger/35 bg-status-danger/8'
+        : tone === 'ok'
+          ? 'border-[#0B4A3E]/24 bg-[#0B4A3E]/8'
+          : 'border-border/80 bg-surface-alt/45 hover:border-[#0B4A3E]/30'
     }`}
   >
     <div className="flex items-center justify-between gap-3">
-      <span className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-border/80 bg-surface text-xs font-black text-accent">
-        {done ? '✓' : index}
-      </span>
-      <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-text-subtle">{active ? '当前' : done ? '完成' : '待处理'}</span>
+      <span className="text-[11px] font-black tracking-[0.28em] text-text-subtle">{eyebrow}</span>
+      <span className={`rounded-full border px-3 py-1 text-xs font-black ${
+        tone === 'danger'
+          ? 'border-status-danger/35 bg-status-danger/10 text-status-danger'
+          : tone === 'ok'
+            ? 'border-status-success/30 bg-status-success/10 text-status-success'
+            : 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+      }`}>{state}</span>
     </div>
-    <div className="mt-4 text-base font-black text-text">{title}</div>
-    <div className="mt-1 text-xs leading-5 text-text-muted">{detail}</div>
+    <div className="mt-8 text-[30px] font-black leading-tight text-text">{title}</div>
+    <div className="mt-3 max-w-[460px] text-sm leading-6 text-text-muted">{detail}</div>
+    <div className="mt-7 inline-flex rounded-[14px] border border-[#0B4A3E]/35 bg-[#0B4A3E] px-5 py-2.5 text-sm font-black text-[#F5FFF9]">
+      {primaryLabel}
+    </div>
+  </button>
+);
+
+const SmallAction: React.FC<{ label: string; muted?: boolean; onClick: () => void }> = ({ label, muted, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`flex items-center justify-between border-t border-border/60 py-3 text-left text-sm font-bold transition hover:border-border-strong ${
+      muted ? 'text-text-muted hover:text-text' : 'text-text'
+    }`}
+  >
+    <span>{label}</span>
+    <span className="text-text-subtle">→</span>
   </button>
 );
 
@@ -350,12 +317,5 @@ const StatusTile: React.FC<{ label: string; value: string; hint: string; tone: '
     <div className="text-xs text-text-subtle">{label}</div>
     <div className={`mt-2 text-xl font-black ${tone === 'ok' ? 'text-status-success' : tone === 'danger' ? 'text-status-danger' : 'text-status-warning'}`}>{value}</div>
     <div className="mt-1 truncate text-xs text-text-muted" title={hint}>{hint}</div>
-  </div>
-);
-
-const SummaryRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="flex items-center justify-between gap-4 border-b border-border/50 pb-3 last:border-b-0">
-    <span className="text-sm text-text-muted">{label}</span>
-    <span className="truncate text-sm font-bold text-text" title={value}>{value}</span>
   </div>
 );

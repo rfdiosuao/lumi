@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import sys
+sys.dont_write_bytecode = True
+
 import base64
 import json
 import os
 import re
 import secrets
 import socket
-import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
@@ -228,8 +231,6 @@ def _text_model_ids(raw_models: list, default_model: str = "") -> list[str]:
         model_ids = [default_model] + [model_id for model_id in model_ids if model_id != default_model]
     if DEFAULT_OPENCLAW_TEXT_MODEL in model_ids:
         model_ids = [DEFAULT_OPENCLAW_TEXT_MODEL] + [model_id for model_id in model_ids if model_id != DEFAULT_OPENCLAW_TEXT_MODEL]
-    elif not model_ids:
-        model_ids = [DEFAULT_OPENCLAW_TEXT_MODEL]
     return model_ids
 
 
@@ -333,9 +334,6 @@ def _sync_openclaw_models_from_api_profiles() -> None:
 
     raw_models = provider.get("models") if isinstance(provider.get("models"), list) else []
     model_ids = _text_model_ids(raw_models, str(provider.get("defaultModel") or "").strip())
-    for default_model in (DEFAULT_OPENCLAW_TEXT_MODEL, "claude-opus-4-7-medium", "kimi-k2.5", "gpt-4o"):
-        if default_model not in model_ids:
-            model_ids.append(default_model)
     if not model_ids:
         return
 
@@ -604,14 +602,6 @@ def _read_sanitized_json(path: str, default: object = None) -> object:
     return _sanitize_payload(read_json(path, default))
 
 
-def _reset_transient_video_config() -> None:
-    if os.path.exists(paths.video_config):
-        write_json(paths.video_config, {})
-
-
-_reset_transient_video_config()
-
-
 class Handler(BaseHTTPRequestHandler):
     """Compatibility service used only when FastAPI is unavailable."""
 
@@ -659,6 +649,46 @@ def find_port(start: int = 18791, end: int = 18950) -> int:
         except OSError:
             pass
     return 0
+
+
+def _bridge_session_path() -> str:
+    explicit = os.environ.get("LOOM_BRIDGE_SESSION_FILE", "").strip()
+    if explicit:
+        return explicit
+    base_dir = os.environ.get("LOOM_BRIDGE_SESSION_DIR", "").strip()
+    if not base_dir:
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            base_dir = os.path.join(local_app_data, "LOOM")
+        elif sys.platform == "darwin":
+            base_dir = os.path.expanduser("~/Library/Application Support/LOOM")
+        else:
+            base_dir = os.path.expanduser("~/.local/share/loom")
+    return os.path.join(base_dir, "bridge-session.json")
+
+
+def _write_bridge_session(port: int, token: str, impl: str) -> None:
+    if not port or not token:
+        return
+    try:
+        path = _bridge_session_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {
+            "schema": "loom.bridge_session.v1",
+            "url": f"http://127.0.0.1:{port}",
+            "port": port,
+            "token": token,
+            "pid": os.getpid(),
+            "impl": impl,
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.write("\n")
+        os.replace(tmp, path)
+    except Exception as exc:
+        append_log(f"[Bridge] Failed to write session file: {exc}\n")
 
 
 def _legacy_headers() -> dict[str, str]:
@@ -808,6 +838,7 @@ def _serve_fastapi(port: int, token: str) -> None:
     print(f"BRIDGE_PORT={port}", flush=True)
     print(f"BRIDGE_TOKEN={token}", flush=True)
     print("BRIDGE_IMPL=fastapi", flush=True)
+    _write_bridge_session(port, token, "fastapi")
     append_log(f"[Bridge] Started on port {port} (fastapi)\n")
 
     config = uvicorn.Config(
@@ -827,6 +858,7 @@ def _serve_dependency_error(port: int, token: str) -> None:
     print(f"BRIDGE_PORT={actual_port}", flush=True)
     print(f"BRIDGE_TOKEN={token}", flush=True)
     print("BRIDGE_IMPL=dependency-error", flush=True)
+    _write_bridge_session(actual_port, token, "dependency-error")
     append_log(f"[Bridge] Started dependency error service on port {actual_port}\n")
     server.serve_forever()
 

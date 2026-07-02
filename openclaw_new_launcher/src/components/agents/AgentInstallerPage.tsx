@@ -1,17 +1,17 @@
 import React from 'react';
-import {
-  componentApi,
-  diagnosticsApi,
-  jobApi,
-  parseErrorText,
-  type BridgeJob,
-  type ComponentSnapshot,
-  type ComponentSummary,
-  type DiagnosticCheck,
-  type DiagnosticReport,
-  type DiagnosticStatus,
-} from '../../services/api';
-import { BusyOverlay, Button, showConfirm, showToast } from '../common';
+import { loomClient } from '../../services/loomClient';
+import { loomErrorText } from '../../services/loomErrors';
+import type {
+  AgentModelConfigStatus,
+  BridgeJob,
+  ComponentSnapshot,
+  ComponentSummary,
+  DiagnosticCheck,
+  DiagnosticReport,
+  DiagnosticStatus,
+} from '../../services/loomContracts';
+import { loadCachedPreflight, preflightCacheUsable, saveCachedPreflight } from '../../services/startupCache';
+import { BusyOverlay, Button, Input, Select, showConfirm, showToast } from '../common';
 import { AgentLogo } from './AgentLogo';
 
 const PINNED_COMPONENT_IDS = [
@@ -23,7 +23,7 @@ const PINNED_COMPONENT_IDS = [
 ];
 
 const FALLBACK_COMPONENTS: Record<string, { name: string; description: string; category: string }> = {
-  'codex-desktop': { name: 'Codex', description: 'OpenAI 编程智能体', category: 'agent' },
+  'codex-desktop': { name: 'Codex 桌面端', description: 'OpenAI Codex 桌面应用', category: 'agent' },
   'claude-code': { name: 'Claude Code', description: 'Anthropic 命令行编程智能体', category: 'agent' },
   opencode: { name: 'opencode', description: '终端优先的 AI 编程工具', category: 'agent' },
   'openclaw-companion': { name: 'OpenClaw', description: '多智能体编程工作台', category: 'agent' },
@@ -31,6 +31,9 @@ const FALLBACK_COMPONENTS: Record<string, { name: string; description: string; c
 };
 
 const PREREQ_IDS = ['python_runtime', 'node', 'npm', 'git', 'git_bash', 'uv', 'webview2', 'data_dir'];
+const MODEL_CONFIG_COMPONENT_IDS = new Set(['codex-desktop', 'claude-code', 'openclaw-companion']);
+const INSTALL_LOG_VISIBLE_LIMIT = 6;
+const OPENCLAW_WEB_URL = 'http://127.0.0.1:18790';
 
 type InstallLogEntry = {
   id: string;
@@ -156,6 +159,14 @@ function prerequisiteSummary(checks: DiagnosticCheck[]): { ready: number; total:
   };
 }
 
+function prerequisiteNeedsRepair(report: DiagnosticReport | null): boolean {
+  return prerequisiteChecks(report).some((check) => check.status === 'fail' || (check.status === 'warn' && Boolean(check.repairable)));
+}
+
+function blockingPrerequisiteIssues(report: DiagnosticReport | null): DiagnosticCheck[] {
+  return prerequisiteChecks(report).filter((check) => check.status === 'fail');
+}
+
 function isWorking(status: string): boolean {
   return ['resolving_manifest', 'downloading', 'verifying', 'extracting', 'configuring', 'health_checking', 'starting', 'uninstalling'].includes(status);
 }
@@ -167,6 +178,19 @@ function isFailedStatus(status: string): boolean {
 function needsInstallAfterDetect(component?: ComponentSummary): boolean {
   if (!component) return true;
   return !['ready', 'started'].includes(component.status);
+}
+
+function isComponentInstalled(component?: ComponentSummary): boolean {
+  return Boolean(component && ['ready', 'started', 'upgrade_available'].includes(component.status));
+}
+
+function isOpenClawComponent(component?: ComponentSummary): boolean {
+  return component?.id === 'openclaw-companion';
+}
+
+function componentWebUrl(component?: ComponentSummary): string {
+  if (!component) return '';
+  return component.officialUrl || (isOpenClawComponent(component) ? 'https://openclaw.ai' : '');
 }
 
 type AgentPrimaryAction = 'install' | 'upgrade' | 'start';
@@ -211,6 +235,12 @@ function jobHistoryEntries(jobs: BridgeJob[], selectedId: string): InstallLogEnt
       time: entry.updatedAt ? new Date(entry.updatedAt * 1000).toLocaleTimeString() : '-',
     }));
   });
+}
+
+function formatInstallLogEntries(entries: InstallLogEntry[]): string {
+  return entries
+    .map((entry) => `[${entry.time || '-'}] ${entry.message}`)
+    .join('\n');
 }
 
 function formatSize(size: number): string {
@@ -261,6 +291,11 @@ function componentRows(snapshot: ComponentSnapshot | null): ComponentSummary[] {
   });
   const extra = (snapshot?.components || []).filter((item) => !PINNED_COMPONENT_IDS.includes(item.id));
   return sortComponents([...rows, ...extra]);
+}
+
+function manifestInstallLocked(snapshot: ComponentSnapshot | null): boolean {
+  if (!snapshot) return false;
+  return Boolean(snapshot.installLocked || snapshot.manifestErrorCode === 'manifest_unavailable' || !snapshot.manifest);
 }
 
 const InfoTile: React.FC<{ label: string; value: string }> = ({ label, value }) => (
@@ -362,9 +397,10 @@ const CompactPrerequisitePanel: React.FC<{
   loading: boolean;
   repairing: boolean;
   error: string;
+  installLocked?: boolean;
   onRefresh: () => void;
   onRepair: () => void;
-}> = ({ report, loading, repairing, error, onRefresh, onRepair }) => {
+}> = ({ report, loading, repairing, error, installLocked = false, onRefresh, onRepair }) => {
   const checks = prerequisiteChecks(report);
   const summary = prerequisiteSummary(checks);
   const visibleChecks = (checks.length ? checks : PREREQ_IDS.map((id) => ({
@@ -388,8 +424,10 @@ const CompactPrerequisitePanel: React.FC<{
         ? '前置环境已就绪'
         : `${summary.total - summary.ready} 项待处理`;
   const subtitle = busy
-    ? repairing ? '正在安装或修复必要组件...' : '正在检测 Python、Node、npm、Git...'
-    : allReady ? '可以继续安装和启动智能体。' : '缺失项会优先处理，详情可展开查看。';
+    ? repairing ? '正在安装或修复必要环境...' : '正在检测 Python、Node、npm、Git...'
+    : installLocked
+      ? '安装清单未就绪，安装和启动暂不可用。'
+      : allReady ? '可以继续安装和启动智能体。' : '缺失项会优先处理，详情可展开查看。';
 
   return (
     <section className="px-6 py-5">
@@ -462,20 +500,167 @@ const CompactPrerequisitePanel: React.FC<{
   );
 };
 
+function supportsModelConfig(component?: ComponentSummary): boolean {
+  return Boolean(component && MODEL_CONFIG_COMPONENT_IDS.has(component.id));
+}
+
+function modelConfigLabel(status?: AgentModelConfigStatus): string {
+  if (!status) return '读取中';
+  if (status.status === 'not_installed') return '未安装';
+  if (status.status === 'no_wire') return '待同步模型';
+  if (status.status === 'configured') return '已配置';
+  if (status.status === 'failed') return '配置失败';
+  if (status.status === 'unconfigured') return '未配置';
+  return status.message || status.status || '未配置';
+}
+
+function modelConfigTone(status?: AgentModelConfigStatus): string {
+  if (!status) return 'border-border/70 bg-surface-alt/50 text-text-muted';
+  if (status.status === 'configured') return 'border-status-success/30 bg-status-success/10 text-status-success';
+  if (status.status === 'failed') return 'border-status-danger/30 bg-status-danger/10 text-status-danger';
+  if (status.status === 'not_installed' || status.status === 'no_wire') return 'border-border/70 bg-surface-alt/50 text-text-muted';
+  return 'border-[#0B4A3E]/30 bg-[#0B4A3E]/10 text-[#0B4A3E]';
+}
+
+const AgentModelConfigPanel: React.FC<{
+  component: ComponentSummary;
+  status?: AgentModelConfigStatus;
+  draftModel: string;
+  busy: boolean;
+  locked: boolean;
+  onDraftModelChange: (value: string) => void;
+  onApply: () => void;
+  onRollback: () => void;
+}> = ({ component, status, draftModel, busy, locked, onDraftModelChange, onApply, onRollback }) => {
+  const [sourceMode, setSourceMode] = React.useState<'off' | 'oneClick' | 'custom'>('custom');
+  const availableModels = status?.availableModels || [];
+  const canUseWire = Boolean(status?.installed && status.status !== 'no_wire');
+  const managedBy = status?.managedBy || '';
+  const isManagedAccount = managedBy === 'heang_account' || managedBy === 'newapi_account';
+  const hasDraftModel = Boolean(draftModel.trim());
+  const canApply = sourceMode === 'custom'
+    ? canUseWire && hasDraftModel
+    : canUseWire && availableModels.length > 0;
+  const detail = status?.message || '读取模型配置状态';
+  const oneClickLocked = locked || !canUseWire || !isManagedAccount || availableModels.length === 0;
+  const customModelPlaceholder = '输入当前账号可用文本模型';
+  const modelConfigTitle = isOpenClawComponent(component) ? 'OpenClaw 模型' : 'Codex / Claude Code 模型';
+
+  return (
+    <section data-agent-model-config className="border-t border-border/70 pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-black text-text">{modelConfigTitle}</div>
+          <div className="mt-1 text-xs text-text-subtle">{component.name} 使用 LOOM 中转站模型配置</div>
+        </div>
+        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${modelConfigTone(status)}`}>
+          {busy ? '配置中' : modelConfigLabel(status)}
+        </span>
+      </div>
+
+      <div data-agent-model-source-card className="mt-4 rounded-[16px] border border-border/70 bg-surface-alt/35 p-4">
+        <div className="text-sm font-black text-text">模型来源</div>
+        <div className="mt-1 text-xs leading-5 text-text-muted">
+          不接入额外配置时，启动时沿用该工具自带的默认设置。
+        </div>
+        <div className="mt-4 grid grid-cols-3 rounded-full border border-border/70 bg-app-bg/70 p-1">
+          <button
+            type="button"
+            onClick={() => setSourceMode('off')}
+            disabled={locked || busy}
+            className={`h-10 rounded-full text-xs font-black transition ${sourceMode === 'off' ? 'bg-surface text-text shadow-sm' : 'text-text-muted hover:text-text'}`}
+          >
+            关闭
+          </button>
+          <button
+            data-agent-one-click-config-lock
+            type="button"
+            onClick={() => {
+              setSourceMode('oneClick');
+              if (!oneClickLocked) onApply();
+            }}
+            disabled={oneClickLocked || busy}
+            title={oneClickLocked ? '登录后解锁：请先同步中转站模型' : '一键写入 LOOM 托管模型'}
+            className={`h-10 rounded-full text-xs font-black transition ${sourceMode === 'oneClick' ? 'bg-surface text-text shadow-sm' : 'text-text-muted hover:text-text'} disabled:cursor-not-allowed disabled:opacity-65`}
+          >
+            <span className="inline-flex items-center justify-center gap-2">
+              <span className="flex h-4 w-4 items-center justify-center rounded-[4px] border border-current text-[10px] leading-none">
+                {oneClickLocked ? '锁' : '开'}
+              </span>
+              一键配置
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSourceMode('custom')}
+            disabled={locked || busy}
+            className={`h-10 rounded-full text-xs font-black transition ${sourceMode === 'custom' ? 'bg-[#0B6B57] text-white shadow-[0_12px_24px_rgba(11,107,87,0.22)]' : 'text-text-muted hover:text-text'}`}
+          >
+            自定义
+          </button>
+        </div>
+        <div className="mt-3 text-xs text-text-muted">
+          {oneClickLocked ? '一键配置需登录后解锁，并同步中转站模型。' : '一键配置会写入当前中转站默认模型。'}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+        {sourceMode === 'custom' ? (
+          <Input
+            data-agent-custom-model-input
+            value={draftModel}
+            onChange={(event) => onDraftModelChange(event.target.value)}
+            disabled={locked || busy || !canUseWire}
+            placeholder={customModelPlaceholder}
+            className="w-full"
+          />
+        ) : (
+          <Select
+            value={draftModel}
+            onChange={(event) => onDraftModelChange(event.target.value)}
+            disabled={locked || busy || sourceMode === 'off' || !canUseWire || availableModels.length === 0}
+            className="w-full"
+          >
+            {(availableModels.length ? availableModels : [draftModel || status?.model]).filter(Boolean).map((model) => (
+              <option key={model} value={model}>{model}</option>
+            ))}
+          </Select>
+        )}
+        <Button variant="primary" onClick={onApply} disabled={locked || busy || !canApply || sourceMode === 'off'}>
+          {busy ? '写入中...' : '写入配置'}
+        </Button>
+        <Button variant="quiet" onClick={onRollback} disabled={locked || busy || !status?.backupAvailable}>
+          回滚配置
+        </Button>
+      </div>
+
+      <div className="mt-3 grid gap-2 text-xs text-text-muted md:grid-cols-3">
+        <div className="truncate">模型：{status?.model || draftModel || '-'}</div>
+        <div className="truncate">来源：{status?.provider || 'LOOM'}</div>
+        <div className="truncate">{detail}</div>
+      </div>
+    </section>
+  );
+};
+
 export const AgentInstallerPage: React.FC = () => {
+  const cachedPreflight = React.useRef<DiagnosticReport | null>(loadCachedPreflight());
   const [snapshot, setSnapshot] = React.useState<ComponentSnapshot | null>(null);
   const [selectedId, setSelectedId] = React.useState('');
   const [loading, setLoading] = React.useState(true);
   const [busyId, setBusyId] = React.useState('');
   const [busyAction, setBusyAction] = React.useState('');
   const [error, setError] = React.useState('');
-  const [preflight, setPreflight] = React.useState<DiagnosticReport | null>(null);
-  const [preflightLoading, setPreflightLoading] = React.useState(true);
+  const [preflight, setPreflight] = React.useState<DiagnosticReport | null>(() => cachedPreflight.current);
+  const [preflightLoading, setPreflightLoading] = React.useState(() => !cachedPreflight.current);
   const [preflightRepairing, setPreflightRepairing] = React.useState(false);
   const [preflightError, setPreflightError] = React.useState('');
   const [jobs, setJobs] = React.useState<BridgeJob[]>([]);
   const [installLog, setInstallLog] = React.useState<InstallLogEntry[]>([]);
   const [logError, setLogError] = React.useState('');
+  const [modelConfigs, setModelConfigs] = React.useState<Record<string, AgentModelConfigStatus>>({});
+  const [modelDrafts, setModelDrafts] = React.useState<Record<string, string>>({});
+  const [modelConfigBusy, setModelConfigBusy] = React.useState('');
 
   const pushLog = React.useCallback((message: string, tone = 'neutral', componentId?: string) => {
     const entry: InstallLogEntry = {
@@ -491,10 +676,10 @@ export const AgentInstallerPage: React.FC = () => {
   const refreshJobs = React.useCallback(async () => {
     setLogError('');
     try {
-      const result = await jobApi.list(20);
+      const result = await loomClient.jobs.list(20);
       setJobs(result.jobs || []);
     } catch (err: any) {
-      setLogError(parseErrorText(err) || '安装日志暂不可用');
+      setLogError(loomErrorText(err, '安装日志暂不可用'));
     }
   }, []);
 
@@ -510,23 +695,61 @@ export const AgentInstallerPage: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      setSnapshot(await componentApi.status());
+      setSnapshot(await loomClient.components.status());
     } catch (err: any) {
-      setError(parseErrorText(err) || '组件目录读取失败');
+      setError(loomErrorText(err, '安装清单读取失败'));
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const refreshPreflight = React.useCallback(async () => {
+  const refreshPreflight = React.useCallback(async (options: { preferCache?: boolean; force?: boolean } = {}) => {
+    if (options.preferCache && !options.force) {
+      const cached = loadCachedPreflight();
+      if (cached) {
+        cachedPreflight.current = cached;
+        setPreflight(cached);
+        setPreflightError('');
+        setPreflightLoading(false);
+        return;
+      }
+    }
     setPreflightLoading(true);
     setPreflightError('');
     try {
-      setPreflight(await diagnosticsApi.run());
+      const report = await loomClient.diagnostics.run();
+      setPreflight(report);
+      saveCachedPreflight(report);
     } catch (err: any) {
-      setPreflightError(parseErrorText(err) || '前置环境检测失败');
+      setPreflightError(loomErrorText(err, '前置环境检测失败'));
     } finally {
       setPreflightLoading(false);
+    }
+  }, []);
+
+  const refreshModelConfig = React.useCallback(async (componentId: string) => {
+    if (!MODEL_CONFIG_COMPONENT_IDS.has(componentId)) return;
+    try {
+      const result = await loomClient.components.modelConfigStatus(componentId);
+      const status = result.status;
+      setModelConfigs((current) => ({ ...current, [componentId]: status }));
+      setModelDrafts((current) => {
+        if (current[componentId]) return current;
+        const firstModel = status.model || status.availableModels?.[0] || '';
+        return { ...current, [componentId]: firstModel };
+      });
+    } catch (err: any) {
+      setModelConfigs((current) => ({
+        ...current,
+        [componentId]: {
+          componentId,
+          supported: true,
+          configured: false,
+          status: 'failed',
+          message: loomErrorText(err, '模型配置状态读取失败'),
+          availableModels: [],
+        },
+      }));
     }
   }, []);
 
@@ -540,8 +763,9 @@ export const AgentInstallerPage: React.FC = () => {
     setPreflightRepairing(true);
     setPreflightError('');
     try {
-      const next = await diagnosticsApi.repair({ confirmed: true });
+      const next = await loomClient.diagnostics.repair({ confirmed: true });
       setPreflight(next.diagnostics);
+      saveCachedPreflight(next.diagnostics);
       const hasFailedAction = next.actions.some((action) => action.status === 'fail');
       const hasWarnAction = next.actions.some((action) => action.status === 'warn');
       if (hasFailedAction) {
@@ -552,8 +776,35 @@ export const AgentInstallerPage: React.FC = () => {
         showToast('已执行前置环境处理，请查看检测结果', 'success');
       }
     } catch (err: any) {
-      setPreflightError(parseErrorText(err) || '前置环境修复失败');
-      showToast(parseErrorText(err) || '前置环境修复失败', 'error');
+      setPreflightError(loomErrorText(err, '前置环境修复失败'));
+      showToast(loomErrorText(err, '前置环境修复失败'), 'error');
+    } finally {
+      setPreflightRepairing(false);
+    }
+  }, []);
+
+  const repairMissingPrerequisites = React.useCallback(async (currentReport: DiagnosticReport | null): Promise<DiagnosticReport> => {
+    if (!prerequisiteNeedsRepair(currentReport)) {
+      return currentReport as DiagnosticReport;
+    }
+    if (currentReport?.repairAvailable === false) {
+      const blocking = blockingPrerequisiteIssues(currentReport);
+      const names = blocking.map((check) => check.label || check.id).join('、') || '必要环境';
+      throw new Error(`前置环境未就绪：${names}。请使用完整安装包或手动安装后重新检测。`);
+    }
+    setPreflightRepairing(true);
+    setPreflightError('');
+    try {
+      const repaired = await loomClient.diagnostics.repair({ confirmed: true });
+      const report = repaired.diagnostics;
+      setPreflight(report);
+      saveCachedPreflight(report);
+      const blocking = blockingPrerequisiteIssues(report);
+      if (blocking.length) {
+        const names = blocking.map((check) => check.label || check.id).join('、');
+        throw new Error(`前置环境仍未就绪：${names}。请查看检测详情后重试。`);
+      }
+      return report;
     } finally {
       setPreflightRepairing(false);
     }
@@ -561,7 +812,7 @@ export const AgentInstallerPage: React.FC = () => {
 
   React.useEffect(() => {
     void refresh();
-    void refreshPreflight();
+    void refreshPreflight({ preferCache: true });
     void refreshJobs();
   }, [refresh, refreshJobs, refreshPreflight]);
 
@@ -571,12 +822,18 @@ export const AgentInstallerPage: React.FC = () => {
   }, [components, selectedId]);
 
   const selected = components.find((item) => item.id === selectedId) || components[0];
+  const selectedModelConfig = selected ? modelConfigs[selected.id] : undefined;
+  const selectedModelDraft = selected ? (modelDrafts[selected.id] || selectedModelConfig?.model || selectedModelConfig?.availableModels?.[0] || '') : '';
   const readyCount = components.filter((item) => item.status === 'ready' || item.status === 'started').length;
+  const installActionsLocked = manifestInstallLocked(snapshot);
   const selectedLogEntries = React.useMemo(() => {
     const selectedComponentId = selected?.id || '';
     const localEntries = installLog.filter((entry) => !selectedComponentId || !entry.componentId || entry.componentId === selectedComponentId);
     return [...jobHistoryEntries(jobs, selectedComponentId), ...localEntries].slice(-36).reverse();
   }, [installLog, jobs, selected?.id]);
+  const visibleLogEntries = selectedLogEntries.slice(0, INSTALL_LOG_VISIBLE_LIMIT);
+  const hiddenLogEntries = selectedLogEntries.slice(INSTALL_LOG_VISIBLE_LIMIT);
+  const hiddenLogCount = hiddenLogEntries.length;
 
   React.useEffect(() => {
     if (!busyId) return undefined;
@@ -586,45 +843,61 @@ export const AgentInstallerPage: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [busyId, refreshJobs]);
 
+  React.useEffect(() => {
+    if (!selected || !supportsModelConfig(selected)) return;
+    void refreshModelConfig(selected.id);
+  }, [refreshModelConfig, selected?.id, selected?.status]);
+
   const ensurePreflightReady = async (): Promise<DiagnosticReport | null> => {
-    setPreflightLoading(true);
-    setPreflightError('');
-    let report: DiagnosticReport | null = null;
-    try {
-      report = await diagnosticsApi.run();
-      setPreflight(report);
-    } catch (err: any) {
-      const message = parseErrorText(err) || '前置环境检测失败';
-      setPreflightError(message);
-      throw new Error(message);
-    } finally {
+    const cached = loadCachedPreflight();
+    const reusablePreflight = preflightCacheUsable(preflight) ? preflight : cached;
+    let report: DiagnosticReport | null = reusablePreflight;
+    if (reusablePreflight) {
+      cachedPreflight.current = reusablePreflight;
+      setPreflight(reusablePreflight);
+      setPreflightError('');
       setPreflightLoading(false);
+    } else {
+      setPreflightLoading(true);
+      setPreflightError('');
+      try {
+        report = await loomClient.diagnostics.run();
+        setPreflight(report);
+        saveCachedPreflight(report);
+      } catch (err: any) {
+        const message = loomErrorText(err, '前置环境检测失败');
+        setPreflightError(message);
+        throw new Error(message);
+      } finally {
+        setPreflightLoading(false);
+      }
     }
 
-    const checks = prerequisiteChecks(report);
-    const needsRepair = checks.some((check) => check.status !== 'ok');
-    if (!needsRepair || report.repairAvailable === false) return report;
-
-    setPreflightRepairing(true);
-    try {
-      const repaired = await diagnosticsApi.repair({ confirmed: true });
-      setPreflight(repaired.diagnostics);
-      return repaired.diagnostics;
-    } finally {
-      setPreflightRepairing(false);
+    report = await repairMissingPrerequisites(report);
+    const blocking = blockingPrerequisiteIssues(report);
+    if (blocking.length) {
+      const names = blocking.map((check) => check.label || check.id).join('、');
+      throw new Error(`前置环境未就绪：${names}。请先点“一键补齐”或查看检测详情。`);
     }
+    return report;
   };
 
   const prepareComponent = async (
     component: ComponentSummary,
     options: { autoStart?: boolean; confirmAction?: boolean } = {},
   ) => {
+    if (installActionsLocked) {
+      const message = '安装清单未就绪，安装和启动暂不可用。请刷新后重试。';
+      pushLog(message, 'warning', component.id);
+      showToast(message, 'error');
+      return;
+    }
     const autoStart = options.autoStart ?? false;
     const shouldConfirm = options.confirmAction ?? true;
     if (shouldConfirm) {
       const ok = await showConfirm({
         title: `${component.status === 'upgrade_available' ? '升级' : '安装'} ${component.name}`,
-        message: `${component.status === 'upgrade_available' ? '升级' : '安装'}前会先检测前置环境；缺失时会尝试补齐 Git / Node.js / Python 等工具，然后下载、安装并启动组件。继续吗？`,
+        message: `${component.status === 'upgrade_available' ? '升级' : '安装'}前会先检测必要环境；缺失时会尝试补齐 Git / Node.js / Python 等工具，然后下载、安装并启动智能体。继续吗？`,
         confirmText: component.status === 'upgrade_available' ? '升级并启动' : '安装并启动',
       });
       if (!ok) return;
@@ -639,23 +912,23 @@ export const AgentInstallerPage: React.FC = () => {
 
       let next: ComponentSnapshot | null = null;
       try {
-        next = await componentApi.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
+        next = await loomClient.components.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
         setSnapshot(next);
         const detected = next.components.find((item) => item.id === component.id);
         if (needsInstallAfterDetect(detected)) {
           showToast(`${component.name} 检测到需安装或升级，开始下载并安装`, 'info');
           pushLog(`${component.name} 检测到需安装或升级，开始下载安装`, 'neutral', component.id);
-          next = await componentApi.install(component.id, { confirmed: true, onProgress: (job) => recordJobProgress(job, component.id) });
+          next = await loomClient.components.install(component.id, { confirmed: true, onProgress: (job) => recordJobProgress(job, component.id) });
           setSnapshot(next);
-          next = await componentApi.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
+          next = await loomClient.components.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
           setSnapshot(next);
         }
       } catch {
         showToast(`${component.name} 未检测到可用安装，开始下载并安装`, 'info');
         pushLog(`${component.name} 未检测到可用安装，开始下载安装`, 'neutral', component.id);
-        next = await componentApi.install(component.id, { confirmed: true, onProgress: (job) => recordJobProgress(job, component.id) });
+        next = await loomClient.components.install(component.id, { confirmed: true, onProgress: (job) => recordJobProgress(job, component.id) });
         setSnapshot(next);
-        next = await componentApi.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
+        next = await loomClient.components.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
         setSnapshot(next);
       }
 
@@ -665,7 +938,7 @@ export const AgentInstallerPage: React.FC = () => {
       }
 
       if (autoStart) {
-        const started = await componentApi.start(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
+        const started = await loomClient.components.start(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
         setSnapshot(started);
         pushLog(`${component.name} 已检测、安装并启动`, 'ok', component.id);
         showToast(`${component.name} 已检测、安装并启动`, 'success');
@@ -673,13 +946,18 @@ export const AgentInstallerPage: React.FC = () => {
         pushLog(`${component.name} 已检测并安装就绪`, 'ok', component.id);
         showToast(`${component.name} 已检测并安装就绪`, 'success');
       }
+      if (supportsModelConfig(component)) {
+        void refreshModelConfig(component.id);
+      }
     } catch (err: any) {
-      const message = parseErrorText(err) || err?.message || `${component.name} 准备失败`;
+      const message = loomErrorText(err, err?.message || `${component.name} 准备失败`);
       pushLog(message, 'danger', component.id);
       showToast(message, 'error');
       await refresh();
       try {
-        setPreflight(await diagnosticsApi.run());
+        const report = await loomClient.diagnostics.run();
+        setPreflight(report);
+        saveCachedPreflight(report);
       } catch {
         // Keep the component error visible if diagnostics cannot be refreshed.
       }
@@ -691,9 +969,13 @@ export const AgentInstallerPage: React.FC = () => {
   };
 
   const prepareAll = async () => {
+    if (installActionsLocked) {
+      showToast('安装清单未就绪，暂不能批量安装。', 'error');
+      return;
+    }
     const ok = await showConfirm({
-      title: '全部安装',
-      message: 'LOOM 会按顺序检测、下载并安装五个组件。为了避免一次打开多个终端，批量安装完成后不会批量启动进程。',
+      title: '一键安装',
+      message: 'LOOM 会按顺序检测、下载并安装五个智能体。为了避免一次打开多个窗口，批量安装完成后不会批量启动。',
       confirmText: '开始安装',
     });
     if (!ok) return;
@@ -718,12 +1000,13 @@ export const AgentInstallerPage: React.FC = () => {
     setBusyAction('rollback');
     try {
       pushLog(`开始回滚 ${component.name}`, 'warning', component.id);
-      const next = await componentApi.rollback(component.id);
+      const next = await loomClient.components.rollback(component.id);
       setSnapshot(next);
+      if (supportsModelConfig(component)) void refreshModelConfig(component.id);
       pushLog(`${component.name} 已回滚`, 'ok', component.id);
       showToast(`${component.name} 已回滚`, 'info');
     } catch (err: any) {
-      const message = parseErrorText(err) || '回滚失败';
+      const message = loomErrorText(err, '回滚失败');
       pushLog(message, 'danger', component.id);
       showToast(message, 'error');
     } finally {
@@ -736,7 +1019,7 @@ export const AgentInstallerPage: React.FC = () => {
   const uninstall = async (component: ComponentSummary) => {
     const ok = await showConfirm({
       title: `卸载 ${component.name}`,
-      message: '这会删除 LOOM 管理的组件目录；如果组件提供官方卸载命令，也会一并执行。确定继续吗？',
+      message: '这会删除 LOOM 管理的安装目录；如果智能体提供官方卸载命令，也会一并执行。确定继续吗？',
       confirmText: '一键卸载',
       tone: 'danger',
     });
@@ -745,12 +1028,13 @@ export const AgentInstallerPage: React.FC = () => {
     setBusyAction('uninstall');
     try {
       pushLog(`开始卸载 ${component.name}`, 'warning', component.id);
-      const next = await componentApi.uninstall(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
+      const next = await loomClient.components.uninstall(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
       setSnapshot(next);
+      if (supportsModelConfig(component)) void refreshModelConfig(component.id);
       pushLog(`${component.name} 已卸载`, 'ok', component.id);
       showToast(`${component.name} 已卸载`, 'info');
     } catch (err: any) {
-      const message = parseErrorText(err) || '卸载失败';
+      const message = loomErrorText(err, '卸载失败');
       pushLog(message, 'danger', component.id);
       showToast(message, 'error');
       await refresh();
@@ -762,16 +1046,23 @@ export const AgentInstallerPage: React.FC = () => {
   };
 
   const detect = async (component: ComponentSummary) => {
+    if (installActionsLocked) {
+      const message = '安装清单未就绪，暂不能检测。请先刷新清单。';
+      pushLog(message, 'warning', component.id);
+      showToast(message, 'error');
+      return;
+    }
     setBusyId(component.id);
     setBusyAction('detect');
     try {
       pushLog(`开始检测 ${component.name}`, 'neutral', component.id);
-      const next = await componentApi.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
+      const next = await loomClient.components.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
       setSnapshot(next);
+      if (supportsModelConfig(component)) void refreshModelConfig(component.id);
       pushLog(`${component.name} 检测完成`, 'ok', component.id);
       showToast(`${component.name} 检测完成`, 'success');
     } catch (err: any) {
-      const message = parseErrorText(err) || '检测失败，请先安装或重新安装';
+      const message = loomErrorText(err, '检测失败，请先安装或重新安装');
       pushLog(message, 'danger', component.id);
       showToast(message, 'error');
       await refresh();
@@ -783,16 +1074,23 @@ export const AgentInstallerPage: React.FC = () => {
   };
 
   const start = async (component: ComponentSummary) => {
+    if (installActionsLocked) {
+      const message = '安装清单未就绪，启动暂不可用。请先刷新清单。';
+      pushLog(message, 'warning', component.id);
+      showToast(message, 'error');
+      return;
+    }
     setBusyId(component.id);
     setBusyAction('start');
     try {
       pushLog(`开始启动 ${component.name}`, 'neutral', component.id);
-      const next = await componentApi.start(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
+      const next = await loomClient.components.start(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
       setSnapshot(next);
+      if (supportsModelConfig(component)) void refreshModelConfig(component.id);
       pushLog(`${component.name} 已提交启动`, 'ok', component.id);
       showToast(`${component.name} 已提交启动`, 'success');
     } catch (err: any) {
-      const message = parseErrorText(err) || '启动失败，请先检测组件状态';
+      const message = loomErrorText(err, '启动失败，请先检测安装状态');
       pushLog(message, 'danger', component.id);
       showToast(message, 'error');
       await refresh();
@@ -803,48 +1101,182 @@ export const AgentInstallerPage: React.FC = () => {
     }
   };
 
-  const activeBusyName = busyId ? components.find((item) => item.id === busyId)?.name || '' : '';
-  const busyOverlayActive = loading || Boolean(busyId) || preflightLoading || preflightRepairing;
-  const busyOverlayTitle = preflightRepairing
+  const updateModelDraft = (componentId: string, model: string) => {
+    setModelDrafts((current) => ({ ...current, [componentId]: model }));
+  };
+
+  const applyModelConfig = async (component: ComponentSummary) => {
+    const model = (modelDrafts[component.id] || modelConfigs[component.id]?.model || '').trim();
+    if (!model) {
+      showToast('请先输入或选择模型', 'info');
+      return;
+    }
+    setModelConfigBusy(component.id);
+    try {
+      const result = await loomClient.components.applyModelConfig({ componentId: component.id, model });
+      setModelConfigs((current) => ({ ...current, [component.id]: result.status }));
+      setModelDrafts((current) => ({ ...current, [component.id]: result.status.model || model }));
+      pushLog(`${component.name} 模型配置已写入`, 'ok', component.id);
+      showToast(`${component.name} 模型配置已写入`, 'success');
+    } catch (err: any) {
+      const message = loomErrorText(err, '模型配置写入失败');
+      pushLog(message, 'danger', component.id);
+      showToast(message, 'error');
+      await refreshModelConfig(component.id);
+    } finally {
+      setModelConfigBusy('');
+    }
+  };
+
+  const rollbackModelConfig = async (component: ComponentSummary) => {
+    setModelConfigBusy(component.id);
+    try {
+      const result = await loomClient.components.rollbackModelConfig(component.id);
+      setModelConfigs((current) => ({ ...current, [component.id]: result.status }));
+      pushLog(`${component.name} 模型配置已回滚`, 'ok', component.id);
+      showToast(`${component.name} 模型配置已回滚`, 'info');
+    } catch (err: any) {
+      const message = loomErrorText(err, '模型配置回滚失败');
+      pushLog(message, 'danger', component.id);
+      showToast(message, 'error');
+      await refreshModelConfig(component.id);
+    } finally {
+      setModelConfigBusy('');
+    }
+  };
+
+  const copyInstallLog = async () => {
+    const text = formatInstallLogEntries(selectedLogEntries);
+    if (!text) {
+      showToast('暂无可复制的日志', 'info');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('日志已复制', 'success');
+    } catch {
+      showToast('复制日志失败，请展开后手动选择复制', 'error');
+    }
+  };
+
+  const exportInstallLog = () => {
+    const text = formatInstallLogEntries(selectedLogEntries);
+    if (!text) {
+      showToast('暂无可导出的日志', 'info');
+      return;
+    }
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `loom-install-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showToast('日志已导出', 'success');
+  };
+
+  const openWeb = async (component: ComponentSummary) => {
+    if (isOpenClawComponent(component)) {
+      if (!['ready', 'started', 'upgrade_available'].includes(component.status)) {
+        const message = '请先安装 OpenClaw，再打开网页版';
+        pushLog(message, 'warning', component.id);
+        showToast(message, 'error');
+        return;
+      }
+      setBusyId(component.id);
+      setBusyAction('open-web');
+      try {
+        const status = await loomClient.process.status();
+        if (!status.running) {
+          if (!status.starting) {
+            await loomClient.process.start();
+          }
+          await loomClient.process.waitForReady({ timeoutMs: 180000, intervalMs: 800 });
+        }
+        window.open(OPENCLAW_WEB_URL, '_blank', 'noopener,noreferrer');
+        pushLog('OpenClaw 网页版已打开', 'ok', component.id);
+        showToast('OpenClaw 网页版已打开', 'success');
+      } catch (err: any) {
+        const detail = loomErrorText(err, '');
+        const message = detail ? `OpenClaw 网页版启动失败：${detail}` : 'OpenClaw 网页版启动失败';
+        pushLog(message, 'danger', component.id);
+        showToast(message, 'error');
+      } finally {
+        setBusyId('');
+        setBusyAction('');
+      }
+      return;
+    }
+    const url = componentWebUrl(component);
+    if (!url) {
+      showToast('暂无可打开的网页', 'info');
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const activeBusyName = busyId
+    ? components.find((item) => item.id === busyId)?.name || ''
+    : modelConfigBusy
+      ? components.find((item) => item.id === modelConfigBusy)?.name || ''
+      : '';
+  const busyOverlayActive = loading || Boolean(busyId) || preflightLoading || preflightRepairing || Boolean(modelConfigBusy);
+  const controlsLocked = busyOverlayActive;
+  const busyOverlayTitle = modelConfigBusy
+    ? '正在写入模型配置'
+    : preflightRepairing
     ? '正在修复前置环境'
     : preflightLoading
       ? '正在检测前置环境'
       : loading
         ? '正在读取安装清单'
         : busyAction === 'detect'
-          ? '正在检测组件'
-          : busyAction === 'start'
-            ? '正在启动组件'
+          ? '正在检测安装状态'
+          : busyAction === 'open-web'
+            ? '正在打开 OpenClaw 网页版'
+            : busyAction === 'start'
+              ? '正在启动智能体'
             : busyAction === 'uninstall'
-              ? '正在卸载组件'
+              ? '正在卸载智能体'
               : busyAction === 'rollback'
-                ? '正在回滚组件'
-                : '正在安装或升级组件';
+                ? '正在回滚智能体'
+                : '正在安装或升级智能体';
   const busyOverlayDetail = activeBusyName
     ? `${activeBusyName} 正在处理，请稍候。`
-    : 'LOOM 正在检查本机环境和组件状态。';
+    : 'LOOM 正在检查本机环境和安装状态。';
 
   return (
-    <div data-agent-page-scroll className="h-full overflow-y-auto bg-app-bg">
+    <div
+      data-agent-page-scroll
+      data-white-label-layout="installer"
+      data-agent-page-locked={busyOverlayActive ? 'true' : undefined}
+      aria-busy={busyOverlayActive}
+      className={`loom-white-page loom-installer-shell h-full bg-app-bg ${busyOverlayActive ? 'overflow-y-hidden' : 'overflow-y-auto'}`}
+    >
       <BusyOverlay active={busyOverlayActive} title={busyOverlayTitle} detail={busyOverlayDetail} />
       <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-6 px-8 py-7">
         <header className="flex flex-wrap items-end justify-between gap-6">
           <div>
-            <div className="text-[11px] font-bold tracking-[0.42em] text-accent">智能体</div>
-            <h1 className="mt-2 text-[38px] font-black leading-tight text-text">智能体安装器</h1>
+            <div className="text-[11px] font-bold tracking-[0.42em] text-accent">安装</div>
+            <h1 className="mt-2 text-[38px] font-black leading-tight text-text">安装智能体</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-text-muted">
+              先检查必要环境，再安装、更新或启动智能体。高级信息默认收起。
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <span className="rounded-full border border-border/70 bg-surface-alt/50 px-3 py-2 text-xs font-bold text-text">
               {readyCount}/{components.length} 已就绪
             </span>
-            <Button variant="primary" onClick={() => void prepareAll()} disabled={loading || Boolean(busyId) || !components.length}>
-              {busyAction === 'prepare' ? '安装中...' : '全部安装'}
+            <Button variant={installActionsLocked ? 'quiet' : 'primary'} onClick={() => void prepareAll()} disabled={controlsLocked || installActionsLocked || !components.length}>
+              {installActionsLocked ? '清单未就绪' : busyAction === 'prepare' ? '安装中...' : '一键安装'}
             </Button>
-            <Button variant="quiet" onClick={refresh} disabled={loading || Boolean(busyId)}>刷新</Button>
+            <Button variant="quiet" onClick={refresh} disabled={controlsLocked}>刷新</Button>
           </div>
         </header>
 
-        <section data-agent-page-shell className="border-y border-border/80 bg-surface/55">
+        <section data-agent-page-shell className="loom-panel loom-installer-stage border-y border-border/80 bg-surface/55">
           {snapshot?.warning ? (
             <div className="border-b border-border/70 px-6 py-4 text-sm text-status-warning">
               {snapshot.warning}
@@ -856,14 +1288,15 @@ export const AgentInstallerPage: React.FC = () => {
             loading={preflightLoading}
             repairing={preflightRepairing}
             error={preflightError}
-            onRefresh={() => void refreshPreflight()}
+            installLocked={installActionsLocked}
+            onRefresh={() => void refreshPreflight({ force: true })}
             onRepair={() => void repairPreflight()}
           />
 
           <section className="border-t border-border/70 px-6 py-6">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <div className="text-[10px] font-bold tracking-[0.24em] text-text-subtle">安装清单</div>
+                <div className="text-[10px] font-bold tracking-[0.24em] text-text-subtle">可安装智能体</div>
                 <h2 className="mt-1 text-2xl font-black text-text">Codex / Claude Code / opencode / OpenClaw / Hermes</h2>
               </div>
               {error ? <span className="text-sm font-bold text-status-danger">{error}</span> : null}
@@ -872,7 +1305,7 @@ export const AgentInstallerPage: React.FC = () => {
             <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
               <div>
                 {loading ? (
-                  <div className="border-t border-border/70 py-5 text-sm text-text-muted">正在读取组件目录...</div>
+                  <div className="border-t border-border/70 py-5 text-sm text-text-muted">正在读取安装清单...</div>
                 ) : (
                   <div className="border-y border-border/70 bg-surface/30">
                     {components.map((component, index) => (
@@ -880,10 +1313,11 @@ export const AgentInstallerPage: React.FC = () => {
                         type="button"
                         key={component.id}
                         onClick={() => setSelectedId(component.id)}
+                        disabled={controlsLocked}
                         className={`flex w-full items-center gap-4 border-b border-border/60 px-4 py-4 text-left transition last:border-b-0 ${
                           selected?.id === component.id
                             ? 'bg-accent/[0.07]'
-                            : 'hover:bg-surface-alt/45'
+                            : controlsLocked ? '' : 'hover:bg-surface-alt/45'
                         }`}
                       >
                         <span className="w-5 text-center text-xs font-black text-text-subtle">{index + 1}</span>
@@ -928,7 +1362,11 @@ export const AgentInstallerPage: React.FC = () => {
                       <InfoTile label="类型" value={selected.type} />
                     </div>
 
-                    {selected.errorMessage ? (
+                    {installActionsLocked ? (
+                      <div className="rounded-[16px] border border-status-warning/30 bg-status-warning/10 p-4 text-sm font-bold text-status-warning">
+                        安装清单未就绪，暂时不能安装或启动。请刷新后重试。
+                      </div>
+                    ) : selected.errorMessage ? (
                       <div className="rounded-[16px] border border-status-danger/30 bg-status-danger/10 p-4 text-sm text-status-danger">
                         {selected.errorMessage}
                       </div>
@@ -941,43 +1379,53 @@ export const AgentInstallerPage: React.FC = () => {
                       </div>
                     ) : selected.status === 'upgrade_available' ? (
                       <div className="rounded-[16px] border border-status-success/35 bg-status-success/10 p-4 text-sm font-bold text-status-success">
-                        检测到可升级版本。点击下方绿色“升级并启动”按钮即可更新到清单版本并拉起组件。
+                        检测到可升级版本。点击下方绿色“升级并启动”即可更新并启动。
                       </div>
                     ) : selected.status === 'ready' || selected.status === 'started' ? (
                       <div className="rounded-[16px] border border-status-success/30 bg-status-success/10 p-4 text-sm text-status-success">
-                        {selected.status === 'started' ? '组件已启动' : '组件可用'}
+                        {selected.status === 'started' ? '已启动' : '已安装，可启动'}
                       </div>
                     ) : selected.status === 'simulation_ready' ? (
                       <div className="rounded-[16px] border border-border/70 bg-surface-alt/50 p-4 text-sm text-text-muted">
-                        还没确认本机安装状态。可以直接点击“安装”，LOOM 会自动检测前置环境。
+                        还没确认本机安装状态。可以直接点击“安装”，LOOM 会先检测必要环境。
                       </div>
                     ) : selected.status === 'manual_install_required' ? (
                       <div className="rounded-[16px] border border-border/70 bg-surface-alt/50 p-4 text-sm text-text-muted">
-                        安装器已保存。建议点击“安装”重新接管安装流程，或完成后重新检测。
+                        已发现本机安装器。建议点击“安装”接管流程，完成后再启动。
                       </div>
                     ) : null}
 
                     <div className="flex flex-wrap gap-3">
                       <Button
-                        variant="primary"
+                        variant={installActionsLocked ? 'quiet' : 'primary'}
                         className="min-w-[132px]"
                         onClick={() => void (primaryAgentAction(selected) === 'start' ? start(selected) : install(selected))}
-                        disabled={Boolean(busyId) || isWorking(selected.status)}
+                        disabled={controlsLocked || installActionsLocked || isWorking(selected.status)}
                       >
-                        {primaryAgentButtonLabel(selected, busyId, busyAction)}
+                        {installActionsLocked ? '清单未就绪' : primaryAgentButtonLabel(selected, busyId, busyAction)}
                       </Button>
                       <Button
                         variant="quiet"
                         onClick={() => detect(selected)}
-                        disabled={Boolean(busyId) || isWorking(selected.status)}
+                        disabled={controlsLocked || installActionsLocked || isWorking(selected.status)}
                       >
-                        {busyId === selected.id && busyAction === 'detect' ? '检测中...' : '重新检测'}
+                        {installActionsLocked ? '等待清单' : busyId === selected.id && busyAction === 'detect' ? '检测中...' : '重新检测'}
                       </Button>
+                      {isOpenClawComponent(selected) ? (
+                        <Button
+                          data-agent-open-web-button
+                          variant="quiet"
+                          onClick={() => void openWeb(selected)}
+                          disabled={controlsLocked || installActionsLocked || !isComponentInstalled(selected)}
+                        >
+                          打开网页
+                        </Button>
+                      ) : null}
                       {['ready', 'started'].includes(selected.status) ? (
                         <Button
                           variant="quiet"
                           onClick={() => install(selected)}
-                          disabled={Boolean(busyId) || isWorking(selected.status)}
+                          disabled={controlsLocked || installActionsLocked || isWorking(selected.status)}
                         >
                           {busyId === selected.id && busyAction === 'prepare' ? '安装中...' : '重新安装'}
                         </Button>
@@ -987,45 +1435,77 @@ export const AgentInstallerPage: React.FC = () => {
                           data-agent-retry-button
                           variant="danger"
                           onClick={() => install(selected)}
-                          disabled={Boolean(busyId) || isWorking(selected.status)}
+                          disabled={controlsLocked || installActionsLocked || isWorking(selected.status)}
                         >
                           重试安装
                         </Button>
                       ) : null}
-                      <Button
-                        variant="quiet"
-                        onClick={() => uninstall(selected)}
-                        disabled={Boolean(busyId) || isWorking(selected.status) || selected.status === 'not_installed'}
-                      >
-                        {busyId === selected.id && busyAction === 'uninstall' ? '卸载中...' : '一键卸载'}
-                      </Button>
-                      <Button
-                        variant="quiet"
-                        onClick={() => rollback(selected)}
-                        disabled={Boolean(busyId) || !selected.previousVersion}
-                      >
-                        {busyId === selected.id && busyAction === 'rollback' ? '回滚中...' : '回滚'}
-                      </Button>
                     </div>
+
+                    {supportsModelConfig(selected) ? (
+                      <AgentModelConfigPanel
+                        component={selected}
+                        status={selectedModelConfig}
+                        draftModel={selectedModelDraft}
+                        busy={modelConfigBusy === selected.id}
+                        locked={controlsLocked}
+                        onDraftModelChange={(value) => updateModelDraft(selected.id, value)}
+                        onApply={() => void applyModelConfig(selected)}
+                        onRollback={() => void rollbackModelConfig(selected)}
+                      />
+                    ) : null}
+
+                    <section data-agent-danger-zone className="border-t border-border/70 pt-4">
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-black text-text">更多操作</div>
+                          <div className="mt-1 text-xs text-text-subtle">卸载会移除本机安装文件；回滚只在存在上一版本备份时可用。</div>
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          <Button
+                            variant="quiet"
+                            onClick={() => uninstall(selected)}
+                            disabled={controlsLocked || installActionsLocked || isWorking(selected.status) || selected.status === 'not_installed'}
+                          >
+                            {busyId === selected.id && busyAction === 'uninstall' ? '卸载中...' : `卸载 ${selected.name}`}
+                          </Button>
+                          <Button
+                            variant="quiet"
+                            onClick={() => rollback(selected)}
+                            disabled={controlsLocked || !selected.previousVersion}
+                          >
+                            {busyId === selected.id && busyAction === 'rollback' ? '回滚中...' : '回滚'}
+                          </Button>
+                        </div>
+                      </div>
+                    </section>
 
                     <section data-agent-log-panel className="border-t border-border/70 pt-4">
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <div className="text-sm font-black text-text">安装日志</div>
-                          <div className="mt-1 text-xs text-text-subtle">记录检测、下载、安装、启动、失败和重试结果</div>
+                          <div className="mt-1 text-xs text-text-subtle">默认显示最近 {INSTALL_LOG_VISIBLE_LIMIT} 条，完整历史可展开</div>
                         </div>
-                        <Button variant="quiet" onClick={() => void refreshJobs()} disabled={Boolean(busyId)}>
-                          刷新日志
-                        </Button>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button data-agent-copy-log-button variant="quiet" onClick={() => void copyInstallLog()} disabled={!selectedLogEntries.length}>
+                            复制日志
+                          </Button>
+                          <Button data-agent-export-log-button variant="quiet" onClick={exportInstallLog} disabled={!selectedLogEntries.length}>
+                            导出日志
+                          </Button>
+                          <Button variant="quiet" onClick={() => void refreshJobs()} disabled={controlsLocked}>
+                            刷新日志
+                          </Button>
+                        </div>
                       </div>
                       {logError ? (
                         <div className="mt-3 rounded-[12px] border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
                           {logError}
                         </div>
                       ) : null}
-                      <div className="mt-3 border-l border-border/80 pl-4">
+                      <div data-agent-log-compact className="mt-3 border-l border-border/80 pl-4">
                         {selectedLogEntries.length ? (
-                          selectedLogEntries.map((entry) => (
+                          visibleLogEntries.map((entry) => (
                             <div key={entry.id} className="mb-3 last:mb-0">
                               <div className="text-[11px] font-bold text-text-subtle">{entry.time}</div>
                               <div className={`mt-1 text-xs leading-5 ${toneClass(entry.tone)}`}>{entry.message}</div>
@@ -1037,10 +1517,25 @@ export const AgentInstallerPage: React.FC = () => {
                           </div>
                         )}
                       </div>
+                      {hiddenLogCount ? (
+                        <details data-agent-log-full className="mt-3 rounded-[12px] border border-border/70 bg-surface-alt/35 px-3 py-2 text-xs text-text-muted">
+                          <summary className="cursor-pointer font-bold text-text-subtle">
+                            查看完整日志（多 {hiddenLogCount} 条）
+                          </summary>
+                          <div className="mt-3 border-l border-border/70 pl-4">
+                            {hiddenLogEntries.map((entry) => (
+                              <div key={entry.id} className="mb-3 last:mb-0">
+                                <div className="text-[11px] font-bold text-text-subtle">{entry.time}</div>
+                                <div className={`mt-1 text-xs leading-5 ${toneClass(entry.tone)}`}>{entry.message}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      ) : null}
                     </section>
 
-                    <details className="border-t border-border/70 pt-4">
-                      <summary className="cursor-pointer text-sm font-bold text-text">高级信息</summary>
+                    <details data-agent-advanced-settings className="border-t border-border/70 pt-4">
+                      <summary className="cursor-pointer text-sm font-bold text-text">高级详情</summary>
                       <div className="mt-4 space-y-2 text-xs text-text-muted">
                         <div className="font-mono">id: {selected.id}</div>
                         <div className="font-mono">entry: {selected.entry || '-'}</div>
@@ -1067,7 +1562,7 @@ export const AgentInstallerPage: React.FC = () => {
                     </details>
                   </div>
                 ) : (
-                  <div className="py-10 text-sm text-text-muted">选择一个组件</div>
+                  <div className="py-10 text-sm text-text-muted">选择一个智能体</div>
                 )}
               </div>
             </div>

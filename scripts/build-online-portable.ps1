@@ -211,6 +211,30 @@ function Write-OnlineReadme {
     Set-Content -LiteralPath (Join-Path $PackageDir "README-ONLINE.txt") -Value $content -Encoding UTF8
 }
 
+function Update-LauncherRuntimePackageName {
+    param(
+        [string]$PackageDir,
+        [string]$Name
+    )
+    $runtimePath = Join-Path $PackageDir "$PrimaryPayloadDirName\data\launcher_runtime.json"
+    if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+        return
+    }
+    $runtime = Get-Content -LiteralPath $runtimePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($runtime.PSObject.Properties.Name -contains "packageName") {
+        $runtime.packageName = $Name
+    } else {
+        $runtime | Add-Member -NotePropertyName "packageName" -NotePropertyValue $Name
+    }
+    if ($runtime.PSObject.Properties.Name -contains "packageKind") {
+        $runtime.packageKind = "online"
+    } else {
+        $runtime | Add-Member -NotePropertyName "packageKind" -NotePropertyValue "online"
+    }
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($runtimePath, ($runtime | ConvertTo-Json -Depth 24), $utf8NoBom)
+}
+
 $sourceDir = Get-SourcePortableDir
 $version = Get-PackageVersion -SourceDir $sourceDir
 if ([string]::IsNullOrWhiteSpace($PackageName)) {
@@ -245,6 +269,7 @@ Invoke-Step "Create online portable directory" {
     Remove-SafePath $hashPath
     New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
     Copy-OnlineTree -SourceDir $sourceDir -TargetDir $packageDir
+    Update-LauncherRuntimePackageName -PackageDir $packageDir -Name $PackageName
     Write-CachedDistributionManifest -PackageDir $packageDir -ManifestJson $distributionManifestJson
     Write-OnlineReadme -PackageDir $packageDir
 }

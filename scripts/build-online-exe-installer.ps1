@@ -1,8 +1,13 @@
 param(
-    [string]$PackageUrl = "https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/rc/packages/LOOM-Online-v2.1.21-20260629-rc3.zip",
-    [string]$PackageSha256 = "744734BBA7542C49CF95C154D898B2B9D08596331DA8F306DAF3804D537CCB6D",
-    [string]$PackageRootName = "LOOM-Online-v2.1.21-20260629-rc3",
-    [string]$Version = "2.1.21-20260629-rc3",
+    [Parameter(Mandatory = $true)]
+    [string]$PackageUrl,
+    [string[]]$PackageFallbackUrls = @(),
+    [Parameter(Mandatory = $true)]
+    [string]$PackageSha256,
+    [Parameter(Mandatory = $true)]
+    [string]$PackageRootName,
+    [Parameter(Mandatory = $true)]
+    [string]$Version,
     [string]$OutputPath = ""
 )
 
@@ -13,7 +18,10 @@ $ArtifactsDir = Join-Path $Root "artifacts\installer"
 $ReleaseDir = Join-Path $Root "release"
 $IconPath = Join-Path $Root "openclaw_new_launcher\src-tauri\icons\icon.ico"
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $ReleaseDir "LOOM-Online-Setup-v2.1.21-20260629-rc3.exe"
+    $OutputPath = Join-Path $ReleaseDir "LOOM-Online-Setup-v$Version.exe"
+}
+if ($PackageRootName -notmatch [regex]::Escape($Version)) {
+    throw "Version must match PackageRootName. Version=$Version PackageRootName=$PackageRootName"
 }
 
 New-Item -ItemType Directory -Path $ArtifactsDir -Force | Out-Null
@@ -48,7 +56,7 @@ namespace LoomOnlineInstaller
 {
     static class Program
     {
-        public const string PackageUrl = "__PACKAGE_URL__";
+        public static readonly string[] PackageUrls = new string[] { __PACKAGE_URLS__ };
         public const string PackageSha256 = "__PACKAGE_SHA256__";
         public const string PackageRootName = "__PACKAGE_ROOT_NAME__";
         public const string Version = "__VERSION__";
@@ -72,6 +80,16 @@ namespace LoomOnlineInstaller
                 }
                 catch (Exception error)
                 {
+                    try
+                    {
+                        File.WriteAllText(
+                            Path.Combine(Path.GetTempPath(), "LOOM-online-installer-last-error.txt"),
+                            error.ToString()
+                        );
+                    }
+                    catch
+                    {
+                    }
                     Console.Error.WriteLine(InstallerCore.FriendlyError(error));
                     return 1;
                 }
@@ -516,7 +534,7 @@ namespace LoomOnlineInstaller
                 Directory.CreateDirectory(stageDir);
 
                 Status(ui, "\u6b63\u5728\u4e0b\u8f7d\u5230\u7cfb\u7edf\u4e34\u65f6\u76ee\u5f55...");
-                Download(Program.PackageUrl, zipPath, ui);
+                Download(Program.PackageUrls, zipPath, ui);
 
                 Status(ui, "\u6b63\u5728\u6821\u9a8c\u5b89\u88c5\u5305...");
                 string hash = Sha256(zipPath);
@@ -553,9 +571,44 @@ namespace LoomOnlineInstaller
             }
         }
 
-        private static void Download(string url, string target, UiProgress ui)
+        private static void Download(string[] urls, string target, UiProgress ui)
         {
-            using (WebClient client = new WebClient())
+            Exception lastError = null;
+            for (int i = 0; i < urls.Length; i++)
+            {
+                string url = urls[i];
+                try
+                {
+                    if (File.Exists(target))
+                    {
+                        File.Delete(target);
+                    }
+                    Status(ui, "\u6b63\u5728\u5c1d\u8bd5\u4e0b\u8f7d\u901a\u9053 " + (i + 1) + "/" + urls.Length + "...");
+                    DownloadOne(url, target, ui);
+                    return;
+                }
+                catch (Exception error)
+                {
+                    lastError = error;
+                }
+            }
+            throw new WebException("\u6240\u6709\u5b89\u88c5\u5305\u4e0b\u8f7d\u901a\u9053\u5747\u4e0d\u53ef\u7528\u3002", lastError);
+        }
+
+        private static void DownloadOne(string url, string target, UiProgress ui)
+        {
+            if (url.StartsWith("parts:", StringComparison.OrdinalIgnoreCase))
+            {
+                DownloadParts(url.Substring("parts:".Length), target, ui);
+                return;
+            }
+
+            if (TryCurlDownload(url, target, ui))
+            {
+                return;
+            }
+
+            using (TimeoutWebClient client = new TimeoutWebClient())
             {
                 client.DownloadProgressChanged += delegate(object sender, DownloadProgressChangedEventArgs e)
                 {
@@ -563,6 +616,105 @@ namespace LoomOnlineInstaller
                     Status(ui, "\u6b63\u5728\u4e0b\u8f7d\u5230\u7cfb\u7edf\u4e34\u65f6\u76ee\u5f55... " + e.ProgressPercentage + "%");
                 };
                 client.DownloadFileTaskAsync(new Uri(url), target).GetAwaiter().GetResult();
+            }
+        }
+
+        private static void DownloadParts(string partsSpec, string target, UiProgress ui)
+        {
+            string[] partUrls = partsSpec.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            if (partUrls.Length == 0)
+            {
+                throw new WebException("\u5206\u7247\u4e0b\u8f7d\u901a\u9053\u914d\u7f6e\u4e3a\u7a7a\u3002");
+            }
+
+            string partDir = Path.Combine(Path.GetDirectoryName(target), "parts-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(partDir);
+            try
+            {
+                string[] partPaths = new string[partUrls.Length];
+                for (int i = 0; i < partUrls.Length; i++)
+                {
+                    string partPath = Path.Combine(partDir, "package.part" + (i + 1).ToString("000"));
+                    partPaths[i] = partPath;
+                    Status(ui, "\u6b63\u5728\u4e0b\u8f7d\u5b89\u88c5\u5305\u5206\u7247 " + (i + 1) + "/" + partUrls.Length + "...");
+                    DownloadOne(partUrls[i], partPath, ui);
+                    Progress(ui, Math.Min(60, Math.Max(1, ((i + 1) * 60) / partUrls.Length)));
+                }
+
+                Status(ui, "\u6b63\u5728\u5408\u5e76\u5b89\u88c5\u5305\u5206\u7247...");
+                using (FileStream output = File.Create(target))
+                {
+                    for (int i = 0; i < partPaths.Length; i++)
+                    {
+                        using (FileStream input = File.OpenRead(partPaths[i]))
+                        {
+                            input.CopyTo(output);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(partDir, true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static bool TryCurlDownload(string url, string target, UiProgress ui)
+        {
+            try
+            {
+                Status(ui, "\u6b63\u5728\u4f7f\u7528\u7cfb\u7edf\u4e0b\u8f7d\u901a\u9053...");
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = "curl.exe";
+                startInfo.Arguments = "-fL --connect-timeout 15 --speed-limit 262144 --speed-time 30 --max-time 150 -o " + Quote(target) + " " + Quote(url);
+                startInfo.CreateNoWindow = true;
+                startInfo.UseShellExecute = false;
+                startInfo.RedirectStandardError = true;
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (process == null)
+                    {
+                        return false;
+                    }
+                    string stderr = process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+                    if (process.ExitCode == 0)
+                    {
+                        return true;
+                    }
+                    throw new WebException("\u4e0b\u8f7d\u901a\u9053\u8fc7\u6162\u6216\u4e0d\u53ef\u7528\u3002" + stderr);
+                }
+            }
+            catch (Win32Exception)
+            {
+                return false;
+            }
+        }
+
+        private static string Quote(string value)
+        {
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
+        }
+
+        private sealed class TimeoutWebClient : WebClient
+        {
+            protected override WebRequest GetWebRequest(Uri address)
+            {
+                WebRequest request = base.GetWebRequest(address);
+                request.Timeout = 20000;
+                HttpWebRequest http = request as HttpWebRequest;
+                if (http != null)
+                {
+                    http.ReadWriteTimeout = 20000;
+                    http.KeepAlive = false;
+                }
+                return request;
             }
         }
 
@@ -636,6 +788,10 @@ namespace LoomOnlineInstaller
             string backup = "";
             if (Directory.Exists(target))
             {
+                if (DirectoryContainsUserFiles(target) && !IsRecognizedLoomInstallDirectory(target))
+                {
+                    throw new InvalidOperationException("\u76ee\u6807\u76ee\u5f55\u4e0d\u662f LOOM \u5b89\u88c5\u76ee\u5f55\u3002\u8bf7\u9009\u62e9\u7a7a\u76ee\u5f55\uff0c\u6216\u9009\u62e9\u5df2\u6709 LOOM \u5b89\u88c5\u76ee\u5f55\u8fdb\u884c\u8986\u76d6\u5b89\u88c5\u3002");
+                }
                 backup = NextBackupPath(target);
                 MoveDirectorySafe(target, backup);
             }
@@ -658,11 +814,27 @@ namespace LoomOnlineInstaller
             }
             finally
             {
-                if (!string.IsNullOrEmpty(backup))
-                {
-                    TryDelete(backup);
-                }
+                // Keep the previous install backup for manual rollback instead of deleting user data permanently.
             }
+        }
+
+        private static bool DirectoryContainsUserFiles(string target)
+        {
+            try
+            {
+                return Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).GetEnumerator().MoveNext();
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool IsRecognizedLoomInstallDirectory(string target)
+        {
+            return File.Exists(Path.Combine(target, "LOOM.exe"))
+                || Directory.Exists(Path.Combine(target, "LOOMFiles"))
+                || File.Exists(Path.Combine(target, "README-ONLINE.txt"));
         }
 
         private static string NextBackupPath(string target)
@@ -787,7 +959,7 @@ namespace LoomOnlineInstaller
         {
             if (error is WebException)
             {
-                return "\u4e0b\u8f7d\u5b89\u88c5\u5305\u5931\u8d25\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u662f\u5426\u80fd\u8bbf\u95ee GitHub raw \u94fe\u63a5\u3002";
+                return "\u4e0b\u8f7d\u5b89\u88c5\u5305\u5931\u8d25\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\uff0c\u6216\u7a0d\u540e\u91cd\u8bd5\u56fd\u5185\u6e90 / GitHub \u5907\u7528\u901a\u9053\u3002";
             }
             return error.Message;
         }
@@ -825,7 +997,17 @@ namespace LoomOnlineInstaller
 }
 '@
 
-$source = $source.Replace("__PACKAGE_URL__", $PackageUrl)
+$packageUrls = @($PackageUrl) + @($PackageFallbackUrls) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
+if ($packageUrls.Count -lt 1) {
+    throw "At least one package URL is required."
+}
+$packageUrlLiteral = ($packageUrls | ForEach-Object {
+    '"' + (($_ -replace '\\', '\\') -replace '"', '\"') + '"'
+}) -join ", "
+
+$source = $source.Replace("__PACKAGE_URLS__", $packageUrlLiteral)
 $source = $source.Replace("__PACKAGE_SHA256__", $PackageSha256.ToUpperInvariant())
 $source = $source.Replace("__PACKAGE_ROOT_NAME__", $PackageRootName)
 $source = $source.Replace("__VERSION__", $Version)

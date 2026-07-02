@@ -20,6 +20,22 @@ class SettingsPageContractTests(unittest.TestCase):
         self.assertIn("handleInstallUpdate", source)
         self.assertIn("updateStatus", source)
 
+    def test_update_copy_describes_runtime_not_launcher_app_version(self) -> None:
+        with open(SETTINGS_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("智能体运行时更新", source)
+        self.assertIn("当前运行时", source)
+        self.assertIn("最新运行时", source)
+        self.assertNotIn("checkTitle: '应用更新'", source)
+
+    def test_install_update_is_locked_until_an_update_is_found(self) -> None:
+        with open(SETTINGS_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("showConfirm", source)
+        self.assertIn("disabled={Boolean(updateBusy) || updateStatus?.hasUpdate !== true}", source)
+
     def test_theme_modes_are_not_locked_to_light(self) -> None:
         with open(THEME_FILE, "r", encoding="utf-8") as handle:
             source = handle.read()
@@ -27,6 +43,15 @@ class SettingsPageContractTests(unittest.TestCase):
         self.assertIn("export type BuiltinThemeMode = 'light' | 'dark' | 'system'", source)
         self.assertIn("resolveThemeMode(mode)", source)
         self.assertIn("mode === 'dark' ? DARK_THEME : LIGHT_THEME", source)
+
+    def test_builtin_themes_use_readable_muted_text_colors(self) -> None:
+        with open(THEME_FILE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("text_subtle: '#766B5C'", source)
+        self.assertIn("text_subtle: '#A89E8B'", source)
+        self.assertNotIn("text_subtle: '#9D907D'", source)
+        self.assertNotIn("text_subtle: '#766F61'", source)
 
     def test_language_selection_is_persisted_in_app_store(self) -> None:
         with open(APP_STORE, "r", encoding="utf-8") as handle:

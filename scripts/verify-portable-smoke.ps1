@@ -61,15 +61,19 @@ function Invoke-Checked {
 }
 
 $payloadRoot = Resolve-PayloadRoot -InputPath $Path
+$packageRoot = Split-Path -Parent $payloadRoot
 Write-Host "Portable smoke target: $payloadRoot"
 
 Invoke-Checked "Required file layout" {
-    Assert-File -Root (Split-Path -Parent $payloadRoot) -RelativePath "LOOM.exe" | Out-Null
+    Assert-File -Root $packageRoot -RelativePath "LOOM.exe" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "node\node.exe" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "start.js" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "node_modules\openclaw\openclaw.mjs" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "_up_\python-runtime\python.exe" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "_up_\python\bridge.py" | Out-Null
+    Assert-File -Root $payloadRoot -RelativePath "_up_\python\loom_cli.py" | Out-Null
+    Assert-File -Root $payloadRoot -RelativePath "_up_\python\loom_mcp.py" | Out-Null
+    Assert-File -Root $packageRoot -RelativePath ".mcp.json" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "_up_\python\fastapi\__init__.py" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "_up_\python\uvicorn\__init__.py" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "scripts\openclaw-phone-agent.mjs" | Out-Null
@@ -89,21 +93,52 @@ Invoke-Checked "Required file layout" {
     )) {
         Assert-Missing -Root $payloadRoot -RelativePath $legacy
     }
+    foreach ($privateArtifact in @(
+        "data\.openclaw\launcher\phone-agent.json",
+        "data\.openclaw\launcher\phone-agents.json",
+        "data\.openclaw\launcher\desktop-agent.json",
+        "data\.openclaw\launcher\bridge-session.json",
+        "data\.openclaw\launcher\member-session.json",
+        "data\.openclaw\launcher\wire-current.json",
+        "data\.openclaw\launcher\wire-last-good.json",
+        "data\.openclaw\launcher\agent-model-configs",
+        "data\.openclaw\launcher\mcp-audit.jsonl",
+        "data\.openclaw\launcher\loom-cli-audit.jsonl",
+        "data\.openclaw\launcher\loom-task-ledger.jsonl",
+        "data\.openclaw\launcher\loom-action-trace.jsonl",
+        "data\.openclaw\launcher\loom-template-optimizer.json",
+        "data\logs\bridge-service.log",
+        "data\logs\openclaw-service.log",
+        "data\logs\openclaw-startup-snapshot.json",
+        "data\logs\loom-task-ledger.jsonl",
+        "data\logs\loom-action-trace.jsonl",
+        "data\logs\loom-template-optimizer.json"
+    )) {
+        Assert-Missing -Root $payloadRoot -RelativePath $privateArtifact
+    }
 }
 
 Invoke-Checked "Bundled Python imports" {
     $pythonExe = Assert-File -Root $payloadRoot -RelativePath "_up_\python-runtime\python.exe"
     $pythonPath = Join-Path $payloadRoot "_up_\python"
     $oldPythonPath = $env:PYTHONPATH
+    $oldDontWriteBytecode = $env:PYTHONDONTWRITEBYTECODE
     try {
         $env:PYTHONPATH = $pythonPath
-        & $pythonExe -c "import fastapi, uvicorn; import bridge; print('python smoke ok')"
+        $env:PYTHONDONTWRITEBYTECODE = "1"
+        & $pythonExe -B -c "import fastapi, uvicorn; import bridge; print('python smoke ok')"
         if ($LASTEXITCODE -ne 0) {
             throw "Bundled Python import smoke failed with exit code $LASTEXITCODE"
         }
     }
     finally {
         $env:PYTHONPATH = $oldPythonPath
+        if ($null -eq $oldDontWriteBytecode) {
+            Remove-Item Env:\PYTHONDONTWRITEBYTECODE -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:PYTHONDONTWRITEBYTECODE = $oldDontWriteBytecode
+        }
     }
 }
 

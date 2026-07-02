@@ -157,6 +157,9 @@ async function resolveConfig(args) {
     phoneUrl: firstNonEmpty(args.phoneUrl, process.env.OPENCLAW_PHONE_BASE_URL, process.env.APKCLAW_BASE_URL, runtime?.phone?.baseUrl, launcherPhone.phoneUrl),
     phoneToken: firstNonEmpty(args.phoneToken, process.env.OPENCLAW_PHONE_TOKEN, process.env.APKCLAW_TOKEN, launcherPhone.phoneToken),
     deviceId: args.deviceId || launcherPhone.id || runtime?.phone?.defaultDeviceId || '',
+    lumiLauncherId: firstNonEmpty(args.lumiLauncherId, process.env.LUMI_LAUNCHER_ID, launcherPhone.lumiLauncherId),
+    lumiLauncherSecret: firstNonEmpty(args.lumiLauncherSecret, process.env.LUMI_LAUNCHER_SECRET, launcherPhone.lumiLauncherSecret),
+    source: launcherPhone.source,
   };
 }
 
@@ -169,7 +172,7 @@ async function readRuntimeContext() {
     try {
       return JSON.parse(await fs.readFile(filePath, 'utf8'));
     } catch (error) {
-      if (error?.code !== 'ENOENT') throw new Error(`Failed to read ${filePath}: ${error.message}`);
+      if (error?.code !== 'ENOENT') return {};
     }
   }
   return {};

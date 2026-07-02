@@ -166,11 +166,71 @@ export function buildGameModeAgentPrompt(goal, plan, frame = {}) {
 
 export function minimalActionForPhone(plan) {
   const body = { ...plan };
-  body.action = String(plan.action || plan.type || '').toLowerCase();
-  if (body.action === 'longpress') body.action = 'long_press';
+  body.action = normalizePhoneActionName(plan.action || plan.type || '');
   body.visualize = plan.visualize !== false;
   body.traceId = plan.traceId || `vision_${Date.now()}`;
   return body;
+}
+
+export function compactReadSelectors(value, limit = 40) {
+  const items = Array.isArray(value) ? value : [];
+  const selectors = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || selectors.length >= limit) continue;
+    const sourceBody = item.actionBody && typeof item.actionBody === 'object' ? item.actionBody : item;
+    const actionBody = compactActionBody(sourceBody);
+    if (!actionBody) continue;
+    selectors.push({
+      nodeId: clipText(item.nodeId || item.node_id || item.id, 80),
+      label: clipText(item.label || item.text || item.description || item.contentDescription || item.resourceId, 120),
+      actionBody,
+    });
+  }
+  return selectors;
+}
+
+function compactActionBody(value) {
+  const action = normalizePhoneActionName(value?.action || value?.type || value?.name || '');
+  if (!action) return null;
+  const body = { action };
+  const text = clipText(value.text || value.targetText || value.target_text || value.label, 160);
+  if (text) body.text = text;
+  const contentDescription = clipText(
+    value.contentDescription || value.content_description || value.description || value.targetDescription || value.target_description,
+    160
+  );
+  if (contentDescription) body.contentDescription = contentDescription;
+  const resourceId = clipText(value.resourceId || value.resource_id || value.viewId || value.view_id, 200);
+  if (resourceId) body.resourceId = resourceId;
+  const nodeId = clipText(value.nodeId || value.node_id || value.id, 100);
+  if (nodeId) body.nodeId = nodeId;
+  const direction = clipText(value.direction, 24);
+  if (direction) body.direction = direction;
+  if (Number.isFinite(Number(value.timeoutMs))) body.timeoutMs = Number(value.timeoutMs);
+  if (Number.isFinite(Number(value.durationMs))) body.durationMs = Number(value.durationMs);
+  return body;
+}
+
+function clipText(value, limit) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+function normalizePhoneActionName(value) {
+  const action = String(value || '')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+  if (action === 'longpress') return 'long_press';
+  const aliases = {
+    wait_element: 'wait_element',
+    wait_for_element: 'wait_element',
+    wait_until_element: 'wait_element',
+    wait_text: 'wait_element',
+    wait_for_text: 'wait_element',
+  };
+  return aliases[action] || action;
 }
 
 function formatPlanCoordinates(plan) {
