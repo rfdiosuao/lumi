@@ -4,8 +4,8 @@ const MCP_CONFIG_PATH = '.mcp.json';
 const MCP_SERVER_PATH = '${LOOM_HOME}/python/loom_mcp.py';
 const LOOM_COMMAND_BRAIN_SKILL_PATH = '${CODEX_HOME}/skills/loom-command-brain/SKILL.md';
 const LOOM_COMMAND_BRAIN_SKILL_URLS = [
-  'https://api.heang.top/loom-release-channel/skills/loom-command-brain/SKILL.md',
   'https://gitee.com/rfdiosuao/lumi/raw/master/skills/loom-command-brain/SKILL.md',
+  'https://api.heang.top/loom-release-channel/skills/loom-command-brain/SKILL.md',
   'https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/skills/loom-command-brain/SKILL.md',
   '/skills/loom-command-brain/SKILL.md',
 ];
