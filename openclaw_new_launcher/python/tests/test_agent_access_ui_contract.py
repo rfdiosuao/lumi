@@ -13,6 +13,18 @@ class AgentAccessUiContractTests(unittest.TestCase):
         with open(page_path, "r", encoding="utf-8") as handle:
             return handle.read()
 
+    def _public_skill(self) -> str:
+        public_skill_path = os.path.join(ROOT, "public", "skills", "loom-command-brain", "SKILL.md")
+        with open(public_skill_path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
+    def _public_workflows(self) -> str:
+        public_workflows_path = os.path.join(
+            ROOT, "public", "skills", "loom-command-brain", "references", "WORKFLOWS.md"
+        )
+        with open(public_workflows_path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
     def test_agent_access_route_is_registered_but_entry_lives_inside_agents(self) -> None:
         registry_path = os.path.join(ROOT, "src", "features", "registry.ts")
         page_path = os.path.join(ROOT, "src", "features", "pages.tsx")
@@ -42,29 +54,25 @@ class AgentAccessUiContractTests(unittest.TestCase):
 
     def test_agent_access_page_exposes_cross_platform_skill_bootstrap(self) -> None:
         page = self._page()
+        public_skill_path = os.path.join(ROOT, "public", "skills", "loom-command-brain", "SKILL.md")
+        public_workflows_path = os.path.join(
+            ROOT, "public", "skills", "loom-command-brain", "references", "WORKFLOWS.md"
+        )
 
         self.assertIn("LOOM_COMMAND_BRAIN_SKILL_PATH", page)
+        self.assertIn("LOOM_COMMAND_BRAIN_WORKFLOWS_PATH", page)
         self.assertIn("LOOM_COMMAND_BRAIN_SKILL_URLS", page)
+        self.assertIn("LOOM_COMMAND_BRAIN_WORKFLOWS_URLS", page)
         self.assertIn("/skills/loom-command-brain/SKILL.md", page)
-        self.assertIn("loom-command-brain", page)
+        self.assertIn("/skills/loom-command-brain/references/WORKFLOWS.md", page)
         self.assertIn("Skill 位置", page)
         self.assertIn("CODEX_HOME", page)
         self.assertIn("LOOM_HOME", page)
         self.assertIn("%USERPROFILE%\\\\.codex", page)
         self.assertIn("$HOME/.codex", page)
         self.assertIn("/Applications/LOOM.app/Contents/Resources", page)
-        self.assertNotIn("D:\\Axiangmu\\AUSTART", page)
-
-        public_skill_path = os.path.join(ROOT, "public", "skills", "loom-command-brain", "SKILL.md")
         self.assertTrue(os.path.exists(public_skill_path))
-        with open(public_skill_path, "r", encoding="utf-8") as handle:
-            public_skill = handle.read()
-        self.assertIn("name: loom-command-brain", public_skill)
-        self.assertIn("LOOM CLI/MCP", public_skill)
-        self.assertIn("CODEX_HOME", public_skill)
-        self.assertIn("LOOM_HOME", public_skill)
-        self.assertIn("$HOME/.codex", public_skill)
-        self.assertNotIn("D:\\Axiangmu\\AUSTART", public_skill)
+        self.assertTrue(os.path.exists(public_workflows_path))
 
     def test_agent_access_page_documents_encoding_and_tool_fallback(self) -> None:
         page = self._page()
@@ -83,29 +91,52 @@ class AgentAccessUiContractTests(unittest.TestCase):
         self.assertIn("buildOneShotAgentPrompt", page)
         self.assertIn("BEGIN_SKILL_URLS", page)
         self.assertIn("END_SKILL_URLS", page)
+        self.assertIn("BEGIN_WORKFLOWS_URLS", page)
+        self.assertIn("END_WORKFLOWS_URLS", page)
         self.assertIn("BEGIN_SKILL_MD", page)
         self.assertIn("END_SKILL_MD", page)
+        self.assertIn("BEGIN_WORKFLOWS_MD", page)
+        self.assertIn("END_WORKFLOWS_MD", page)
         self.assertIn("BEGIN_MCP_JSON", page)
         self.assertIn("END_MCP_JSON", page)
         self.assertIn("自动下载 Skill", page)
-        self.assertIn("CopyOnlyBlock", page)
-        self.assertIn("data-agent-one-shot-copy", page)
         self.assertIn("提示词正文不会展示在页面上", page)
         self.assertIn("高级配置", page)
+        self.assertIn("data-agent-one-shot-copy", page)
 
-    def test_agent_access_prompt_mentions_creative_to_phone_workflow(self) -> None:
-        page = self._page()
-        public_skill_path = os.path.join(ROOT, "public", "skills", "loom-command-brain", "SKILL.md")
-        with open(public_skill_path, "r", encoding="utf-8") as handle:
-            public_skill = handle.read()
+    def test_agent_access_prompt_mentions_phone_cli_surface(self) -> None:
+        sources = [self._page(), self._public_skill(), self._public_workflows()]
 
-        for source in (page, public_skill):
-            self.assertIn("media image", source)
-            self.assertIn("media video", source)
-            self.assertIn("matrix dispatch", source)
-            self.assertIn("Image-to-video-to-phone workflow", source)
-            self.assertIn("read-only", source)
-            self.assertIn("human confirmation", source)
+        for source in sources:
+            self.assertIn("phone:agent", source)
+            self.assertIn("phone:vision", source)
+            self.assertIn("phone:video", source)
+            self.assertIn("phone:image", source)
+            self.assertIn("phone:image:edit", source)
+            self.assertIn("phone:fleet", source)
+            self.assertIn("phone:game", source)
+            self.assertIn("phone:publish", source)
+            self.assertIn("loom:phone:video", source)
+            self.assertIn("Android screen-capture consent prompt", source)
+
+    def test_agent_access_skill_text_has_no_mojibake_or_local_dev_paths(self) -> None:
+        sources = [self._page(), self._public_skill(), self._public_workflows()]
+        forbidden = [
+            "D:\\Axiangmu\\AUSTART",
+            "C:\\Users\\Administrator",
+            "瀹夎",
+            "鍥剧",
+            "榛樿",
+            "浜哄",
+            "宸插",
+            "澶嶅",
+            "鎺ュ",
+            "鐢熸垚",
+        ]
+
+        for source in sources:
+            for token in forbidden:
+                self.assertNotIn(token, source)
 
 
 if __name__ == "__main__":

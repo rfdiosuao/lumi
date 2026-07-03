@@ -3,11 +3,18 @@ import { Button, showToast } from '../common';
 const MCP_CONFIG_PATH = '.mcp.json';
 const MCP_SERVER_PATH = '${LOOM_HOME}/python/loom_mcp.py';
 const LOOM_COMMAND_BRAIN_SKILL_PATH = '${CODEX_HOME}/skills/loom-command-brain/SKILL.md';
+const LOOM_COMMAND_BRAIN_WORKFLOWS_PATH = '${CODEX_HOME}/skills/loom-command-brain/references/WORKFLOWS.md';
 const LOOM_COMMAND_BRAIN_SKILL_URLS = [
   'https://gitee.com/rfdiosuao/lumi/raw/master/skills/loom-command-brain/SKILL.md',
   'https://api.heang.top/loom-release-channel/skills/loom-command-brain/SKILL.md',
   'https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/skills/loom-command-brain/SKILL.md',
   '/skills/loom-command-brain/SKILL.md',
+];
+const LOOM_COMMAND_BRAIN_WORKFLOWS_URLS = [
+  'https://gitee.com/rfdiosuao/lumi/raw/master/skills/loom-command-brain/references/WORKFLOWS.md',
+  'https://api.heang.top/loom-release-channel/skills/loom-command-brain/references/WORKFLOWS.md',
+  'https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/skills/loom-command-brain/references/WORKFLOWS.md',
+  '/skills/loom-command-brain/references/WORKFLOWS.md',
 ];
 
 const CLI_SMOKE = 'python -B "${LOOM_HOME}/python/loom_cli.py" status --json';
@@ -32,6 +39,7 @@ Discover paths instead of assuming one computer:
 - LOOM home: LOOM_HOME env first; otherwise find loom_cli.py in the current project, then common installs: Windows %LOCALAPPDATA%\\LOOM, %ProgramFiles%\\LOOM, D:\\LOOM, C:\\LOOM; macOS /Applications/LOOM.app/Contents/Resources, ~/Applications/LOOM.app/Contents/Resources, ~/Library/Application Support/LOOM; Linux /opt/loom, ~/.local/share/LOOM.
 - Skill file: <CodexHome>/skills/loom-command-brain/SKILL.md.
 If Computer Use, Node REPL, Browser, Chrome, or desktop control is unavailable, keep working through LOOM CLI/MCP, file writes, and phone matrix direct/template/agent routes.
+For phone work, choose the narrowest surface: loom_cli.py for control-plane work, npm run phone:* helpers for APKClaw Agent, vision, recording, images, fleet, game/canvas, publishing relay, and demos.
 For creative work, use LOOM CLI/MCP: generate images with media image, generate videos with media video, then dispatch the phone/matrix step in read-only mode first. Full publishing or external posting requires explicit human confirmation.
 Generated HTML/Markdown/scripts/config must be UTF-8. HTML must include <!doctype html>, <html lang="zh-CN">, <meta charset="UTF-8">, and viewport metadata.
 Never log API keys, tokens, passwords, private keys, verification codes, or phone pairing secrets.
@@ -39,12 +47,12 @@ Phone default model is qwen3.7-plus unless LOOM returns another selected availab
 
 const LOOM_COMMAND_BRAIN_SKILL_MARKDOWN = String.raw`---
 name: loom-command-brain
-description: Use when Codex, Claude Code, or another agent needs to operate LOOM/Luming through CLI, MCP, phone matrix, creative media, or agent install controls.
+description: "Use when Codex, Claude Code, or another agent needs to operate LOOM/Luming through CLI or MCP: inspect capabilities, configure models, dispatch or monitor phone workers, read screenshots/logs, run phone templates, capture phone video, use phone vision/media/publish helpers, recover ADB/phone connection issues, or turn repeated phone work into reusable templates."
 ---
 
 # LOOM Command Brain
 
-You are the command brain for LOOM / Luming. LOOM is the local control plane. Phone workers and desktop agents are controlled through LOOM CLI/MCP, not by inventing side channels.
+Use LOOM as the local control plane. Codex is the Command Brain; LOOM is the Matrix Control Plane; each connected APKClaw phone is a Phone Worker.
 
 ## Path Discovery
 
@@ -60,59 +68,162 @@ Never assume one developer machine path.
    - Windows fallbacks: %LOCALAPPDATA%\LOOM, %ProgramFiles%\LOOM, D:\LOOM, C:\LOOM.
    - macOS fallbacks: /Applications/LOOM.app/Contents/Resources, ~/Applications/LOOM.app/Contents/Resources, ~/Library/Application Support/LOOM.
    - Linux fallbacks: /opt/loom, ~/.local/share/LOOM.
-3. If LOOM cannot be found, ask the user to open LOOM -> 智能体 -> Agent 接入, then copy the current CLI/MCP path.
+3. Resolve LOOM package root:
+   - Prefer the directory that contains package.json and python/loom_cli.py.
+   - If CLI and npm helper roots differ, ask loom_cli.py commands --json for the concrete helper path.
 
-## First Checks
+## First Move
 
-1. List capabilities before acting:
-   python -B "<LOOM_HOME>/python/loom_cli.py" commands --json
-2. Every CLI call must use --json when supported.
-3. Use dry-run or read-only status first for unfamiliar or risky actions.
+Run the capability catalog before taking action:
+
+python -B "<LOOM_HOME>/python/loom_cli.py" commands --json
+
+Prefer MCP tools when available. Prefer CLI when you need deterministic JSON, dry-runs, or local subprocess verification. Every CLI command must include --json; use --dry-run before destructive or unfamiliar actions.
 
 ## Capability Map
 
-| Need | Preferred Entry |
-|---|---|
-| App status | status, commands, models |
-| Account and model sync | account current, account sync, wire current, wire custom, wire verify, wire rollback |
-| Agent install/start/config | agents list, agents start, agents model-status, agents model-apply, agents model-rollback |
-| Phone fast path | phone status, phone screenshot, phone read, phone template-task, phone quick-task |
-| Phone repair | phone adb-doctor --permission admin |
-| Matrix control | matrix status, matrix dispatch, matrix watch, matrix retry, matrix cancel |
-| Creative media | media config, media image, media video, jobs list, jobs get |
-| Image-to-video-to-phone workflow | media image -> media video -> matrix dispatch; start read-only; publishing needs human confirmation |
-| Experience and logs | template run, experience report, logs ledger |
+- System: status, commands, models
+- Account/model wire: account current, account sync, wire current, wire custom, wire verify, wire rollback
+- Agents: agents list, agents start, agents model-status, agents model-apply, agents model-rollback
+- Single phone via loom_cli.py: phone status, phone screenshot, phone read, phone events-start, phone events-status, phone events-stop, phone template-task, phone quick-task
+- Phone npm helpers from LOOM package root: phone:agent, phone:vision, phone:video, phone:image, phone:image:edit, phone:fleet, phone:game, phone:publish, phone:relay, phone:relay:check, phone:relay:smoke, phone:demo:shopping, phone:demo:read, phone:demo:game
+- LOOM phone npm aliases: loom:phone, loom:phone:fleet, loom:phone:vision, loom:phone:video, loom:phone:publish
+- Phone recovery: phone adb-doctor with --permission admin
+- Matrix: matrix status, matrix dispatch, matrix watch, matrix retry, matrix cancel
+- Media config/generation: media config, media save-image, media save-video, media test-image, media test-video, media image, media video
+- Templates and experience: template run, experience report, logs ledger
 
 ## Operating Rules
 
-1. Execution order is Direct -> Template -> Agent.
-2. Screenshot, read-screen, status, back, Home, and connection checks should use fast/direct paths.
-3. Long-running phone jobs should be monitored through events and logs. Do not repeatedly interrupt workers.
-4. External messages, comments, batch outreach, video publishing, verification codes, account anomalies, payment, and system permission prompts require human confirmation.
-5. Creative workflow: use media image for image generation, media video for video generation, then matrix dispatch or template run for phone delivery. Start with read-only observation; only publish, comment, message, or post after human confirmation.
-6. Generated HTML, Markdown, scripts, and config files must be UTF-8. HTML must include <!doctype html>, <html lang="zh-CN">, <meta charset="UTF-8">, and viewport metadata.
-7. Never log API keys, tokens, passwords, private keys, verification codes, or phone pairing secrets.
-8. If Computer Use, Node REPL, Browser, Chrome, or desktop control is unavailable, keep working through LOOM CLI/MCP, file writes, and phone matrix direct/template/agent routes. Pause only for login, verification code, payment, 2FA, or system permission takeover.
-9. Phone model default is qwen3.7-plus, but prefer the model currently selected by LOOM when available.
+1. Use Direct -> Template -> Agent. Screenshots, status checks, Back, Home, and read-screen should not call a deep model.
+2. During a running phone task, do not repeatedly interrupt the Phone Worker. Watch events and logs instead: matrix watch, jobs get, logs ledger.
+3. For correction, inspect first: phone screenshot or phone read; then decide retry, cancel, or dispatch a narrower task.
+4. For multi-phone work, dispatch once, then supervise by events. Codex should do macro-control, not micromanage every tap.
+5. For outbound messages, comments, private messages, publishing, batch reach-out, account changes, or paid actions, require explicit user confirmation.
+6. Never print or store raw API keys, tokens, passwords, launcher secrets, or phone tokens.
+7. For npm run phone:* commands, work from LOOM package root, always add --json, and prefer saved launcher phone config. Pass --phone-url / --phone-token only for explicit debugging.
+8. Phone screen recording requires clear user intent and may show an Android screen-capture consent prompt for every phone:video start.
+9. Generated HTML, Markdown, scripts, and config files must be UTF-8. HTML files must include <!doctype html>, <html lang="zh-CN">, <meta charset="UTF-8">, and a viewport meta tag.
+10. If Computer Use, Node REPL, Browser, Chrome, or desktop automation tools are unavailable, do not stop the task. Continue through LOOM CLI/MCP, local file edits, direct phone/matrix commands, phone npm helpers, and concise manual handoff only for login, captcha, payment, 2FA, or OS permission prompts.
 
-## ADB Recovery
+## Phone CLI Surface
 
-Use this only when the phone is offline, the screen is off, APKClaw is not foreground, or USB debugging looks unstable:
+There are two phone command layers:
 
-python -B "<LOOM_HOME>/python/loom_cli.py" phone adb-doctor --json --permission admin
+- python -B "<LOOM_HOME>/python/loom_cli.py" ... --json: LOOM control-plane commands, best for status, Matrix, templates, logs, and ADB recovery.
+- npm run phone:* -- ... --json from LOOM package root: bundled OpenClaw helpers, best for APKClaw Agent, low-level vision, recording, image upload/generation, multi-device fan-out, game/canvas fallback, and publish relay work.
 
-For multiple USB devices, pass --serial <adb-serial>.
+Use the capability catalog first, then choose the narrowest layer.
 
-Result handling:
+| Need | Preferred command |
+| --- | --- |
+| Current phone health | python -B "<LOOM_HOME>/python/loom_cli.py" phone status --json |
+| One screenshot | python -B "<LOOM_HOME>/python/loom_cli.py" phone screenshot --json |
+| Read current screen | python -B "<LOOM_HOME>/python/loom_cli.py" phone read --prompt "Read the current screen." --json |
+| Run a bounded task | npm run phone:agent -- run --prompt "..." --mode safe --json |
+| Submit/watch/cancel async Agent work | npm run phone:agent -- submit/status/cancel --json |
+| Runtime speed/queue metrics | npm run phone:agent -- metrics --json |
+| Signed phone event stream | npm run phone:agent -- events-sync --json or loom_cli.py phone events-start/status/stop --json |
+| Fast screen tree or profile read | npm run phone:vision -- read --json |
+| Vision frame with grid | npm run phone:vision -- frame --out ./data/phone-frames/frame.jpg --json |
+| Explicit guarded visual action | npm run phone:vision -- action --force-action --action-body-file ./action.json --json |
+| Start/stop/download phone recording | npm run phone:video -- start/stop/download --json |
+| Generate or upload image to phone | npm run phone:image -- --prompt "..." --json or npm run phone:image -- --image ./file.png --json |
+| Edit image and upload | npm run phone:image:edit -- --reference-image ./input.png --prompt "..." --json |
+| Run one task on several APKClaw devices | npm run phone:fleet -- run --target all --prompt "..." --mode observe --concurrency 2 --json |
+| Game/canvas visual loop | npm run phone:game -- run --goal "..." --json |
+| Direct or reverse platform publish | npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --json |
+| Publish relay server/check/smoke | npm run phone:relay -- ..., npm run phone:relay:check -- ..., npm run phone:relay:smoke -- ... |
+| Demo wrappers | npm run phone:demo:shopping -- --query "..." --json; npm run phone:demo:read -- --json; npm run phone:demo:game -- --goal "..." --json |
+| LOOM aliases | npm run loom:phone -- ...; npm run loom:phone:vision -- ...; npm run loom:phone:video -- ...; npm run loom:phone:fleet -- ...; npm run loom:phone:publish -- ... |
 
-- missing_adb: install Android platform-tools or place adb.exe in LOOMFiles/platform-tools/.
-- no_device: connect USB, enable Developer Options and USB debugging.
-- multiple_devices: choose the target phone serial first; do not wake or launch a random device.
-- unauthorized: unlock the phone and approve the RSA debugging prompt.
-- offline: reconnect USB or restart the phone, then retry.
-- ready: ADB has tried to wake the device, dismiss keyguard, press Home, and launch APKClaw; then run phone status, phone screenshot, or matrix status.
+Common npm helper options: --device-id, --phone-url, --phone-token, --json. Keep raw tokens out of logs and files.
 
-ADB is a recovery rail only. Do not bypass APKClaw signatures, pairing, LAN Config, or Android permission prompts.
+## Extra Reference
+
+For full recipes and command examples, read references/WORKFLOWS.md in this skill directory. If the file is missing, continue with the Phone CLI Surface table above.
+`;
+
+const LOOM_COMMAND_BRAIN_WORKFLOWS_MARKDOWN = String.raw`# LOOM Command Brain Workflows
+
+## Common CLI Prefix
+
+python -B "<LOOM_HOME>/python/loom_cli.py"
+
+Always add --json. Use --dry-run before unfamiliar control/admin commands.
+
+For bundled phone helpers, run from the LOOM package root:
+
+cd "<LOOM_HOME>"
+
+Always add --json. Prefer saved launcher phone config; use --phone-url / --phone-token only for explicit debugging and never print raw tokens.
+
+## Phone Helper Catalog
+
+- Agent runtime: npm run phone:agent -- run/submit/status/cancel/metrics/events-sync --json
+- Vision: npm run phone:vision -- status/frame/read/action --json
+- Recording: npm run phone:video -- status/start/stop/list/download --json
+- Image transfer/generation: npm run phone:image -- --prompt "..." --json or npm run phone:image -- --image ./file.png --json
+- Image editing: npm run phone:image:edit -- --reference-image ./input.png --prompt "..." --json
+- Multi-device helper: npm run phone:fleet -- list/status/run --json
+- Game/canvas fallback: npm run phone:game -- run --goal "..." --json
+- Publishing helper: npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --json
+- Publish relay: npm run phone:relay -- ..., npm run phone:relay:check -- ..., npm run phone:relay:smoke -- ...
+- Demos: npm run phone:demo:shopping -- --query "..." --json; npm run phone:demo:read -- --json; npm run phone:demo:game -- --goal "..." --json
+- LOOM aliases: npm run loom:phone -- ...; npm run loom:phone:vision -- ...; npm run loom:phone:video -- ...; npm run loom:phone:fleet -- ...; npm run loom:phone:publish -- ...
+
+## Matrix Dispatch Recipe
+
+1. commands --json
+2. matrix status --json
+3. matrix dispatch --prompt "<task>" --device "<deviceId>" --json --permission control
+4. matrix watch --campaign "<campaignId>" --json
+5. logs ledger --limit 20 --json
+6. experience report --json
+
+If an action involves publishing, private messaging, comments, batch reach-out, or account-affecting work, require user confirmation before dispatch.
+
+## Phone Recording Recipe
+
+Use this when the user wants a proof video, failure replay, demo capture, or task review:
+
+1. Confirm the purpose of recording.
+2. npm run phone:video -- status --json
+3. npm run phone:video -- start --max-seconds 180 --filename "<name>.mp4" --json
+4. Tell the user to approve the Android screen-capture consent prompt if it appears.
+5. Run the phone task or Matrix dispatch.
+6. npm run phone:video -- stop --json
+7. npm run phone:video -- download --latest --out-dir ./data/phone-videos --json
+8. Report the local MP4 path.
+
+## Phone Vision and Game Recipe
+
+Use this when screen text is insufficient, a canvas/game has no accessibility tree, or a single visual action needs proof:
+
+1. npm run phone:vision -- status --json
+2. npm run phone:vision -- frame --out ./data/phone-frames/frame.jpg --json
+3. For read-only analysis, npm run phone:vision -- read --json
+4. For game/canvas loop, npm run phone:game -- run --goal "<safe goal>" --json
+5. For an explicit fallback action, write an action JSON file with action, gridCell, targetLabel, and reason, then run npm run phone:vision -- action --force-action --action-body-file ./action.json --json
+
+## Phone Media and Publish Recipe
+
+Use media helpers before publishing so APKClaw receives files through the signed channel:
+
+1. Generate/upload image: npm run phone:image -- --prompt "..." --json or npm run phone:image -- --image ./file.png --json
+2. Edit/upload image: npm run phone:image:edit -- --reference-image ./input.png --prompt "..." --json
+3. Publish direct: npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --image ./a.png --json
+4. Publish reverse packet: npm run phone:publish -- --transport reverse --platform douyin --packet-out ./publish-packet.json --json
+5. Publishing, comments, private messages, batch reach-out, account changes, and paid actions require explicit user confirmation.
+
+## Multi-Phone Helper Recipe
+
+Use phone:fleet when the task is the same across several configured APKClaw devices and Matrix is heavier than needed:
+
+1. npm run phone:fleet -- list --json
+2. npm run phone:fleet -- status --target all --json
+3. npm run phone:fleet -- run --target all --prompt "<bounded task>" --mode observe --concurrency 2 --json
+4. For long or retry-heavy work, switch to Matrix dispatch/watch instead of repeatedly running fleet commands.
 `;
 
 export function buildMcpJson() {
@@ -141,12 +252,13 @@ export function buildOneShotAgentPrompt(mcpJson: string) {
 1. 自动发现 Codex Home：优先 CODEX_HOME；Windows 用 %USERPROFILE%\\.codex；macOS/Linux 用 $HOME/.codex。
 2. 自动发现 LOOM Home：优先 LOOM_HOME；否则从当前项目寻找 openclaw_new_launcher/python/loom_cli.py；再检查 Windows/macOS/Linux 常见安装目录。
 3. 优先从 BEGIN_SKILL_URLS 里的线上地址下载 loom-command-brain Skill，并安装到 <CodexHome>/skills/loom-command-brain/SKILL.md。
-4. 如果所有线上地址下载失败，就把 BEGIN_SKILL_MD 到 END_SKILL_MD 的内容写入 <CodexHome>/skills/loom-command-brain/SKILL.md 作为离线兜底。
-5. 如果当前项目支持 MCP，把 BEGIN_MCP_JSON 到 END_MCP_JSON 的内容合并进项目 ${MCP_CONFIG_PATH}；不要覆盖其他 MCP server。
-6. 验证 CLI：${CLI_SMOKE}
-7. MCP 可启动时再验证：${MCP_SMOKE}
-8. 之后先读 loom-command-brain，再通过 LOOM CLI/MCP 执行用户任务。
-9. 你可以用 LOOM CLI/MCP 生成图片、生成视频，并把素材交给手机矩阵执行后续任务；默认先只读观察，真正发布、评论、私信或外发必须请求用户确认。
+4. 优先从 BEGIN_WORKFLOWS_URLS 下载 workflows，并安装到 <CodexHome>/skills/loom-command-brain/references/WORKFLOWS.md。
+5. 如果线上地址下载失败，就分别把 BEGIN_SKILL_MD 与 BEGIN_WORKFLOWS_MD 的内容写入对应路径作为离线兜底。
+6. 如果当前项目支持 MCP，把 BEGIN_MCP_JSON 到 END_MCP_JSON 的内容合并进项目 ${MCP_CONFIG_PATH}；不要覆盖其他 MCP server。
+7. 验证 CLI：${CLI_SMOKE}
+8. MCP 可启动时再验证：${MCP_SMOKE}
+9. 之后先读 loom-command-brain，再通过 LOOM CLI/MCP 执行用户任务。
+10. 你可以用 LOOM CLI/MCP 生成图片、生成视频，并把素材交给手机矩阵执行后续任务；默认先只读观察，真正发布、评论、私信或外发必须请求用户确认。
 
 不要做这些事：
 - 不要写死任何单台电脑路径。
@@ -158,9 +270,17 @@ BEGIN_SKILL_URLS
 ${LOOM_COMMAND_BRAIN_SKILL_URLS.join('\n')}
 END_SKILL_URLS
 
+BEGIN_WORKFLOWS_URLS
+${LOOM_COMMAND_BRAIN_WORKFLOWS_URLS.join('\n')}
+END_WORKFLOWS_URLS
+
 BEGIN_SKILL_MD
 ${LOOM_COMMAND_BRAIN_SKILL_MARKDOWN}
 END_SKILL_MD
+
+BEGIN_WORKFLOWS_MD
+${LOOM_COMMAND_BRAIN_WORKFLOWS_MARKDOWN}
+END_WORKFLOWS_MD
 
 BEGIN_MCP_JSON
 ${mcpJson}
@@ -237,7 +357,7 @@ export const AgentAccessPage = () => {
               <CopyBlock
                 title="Skill 位置"
                 desc="Agent 会按 CODEX_HOME 或用户目录自动定位，不再依赖某一台电脑路径。"
-                value={`LOOM Command Brain Skill\n${LOOM_COMMAND_BRAIN_SKILL_PATH}\n\n可安装源：\n${LOOM_COMMAND_BRAIN_SKILL_URLS.join('\n')}`}
+                value={`LOOM Command Brain Skill\n${LOOM_COMMAND_BRAIN_SKILL_PATH}\n\nWorkflow Reference\n${LOOM_COMMAND_BRAIN_WORKFLOWS_PATH}\n\n可安装源：\n${LOOM_COMMAND_BRAIN_SKILL_URLS.join('\n')}\n\n工作流源：\n${LOOM_COMMAND_BRAIN_WORKFLOWS_URLS.join('\n')}`}
               />
               <CopyBlock
                 title="MCP 配置"
