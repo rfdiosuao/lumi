@@ -48,6 +48,7 @@ $offlineRequiredFiles = @(
     "data/launcher_runtime.json",
     "data/themes/default/theme.json",
     "data/themes/default/logo.png",
+    "platform-tools/adb.exe",
     "redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
     "imgapi_config.json",
     "video_config.json"
@@ -94,6 +95,7 @@ $onlineRequiredFiles = @(
     "data/launcher_runtime.json",
     "data/themes/default/theme.json",
     "data/themes/default/logo.png",
+    "platform-tools/adb.exe",
     "redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
     "imgapi_config.json",
     "video_config.json"

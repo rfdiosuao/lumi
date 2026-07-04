@@ -358,7 +358,7 @@ def _command_catalog() -> Json:
                 {"name": "phone events-stop", "permission": "read", "endpoint": "POST /api/phone/events/stop"},
                 {"name": "phone quick-task", "permission": "control", "endpoint": "POST /api/phone/task"},
                 {"name": "phone template-task", "permission": "read/control", "endpoint": "POST /api/phone/task"},
-                {"name": "phone adb-doctor", "permission": "admin", "endpoint": "POST /api/diagnostics/repair"},
+                {"name": "phone adb-doctor", "permission": "admin", "endpoint": "POST /api/phone/adb-doctor"},
             ],
         },
         {
@@ -514,7 +514,7 @@ def _models(ctx: CliContext) -> Json:
     return {
         "source": source,
         "text": models.get("text") or models.get("primary") or "",
-        "phone": models.get("phone") or "agnes-2.0-flash",
+        "phone": models.get("phone") or "qwen3.7-plus",
         "image": models.get("image"),
         "video": models.get("video"),
         "available": _safe_model_lists(wire),
@@ -867,8 +867,14 @@ def _phone(args: list[str], ctx: CliContext) -> Json:
         return _bridge_call(
             ctx,
             "POST",
-            "/api/diagnostics/repair",
-            {"id": "phone-adb", "scope": "phone", "confirmed": True, "source": "phone.adb-doctor"},
+            "/api/phone/adb-doctor",
+            _compact_body({
+                "confirmed": True,
+                "serial": _option(args, "--serial") or _option(args, "--device-id"),
+                "wake": not _flag(args, "--no-wake"),
+                "launch": not _flag(args, "--no-launch"),
+                "restartServer": not _flag(args, "--no-restart-server"),
+            }),
         )
     if action in {"read", "read-screen"}:
         _require_permission(ctx, "read")

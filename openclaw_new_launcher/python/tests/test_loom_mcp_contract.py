@@ -133,21 +133,21 @@ class LoomMcpContractTests(unittest.TestCase):
         self.assertEqual(content["data"]["endpoint"], "/api/phone/read")
         self.assertEqual(content["data"]["body"]["profile"], "fast")
 
-    def test_mcp_phone_adb_doctor_maps_to_admin_repair_alias(self) -> None:
+    def test_mcp_phone_adb_doctor_maps_to_dedicated_phone_adb_recovery(self) -> None:
         import loom_mcp
 
         with tempfile.TemporaryDirectory() as temp_dir:
             result = loom_mcp.call_tool(
                 "loom_phone_adb_doctor",
-                {"dryRun": True},
+                {"dryRun": True, "serial": "emulator-5554"},
                 permission="admin",
                 base_path=temp_dir,
             )
 
         content = json.loads(result["content"][0]["text"])
         self.assertFalse(result.get("isError", False))
-        self.assertEqual(content["data"]["endpoint"], "/api/diagnostics/repair")
-        self.assertEqual(content["data"]["body"]["id"], "phone-adb")
+        self.assertEqual(content["data"]["endpoint"], "/api/phone/adb-doctor")
+        self.assertEqual(content["data"]["body"]["serial"], "emulator-5554")
         self.assertTrue(content["data"]["body"]["confirmed"])
 
     def test_mcp_can_read_cli_command_catalog(self) -> None:

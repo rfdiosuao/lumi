@@ -132,5 +132,19 @@ class ModelsPageContractTests(unittest.TestCase):
         self.assertIn("视频", source)
 
 
+    def test_models_page_custom_provider_is_compact_provider_form(self) -> None:
+        with open(MODELS_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("CUSTOM_PROVIDER_OPTIONS", source)
+        self.assertIn("data-model-custom-provider-card", source)
+        self.assertIn("data-model-custom-provider-select", source)
+        self.assertIn("OpenRouter", source)
+        self.assertIn("DeepSeek", source)
+        self.assertIn("Moonshot - Kimi", source)
+        self.assertIn("仅保存在本机", source)
+        self.assertIn("使用陌生的第三方 API Key 需谨慎", source)
+
+
 if __name__ == "__main__":
     unittest.main()

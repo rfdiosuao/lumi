@@ -8,6 +8,8 @@ import {
   ensurePhoneConfig,
   fetchWithTimeout,
   normalizePhoneUrl,
+  PhoneBridgeError,
+  phoneBridgeErrorPayload,
   readLauncherPhoneConfigByDevice,
   signedJsonRequest,
 } from './openclaw-phone-secure.mjs';
@@ -18,6 +20,8 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_OUT_DIR = path.join(PROJECT_ROOT, 'data', 'phone-frames');
 const DEFAULT_CACHE_FRAME = path.join(DEFAULT_OUT_DIR, 'latest-fast-frame.jpg');
+let lastArgs = { json: process.argv.includes('--json'), command: '' };
+let lastConfig = null;
 
 function usage() {
   return `
@@ -47,8 +51,15 @@ Frame options:
 
 Action options:
   --action-body <json>         Raw body for /api/lumi/vision/action
+  --action-body-file <path>    Read action JSON from file. Recommended for PowerShell
+  --action-body-stdin          Read action JSON from stdin
   --force-action               Required for action. Use only after APKClaw Agent fails, for debugging, or for explicit coordinate tasks
   --allow-unknown-target        Debug only. Permit an action plan without targetLabel/reason metadata. Blacklisted labels still block.
+
+PowerShell action example:
+  $body = @{ action = 'tap'; gridCell = 'C7'; targetLabel = 'settings button'; reason = 'open settings' } | ConvertTo-Json -Compress
+  Set-Content -Encoding UTF8 .\\action.json $body
+  node scripts\\openclaw-phone-vision.mjs action --force-action --action-body-file .\\action.json --json
 
 Common options:
   --fast-path <name>           For read, try APKClaw fast read first. Default: observe_fast
@@ -77,6 +88,8 @@ function parseArgs(argv) {
     gridRows: 12,
     overlayGrid: true,
     actionBody: '',
+    actionBodyFile: '',
+    actionBodyStdin: false,
     forceAction: false,
     allowUnknownTarget: false,
     fastPath: 'observe_fast',
@@ -142,6 +155,12 @@ function parseArgs(argv) {
         break;
       case '--action-body':
         args.actionBody = next();
+        break;
+      case '--action-body-file':
+        args.actionBodyFile = path.resolve(next());
+        break;
+      case '--action-body-stdin':
+        args.actionBodyStdin = true;
         break;
       case '--force-action':
         args.forceAction = true;
@@ -372,9 +391,51 @@ function promptPreview(prompt) {
   return clean.length > 160 ? `${clean.slice(0, 160)}...` : clean;
 }
 
+async function readActionBodyText(config) {
+  if (config.actionBodyFile) {
+    return fs.readFile(config.actionBodyFile, 'utf8');
+  }
+  if (config.actionBodyStdin || config.actionBody === '-') {
+    return readStdinText();
+  }
+  return String(config.actionBody || '');
+}
+
+function readStdinText() {
+  return new Promise((resolve, reject) => {
+    let text = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      text += chunk;
+    });
+    process.stdin.on('end', () => resolve(text));
+    process.stdin.on('error', reject);
+  });
+}
+
+async function parseActionBody(config) {
+  const text = (await readActionBodyText(config)).trim();
+  if (!text) {
+    throw new PhoneBridgeError(
+      'missing_action_body_json',
+      '缺少动作 JSON。PowerShell 请优先使用 --action-body-file 或 --action-body-stdin。',
+      { retryable: false, currentStep: 'parse_action_body' },
+    );
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new PhoneBridgeError(
+      'invalid_action_body_json',
+      '动作 JSON 格式不正确。PowerShell 会改写命令行引号，请使用 --action-body-file 或 --action-body-stdin。',
+      { retryable: false, currentStep: 'parse_action_body', details: { reason: error?.message || String(error) } },
+    );
+  }
+}
+
 function print(config, payload, human) {
   if (config.json) {
-    console.log(JSON.stringify(payload, null, 2));
+    console.log(JSON.stringify({ ...payload, configSource: payload?.configSource || config.source || '' }, null, 2));
   } else {
     console.log(human);
   }
@@ -382,11 +443,13 @@ function print(config, payload, human) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  lastArgs = args;
   if (args.help) {
     console.log(usage());
     return;
   }
   const config = await resolveConfig(args);
+  lastConfig = config;
   ensurePhoneConfig(config);
 
   if (config.command === 'status') {
@@ -418,8 +481,7 @@ async function main() {
     if (!config.forceAction) {
       throw new Error('Refusing direct vision action without --force-action. Default flow: send a better natural-language task to APKClaw Agent; use direct visual actions only for debugging or fallback after repeated APKClaw failure.');
     }
-    if (!config.actionBody) throw new Error('Missing --action-body JSON');
-    const body = JSON.parse(config.actionBody);
+    const body = await parseActionBody(config);
     const safety = inspectVisionActionPlan(body, { strict: !config.allowUnknownTarget });
     if (!safety.allowed) {
       throw new Error(`Vision safety guard blocked action: ${safety.reason}`);
@@ -434,6 +496,12 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`ERROR: ${error?.message || error}`);
+  const config = lastConfig || lastArgs || {};
+  const payload = phoneBridgeErrorPayload(error, config, config.command || 'vision');
+  if (config.json || process.argv.includes('--json')) {
+    console.log(JSON.stringify(payload, null, 2));
+  } else {
+    console.error(`ERROR: ${payload.message}`);
+  }
   process.exitCode = 1;
 });

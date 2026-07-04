@@ -1,6 +1,7 @@
 export type RouteKey =
   | 'dashboard'
   | 'service'
+  | 'agents'
   | 'license'
   | 'studio'
   | 'phone'
@@ -131,6 +132,9 @@ export interface AccountSnapshot {
   usage: Record<string, unknown>;
   lastOnlineAt?: string;
   graceExpiresAt?: string;
+  offline?: boolean;
+  stale?: boolean;
+  lastSyncResults?: Array<{ target: string; ok: boolean; error?: string }>;
 }
 
 export interface ImageResult {
@@ -254,6 +258,43 @@ export interface SkillSnapshot {
   directories: Array<{ key: string; label: string; path: string; writable: boolean }>;
   sites: Array<{ name: string; url: string }>;
   statePath: string;
+}
+
+export interface ComponentSummary {
+  id: string;
+  name: string;
+  version: string;
+  installedVersion: string | null;
+  previousVersion: string | null;
+  status: string;
+  jobId?: string | null;
+  platform: string;
+  arch: string;
+  type: string;
+  size: number;
+  entry: string | null;
+  installPath: string;
+  category: string;
+  officialUrl?: string | null;
+  description?: string | null;
+  urls: string[];
+  updatedAt?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+}
+
+export interface ComponentSnapshot {
+  source: DataSource;
+  manifest: {
+    schemaVersion: number;
+    product: string;
+    channel: string;
+    version: string;
+    publishedAt: string;
+    minLauncherVersion: string;
+  } | null;
+  components: ComponentSummary[];
+  error?: string | null;
 }
 
 export interface DiagnosticsSnapshot {

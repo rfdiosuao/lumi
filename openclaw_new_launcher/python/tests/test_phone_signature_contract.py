@@ -132,6 +132,36 @@ class PhoneSignatureContractTests(unittest.TestCase):
         self.assertRegex(agent_source, r"status\?\.llmConfigured === false[\s\S]+?model_not_configured")
         self.assertRegex(agent_source, r"status\?\.modelReady === false[\s\S]+?model_not_ready")
 
+    def test_phone_bridge_errors_include_lan_config_preflight_guidance(self) -> None:
+        secure_source = read("scripts/openclaw-phone-secure.mjs")
+        agent_source = read("scripts/openclaw-phone-agent.mjs")
+        daemon_source = read("scripts/openclaw-phone-daemon.mjs")
+
+        self.assertIn("PhoneBridgeError", secure_source)
+        self.assertIn("phoneBridgeErrorPayload", secure_source)
+        self.assertIn("phone_config_server_unreachable", secure_source)
+        self.assertIn("APKClaw -> Settings -> LAN Config", secure_source)
+        self.assertIn("phoneBridgeErrorPayload(error", agent_source)
+        self.assertIn("phoneBridgeErrorPayload(error", daemon_source)
+
+    def test_phone_agent_serializes_mutating_actions_and_marks_stale_reads(self) -> None:
+        core_source = read("scripts/lib/phone-command-core.mjs")
+
+        self.assertIn("withDeviceMutationLock", core_source)
+        self.assertIn("phone-action-locks", core_source)
+        self.assertRegex(core_source, r"commandQueueKind\(config\) === QUEUE_KIND\.ACTION")
+        self.assertIn("stalePossible", core_source)
+        self.assertIn("读屏/截图允许并发", core_source)
+
+    def test_phone_vision_supports_powershell_action_body_file_and_stdin(self) -> None:
+        vision_source = read("scripts/openclaw-phone-vision.mjs")
+
+        self.assertIn("--action-body-file", vision_source)
+        self.assertIn("--action-body-stdin", vision_source)
+        self.assertIn("readActionBodyText", vision_source)
+        self.assertIn("invalid_action_body_json", vision_source)
+        self.assertIn("PowerShell", vision_source)
+
 
 if __name__ == "__main__":
     unittest.main()

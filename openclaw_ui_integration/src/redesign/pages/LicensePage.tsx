@@ -77,7 +77,9 @@ export function LicensePage() {
 
   const handleAccountLogin = async () => {
     if (!accountName.trim() || !accountPassword.trim()) {
-      setAccountError('请输入中转站账号和密码。');
+      const message = '请输入中转站账号和密码。';
+      setAccountError(message);
+      pushToast({ tone: 'danger', title: '登录信息不完整', detail: message, logRoute: 'license' });
       return;
     }
     setBusy(true);
@@ -263,7 +265,7 @@ export function LicensePage() {
                 {accountError ? <InlineState tone="danger" title="账号操作失败" description={accountError} /> : null}
                 <div className="button-row">
                   <Button variant="primary" icon={LogIn} onClick={handleAccountLogin} disabled={busy}>
-                    登录并同步
+                    {busy ? '登录中...' : '登录并同步'}
                   </Button>
                   <Button variant="secondary" icon={LogIn} onClick={handleAccountBindTicket} disabled={busy}>
                     绑定网站账号

@@ -140,6 +140,117 @@ function buildSkills() {
   };
 }
 
+function buildComponents() {
+  return {
+    manifest: {
+      schemaVersion: 1,
+      product: 'OpenClaw',
+      channel: 'stable',
+      version: '2.2.0',
+      publishedAt: '2026-06-28T00:00:00+08:00',
+      minLauncherVersion: '2.1.15',
+    },
+    components: [
+      {
+        id: 'codex-desktop',
+        name: 'Codex',
+        version: '26.602.71036',
+        installedVersion: '26.602.71036',
+        previousVersion: null,
+        status: 'ready',
+        platform: 'windows',
+        arch: 'x64',
+        type: 'installer',
+        size: 120000000,
+        entry: 'Codex-Installer.exe',
+        installPath: 'OpenClawFiles/agents/codex',
+        category: 'agent',
+        officialUrl: 'https://get.microsoft.com/installer/download/9PLM9XGG6VKS',
+        description: 'OpenAI coding agent desktop installer.',
+        urls: ['https://download.heang.top/openclaw/v2.2.0/agents/codex-desktop-windows-x64.exe'],
+        updatedAt: nowIso(),
+      },
+      {
+        id: 'claude-code',
+        name: 'Claude Code',
+        version: '2.1.169',
+        installedVersion: null,
+        previousVersion: null,
+        status: 'not_installed',
+        platform: 'windows',
+        arch: 'x64',
+        type: 'tgz',
+        size: 80000000,
+        entry: 'claude-code-2.1.169.tgz',
+        installPath: 'OpenClawFiles/agents/claude-code',
+        category: 'agent',
+        officialUrl: 'https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.169.tgz',
+        description: 'Anthropic command-line coding agent package.',
+        urls: ['https://download.heang.top/openclaw/v2.2.0/agents/claude-code-2.1.169.tgz'],
+        updatedAt: null,
+      },
+      {
+        id: 'opencode',
+        name: 'opencode',
+        version: '2026.6.28',
+        installedVersion: null,
+        previousVersion: null,
+        status: 'not_installed',
+        platform: 'windows',
+        arch: 'x64',
+        type: 'zip',
+        size: 60000000,
+        entry: 'opencode.exe',
+        installPath: 'OpenClawFiles/agents/opencode',
+        category: 'agent',
+        officialUrl: 'https://github.com/sst/opencode/releases',
+        description: 'Terminal-first AI coding agent.',
+        urls: ['https://download.heang.top/openclaw/v2.2.0/agents/opencode-windows-x64.zip'],
+        updatedAt: null,
+      },
+      {
+        id: 'openclaw-companion',
+        name: 'OpenClaw',
+        version: '2026.6.1',
+        installedVersion: null,
+        previousVersion: null,
+        status: 'not_installed',
+        platform: 'windows',
+        arch: 'x64',
+        type: 'installer',
+        size: 180000000,
+        entry: 'OpenClawCompanion-Setup-x64.exe',
+        installPath: 'OpenClawFiles/agents/openclaw',
+        category: 'agent',
+        officialUrl: 'https://github.com/openclaw/openclaw/releases/download/v2026.6.1/OpenClawCompanion-Setup-x64.exe',
+        description: 'OpenClaw companion installer.',
+        urls: ['https://download.heang.top/openclaw/v2.2.0/agents/openclaw-companion-setup-x64.exe'],
+        updatedAt: null,
+      },
+      {
+        id: 'hermes',
+        name: 'Hermes',
+        version: '0.16.0',
+        installedVersion: null,
+        previousVersion: null,
+        status: 'not_installed',
+        platform: 'windows',
+        arch: 'x64',
+        type: 'installer',
+        size: 150000000,
+        entry: 'Hermes-Setup.exe',
+        installPath: 'OpenClawFiles/agents/hermes',
+        category: 'agent',
+        officialUrl: 'https://hermes-assets.nousresearch.com/Hermes-Setup.exe?build=8d71c3891970',
+        description: 'Hermes desktop agent installer.',
+        urls: ['https://download.heang.top/openclaw/v2.2.0/agents/hermes-setup-windows-x64.exe'],
+        updatedAt: null,
+      },
+    ],
+    error: null,
+  };
+}
+
 function buildDiagnostics() {
   return {
     report: {
@@ -430,6 +541,7 @@ function createDefaultState() {
       'data/.openclaw/openclaw.json': { ui: 'preview', version: '0.1.0' },
     } as Record<string, unknown>,
     skills: buildSkills(),
+    components: buildComponents(),
     diagnostics: buildDiagnostics(),
     desktop: buildDesktop(),
     phone: buildPhoneDevices(),
@@ -904,6 +1016,29 @@ export async function mockBridgeRequest(path: string, method = 'GET', body?: Rec
       path: skill?.path || `skills/${id}/README.md`,
       content: `# ${skill?.name || id}\n\n这是预览 README。\n\n- 来源: ${skill?.sourceLabel || '预览'}\n- 运行时: ${skill?.runtime || 'node'}`,
     };
+  }
+
+  if (route === '/api/components/status') return clone(state.components);
+  if (route === '/api/components/install') {
+    const id = toText(body?.componentId || body?.id, '');
+    const component = state.components.components.find((item: AnyRecord) => item.id === id);
+    if (!component) return { error: `Unknown component: ${id}` };
+    component.status = 'ready';
+    component.installedVersion = component.version;
+    component.updatedAt = nowIso();
+    saveState(state);
+    return { state: clone(component), catalog: clone(state.components) };
+  }
+  if (route === '/api/components/rollback') {
+    const id = toText(body?.componentId || body?.id, '');
+    const component = state.components.components.find((item: AnyRecord) => item.id === id);
+    if (!component) return { error: `Unknown component: ${id}` };
+    component.status = 'ready';
+    component.installedVersion = component.previousVersion || component.installedVersion;
+    component.previousVersion = null;
+    component.updatedAt = nowIso();
+    saveState(state);
+    return { state: clone(component), catalog: clone(state.components) };
   }
 
   if (route === '/api/diagnostics/run') return clone(state.diagnostics.report);

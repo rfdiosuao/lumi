@@ -8,11 +8,38 @@ import { accountCacheUsable, loadCachedAccount, saveCachedAccount } from '../../
 
 type SourceMode = 'off' | 'managed' | 'custom';
 
+type CustomProviderOption = {
+  id: string;
+  label: string;
+  baseUrl: string;
+};
+
+const CUSTOM_PROVIDER_OPTIONS: CustomProviderOption[] = [
+  { id: 'custom', label: '自定义...', baseUrl: '' },
+  { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1' },
+  { id: 'anthropic', label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1' },
+  { id: 'gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+  { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1' },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1' },
+  { id: 'moonshot', label: 'Moonshot - Kimi', baseUrl: 'https://api.moonshot.cn/v1' },
+];
+
+function providerOptionById(id: string): CustomProviderOption {
+  return CUSTOM_PROVIDER_OPTIONS.find((option) => option.id === id) || CUSTOM_PROVIDER_OPTIONS[0];
+}
+
+function providerIdForName(name?: string): string {
+  const normalized = (name || '').trim().toLowerCase();
+  if (!normalized) return 'custom';
+  return CUSTOM_PROVIDER_OPTIONS.find((option) => option.label.toLowerCase() === normalized)?.id || 'custom';
+}
+
 function firstChoice(values?: string[], preferred?: string): string {
   if (preferred && values?.includes(preferred)) return preferred;
   return values?.[0] || '';
 }
 
+const DEFAULT_PHONE_MODEL = 'qwen3.7-plus';
 const PHONE_MODEL_IDS = new Set(['agnes-2.0-flash']);
 const IMAGE_MODEL_MARKERS = ['image', 'dall-e', 'gpt-image', 'flux', 'midjourney', 'mj-', 'stable-diffusion', 'sd-', 'imagen', 'seedream'];
 const VIDEO_MODEL_MARKERS = ['video', 'veo', 'sora', 'seedance', 'kling', 'wan', 'hailuo', 'runway', 'pika', 'luma', 'happyhorse'];
@@ -85,6 +112,7 @@ export const ModelsPage: React.FC = () => {
   const [videoModel, setVideoModel] = React.useState('');
   const [sourceMode, setSourceMode] = React.useState<SourceMode>('managed');
   const [customProvider, setCustomProvider] = React.useState('OpenAI 兼容');
+  const [customProviderId, setCustomProviderId] = React.useState('custom');
   const [customBaseUrl, setCustomBaseUrl] = React.useState('');
   const [customApiKey, setCustomApiKey] = React.useState('');
   const [customTextModel, setCustomTextModel] = React.useState('');
@@ -109,11 +137,13 @@ export const ModelsPage: React.FC = () => {
     if (!wire?.ok) return;
     if (wire.managedBy === 'custom_provider') {
       setSourceMode('custom');
-      setCustomProvider(wire.provider || 'OpenAI 兼容');
+      const provider = wire.provider || 'OpenAI 兼容';
+      setCustomProvider(provider);
+      setCustomProviderId(providerIdForName(provider));
       setCustomBaseUrl(wire.baseUrl || '');
       setCustomTextModel(wire.models?.text || '');
       setCustomImageModel(wire.models?.image || '');
-      setCustomPhoneModel(wire.models?.phone && wire.models.phone !== 'agnes-2.0-flash' ? wire.models.phone : '');
+      setCustomPhoneModel(wire.models?.phone && wire.models.phone !== DEFAULT_PHONE_MODEL ? wire.models.phone : '');
       setCustomVideoModel(wire.models?.video || '');
       return;
     }
@@ -204,8 +234,11 @@ export const ModelsPage: React.FC = () => {
     }
     setBusy(true);
     try {
+      const providerName = customProviderId === 'custom'
+        ? customProvider.trim()
+        : providerOptionById(customProviderId).label;
       const resp = await loomClient.wire.custom({
-        provider: customProvider.trim() || 'OpenAI 兼容',
+        provider: providerName || '自定义...',
         baseUrl: customBaseUrl.trim(),
         apiKey: customApiKey.trim(),
         textModel: customTextModel.trim(),
@@ -249,6 +282,12 @@ export const ModelsPage: React.FC = () => {
   const summaryTextModels = sourceMode === 'custom' ? compactValues(customTextModel) : managedTextModels;
   const summaryImageModels = sourceMode === 'custom' ? compactValues(customImageModel) : managedImageModels;
   const summaryVideoModels = sourceMode === 'custom' ? compactValues(customVideoModel) : managedVideoModels;
+  const selectCustomProvider = (providerId: string) => {
+    const option = providerOptionById(providerId);
+    setCustomProviderId(providerId);
+    setCustomProvider(option.label);
+    if (option.baseUrl) setCustomBaseUrl(option.baseUrl);
+  };
 
   const busyOverlayTitle = loading ? '正在读取模型' : sourceMode === 'custom' ? '正在应用第三方配置' : '正在同步模型';
 
@@ -290,26 +329,44 @@ export const ModelsPage: React.FC = () => {
                 已关闭模型来源配置。启动器不会改动本地 Provider，已存在的配置保持原样。
               </div>
             ) : sourceMode === 'custom' ? (
-              <div className="mt-6 grid gap-5">
-                <div className="rounded-[16px] border border-status-warning/30 bg-status-warning/10 p-4 text-sm leading-6 text-status-warning">
-                  使用陌生的第三方 API Key 需谨慎。API Key 只交给本地 Bridge 写入配置，不会显示在页面、日志或文档里。
+              <div data-model-custom-provider-card className="mt-6 rounded-[18px] border border-accent/20 bg-accent/[0.04] p-5">
+                <div className="rounded-[14px] border border-status-danger/20 bg-status-danger/10 px-4 py-3 text-sm font-bold text-status-danger">
+                  使用陌生的第三方 API Key 需谨慎。
                 </div>
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="mt-5 grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
                   <label className="block">
                     <div className="mb-2 text-xs font-bold text-text-muted">Provider</div>
-                    <Input value={customProvider} onChange={(event) => setCustomProvider(event.target.value)} placeholder="OpenAI 兼容" />
+                    <Select
+                      data-model-custom-provider-select
+                      className="w-full"
+                      value={customProviderId}
+                      onChange={(event) => selectCustomProvider(event.target.value)}
+                    >
+                      {CUSTOM_PROVIDER_OPTIONS.map((option) => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                    </Select>
                   </label>
                   <label className="block">
                     <div className="mb-2 text-xs font-bold text-text-muted">默认文本模型</div>
-                    <Input value={customTextModel} onChange={(event) => setCustomTextModel(event.target.value)} placeholder="例如 gpt-4o、claude-3-5-sonnet" />
+                    <Input value={customTextModel} onChange={(event) => setCustomTextModel(event.target.value)} placeholder="例如 qwen3.7-plus、gpt-4o" />
                   </label>
+                  {customProviderId === 'custom' ? (
+                    <label className="block md:col-span-2">
+                      <div className="mb-2 text-xs font-bold text-text-muted">Provider 名称</div>
+                      <Input value={customProvider} onChange={(event) => setCustomProvider(event.target.value)} placeholder="自定义..." />
+                    </label>
+                  ) : null}
                   <label className="block md:col-span-2">
                     <div className="mb-2 text-xs font-bold text-text-muted">自定义 URL</div>
                     <Input value={customBaseUrl} onChange={(event) => setCustomBaseUrl(event.target.value)} placeholder="https://example.com/v1" />
                   </label>
                   <label className="block md:col-span-2">
-                    <div className="mb-2 text-xs font-bold text-text-muted">API Key</div>
-                    <Input type="password" value={customApiKey} onChange={(event) => setCustomApiKey(event.target.value)} placeholder="sk-..." autoComplete="off" />
+                    <div className="mb-2 flex items-center justify-between gap-3 text-xs font-bold text-text-muted">
+                      <span>API Key</span>
+                      <span className="text-accent">仅保存在本机</span>
+                    </div>
+                    <Input type="password" value={customApiKey} onChange={(event) => setCustomApiKey(event.target.value)} placeholder="仅保存在本机" autoComplete="off" />
                   </label>
                   <label className="block">
                     <div className="mb-2 text-xs font-bold text-text-muted">图像模型</div>
@@ -324,9 +381,12 @@ export const ModelsPage: React.FC = () => {
                     <Input value={customVideoModel} onChange={(event) => setCustomVideoModel(event.target.value)} placeholder="可选，仅保存草案，不切换视频 provider" />
                   </label>
                 </div>
-                <Button variant="primary" onClick={applyCustomProvider} disabled={busy || loading}>
-                  {busy ? '处理中...' : '应用第三方配置'}
-                </Button>
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <Button variant="primary" onClick={applyCustomProvider} disabled={busy || loading}>
+                    {busy ? '处理中...' : '应用第三方配置'}
+                  </Button>
+                  <span className="text-xs font-bold text-text-muted">粘贴上游平台生成的密钥；不会上传，不写入日志。</span>
+                </div>
               </div>
             ) : !loggedIn ? (
               <div className="mt-6 rounded-[16px] border border-border/80 bg-surface/35 p-5">

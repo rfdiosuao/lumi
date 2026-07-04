@@ -35,6 +35,13 @@ class AccountUiContractTests(unittest.TestCase):
         self.assertIn("套餐", source)
         self.assertIn("到期", source)
         self.assertIn("打开订阅页", source)
+        self.assertIn("data-native-subscription-dashboard", source)
+        self.assertIn("data-subscription-external-fallback", source)
+        self.assertIn("账户与余额", source)
+        self.assertIn("套餐方案", source)
+        self.assertIn("SUBSCRIPTION_PLANS", source)
+        self.assertNotIn("<iframe", source)
+        self.assertNotIn("订阅页已在当前页面打开", source)
         self.assertIn("accountApi.subscription", source)
         self.assertIn("purchaseUrl", source)
 

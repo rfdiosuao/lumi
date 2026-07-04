@@ -16,6 +16,37 @@ const DEFAULT_ACCOUNT_CENTER_URL = `${DEFAULT_BASE_URL}/wallet`;
 
 type AuthMode = 'email' | 'password' | 'register';
 
+const SUBSCRIPTION_PLANS = [
+  {
+    name: '入门版',
+    quota: '18,000 积分',
+    bonus: '每日赠送 500 积分',
+    price: '以中转站为准',
+    tone: 'border-border',
+  },
+  {
+    name: '进阶版',
+    quota: '44,000 积分',
+    bonus: '每日赠送 1,200 积分',
+    price: '以中转站为准',
+    tone: 'border-accent/45',
+  },
+  {
+    name: '高级版',
+    quota: '315,000 积分',
+    bonus: '每日赠送 8,000 积分',
+    price: '以中转站为准',
+    tone: 'border-[#C9A24A]/55',
+  },
+  {
+    name: '专业版',
+    quota: '950,000 积分',
+    bonus: '每日赠送 25,000 积分',
+    price: '以中转站为准',
+    tone: 'border-status-danger/45',
+  },
+];
+
 function errorMessage(error: unknown): string {
   const friendly = parseErrorText(error);
   if (friendly) return friendly;
@@ -121,7 +152,6 @@ export const LicensePage: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(() => !hasCachedAccount);
   const [statusText, setStatusText] = useState('');
-  const [subscriptionEmbedOpen, setSubscriptionEmbedOpen] = useState(false);
   const { setAuthorized, setLicenseInfo, setCurrentPage } = useAppStore();
 
   const loggedIn = Boolean(account?.loggedIn);
@@ -380,18 +410,9 @@ export const LicensePage: React.FC = () => {
       showToast(message, 'error');
       return;
     }
-    setSubscriptionEmbedOpen(true);
-    setStatusText('订阅页已在当前页面打开');
-  };
-
-  const handleOpenSubscriptionExternal = async () => {
-    if (!subscriptionUrl) {
-      const message = '订阅页地址不可用，请刷新账号后重试';
-      setStatusText(message);
-      showToast(message, 'error');
-      return;
-    }
     await openExternalUrl(subscriptionUrl);
+    setStatusText('订阅页已在浏览器打开');
+    showToast('订阅页已在浏览器打开', 'success');
   };
 
   const continueAsGuest = () => {
@@ -498,14 +519,15 @@ export const LicensePage: React.FC = () => {
                     onClick={handleOpenSubscription}
                     className="col-span-2 h-11 rounded-[10px] bg-accent text-sm font-black text-accent-ink transition hover:bg-accent-hover"
                   >
-                    在麓鸣内打开订阅页
+                    打开订阅页
                   </button>
                   <button
                     type="button"
-                    onClick={handleOpenSubscriptionExternal}
+                    onClick={() => loadSubscription(false)}
+                    disabled={busy}
                     className="col-span-2 h-10 rounded-[10px] border border-border bg-surface-alt text-sm font-black text-text-muted transition hover:border-accent/50 hover:text-text"
                   >
-                    用浏览器打开
+                    刷新订阅信息
                   </button>
                   <button
                     type="button"
@@ -519,38 +541,85 @@ export const LicensePage: React.FC = () => {
               </div>
             </section>
 
-            <section className="min-h-[560px] overflow-hidden rounded-[18px] border border-border bg-surface shadow-[0_18px_60px_rgba(5,35,29,0.08)]">
+            <section
+              data-native-subscription-dashboard
+              data-subscription-external-fallback
+              className="min-h-[560px] overflow-hidden rounded-[18px] border border-border bg-surface shadow-[0_18px_60px_rgba(5,35,29,0.08)]"
+            >
               <div className="flex items-center justify-between border-b border-border px-5 py-4">
                 <div>
-                  <h2 className="text-lg font-black text-text">订阅中心</h2>
-                  <p className="mt-1 text-xs leading-5 text-text-muted">在这里查看套餐、余额和充值路径。</p>
+                  <h2 className="text-lg font-black text-text">账户与余额</h2>
+                  <p className="mt-1 text-xs leading-5 text-text-muted">余额、消耗和套餐由中转站后端同步，购买与支付在浏览器完成。</p>
                 </div>
-                <span className="rounded-full border border-border bg-surface-alt px-3 py-1 text-xs font-black text-text-muted">
-                  {subscriptionUrl ? '可打开' : '地址不可用'}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => loadSubscription(false)}
+                  disabled={busy}
+                  className="h-9 rounded-[10px] border border-border bg-surface-alt px-4 text-xs font-black text-text transition hover:border-accent/50 disabled:opacity-55"
+                >
+                  刷新余额
+                </button>
               </div>
-              {subscriptionEmbedOpen && subscriptionUrl ? (
-                <iframe
-                  title="LOOM 订阅中心"
-                  src={subscriptionUrl}
-                  className="loom-subscription-frame h-[calc(100%-69px)] min-h-[490px] w-full bg-white"
-                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
-                />
-              ) : (
-                <div className="flex h-[calc(100%-69px)] min-h-[490px] flex-col items-center justify-center px-8 text-center">
-                  <div className="text-[26px] font-black text-text">订阅页已接入麓鸣</div>
-                  <p className="mt-3 max-w-md text-sm leading-6 text-text-muted">
-                    点击左侧按钮后直接在当前页面打开。若中转站禁止嵌入，仍可用浏览器打开完成支付或订阅管理。
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleOpenSubscription}
-                    className="mt-6 h-11 rounded-[10px] bg-accent px-6 text-sm font-black text-accent-ink transition hover:bg-accent-hover"
-                  >
-                    打开订阅中心
-                  </button>
+              <div className="space-y-6 px-6 py-6">
+                <div className="grid gap-4 md:grid-cols-4">
+                  <MetricTile label="可用余额" value={displayValue(subscription?.balance, usageValue(account, ['quota', 'remainQuota', 'remainingQuota']))} accent />
+                  <MetricTile label="累计消耗" value={displayValue(subscription?.usage?.usedQuota, usageValue(account, ['usedQuota', 'used', 'quotaUsed']))} />
+                  <MetricTile label="请求次数" value={displayValue(subscription?.usage?.requestCount, usageValue(account, ['requestCount', 'requests']))} />
+                  <MetricTile label="当前套餐" value={displayValue(subscription?.plan, account?.plan || '暂无')} />
                 </div>
-              )}
+
+                <div>
+                  <div className="mb-3 flex items-end justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-black text-text">套餐方案</div>
+                      <div className="mt-1 text-xs text-text-muted">客户端只展示摘要，最终价格和权益以中转站为准。</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleOpenSubscription}
+                      disabled={!subscriptionUrl}
+                      className="h-10 rounded-[10px] bg-accent px-4 text-sm font-black text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                      打开订阅页
+                    </button>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    {SUBSCRIPTION_PLANS.map((plan) => (
+                      <div
+                        key={plan.name}
+                        className={`rounded-[14px] border ${plan.tone} bg-surface-alt/50 p-4`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="text-base font-black text-text">{plan.name}</div>
+                          {subscription?.plan === plan.name ? (
+                            <span className="rounded-full bg-accent/12 px-2 py-1 text-[11px] font-black text-accent">当前</span>
+                          ) : null}
+                        </div>
+                        <div className="mt-4 text-2xl font-black text-text">{plan.price}</div>
+                        <div className="mt-4 space-y-2 text-xs font-bold leading-5 text-text-muted">
+                          <div>基础额度：{plan.quota}</div>
+                          <div>{plan.bonus}</div>
+                          <div>解锁更高用量与模型权限</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleOpenSubscription}
+                          disabled={!subscriptionUrl}
+                          className="mt-5 h-10 w-full rounded-[10px] bg-accent text-xs font-black text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-55"
+                        >
+                          去开通
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <InfoPanel label="到期时间" value={formatTime(subscription?.expiresAt)} />
+                  <InfoPanel label="默认文本模型" value={modelHint} />
+                  <InfoPanel label="购买入口" value={subscriptionUrl ? '浏览器打开' : '地址不可用'} />
+                </div>
+              </div>
             </section>
           </div>
 
@@ -846,6 +915,20 @@ const GhostTile: React.FC<{ label: string; value: string }> = ({ label, value })
   <div className="min-w-0 rounded-[18px] border border-border/70 bg-surface-alt/35 p-4">
     <div className="text-xs font-bold text-text-subtle">{label}</div>
     <div className="mt-2 truncate text-xl font-black text-text" title={value}>{value}</div>
+  </div>
+);
+
+const MetricTile: React.FC<{ label: string; value: string; accent?: boolean }> = ({ label, value, accent }) => (
+  <div className={['min-w-0 rounded-[14px] border bg-surface-alt/40 p-4', accent ? 'border-accent/45' : 'border-border'].join(' ')}>
+    <div className="text-xs font-bold text-text-subtle">{label}</div>
+    <div className="mt-2 truncate text-[22px] font-black text-text" title={value}>{value}</div>
+  </div>
+);
+
+const InfoPanel: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="min-w-0 rounded-[14px] border border-border bg-surface-alt/35 px-4 py-3">
+    <div className="text-xs font-bold text-text-subtle">{label}</div>
+    <div className="mt-1 truncate text-sm font-black text-text" title={value}>{value}</div>
   </div>
 );
 

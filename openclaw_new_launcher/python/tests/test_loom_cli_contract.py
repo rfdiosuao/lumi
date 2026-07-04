@@ -97,15 +97,24 @@ class LoomCliContractTests(unittest.TestCase):
         self.assertEqual(payload["data"]["endpoint"], "/api/phone/read")
         self.assertEqual(payload["data"]["body"]["profile"], "fast")
 
-    def test_phone_adb_doctor_is_admin_repair_alias(self) -> None:
+    def test_phone_adb_doctor_uses_dedicated_phone_adb_recovery(self) -> None:
         from loom_cli import dispatch
 
-        code, payload = dispatch(["phone", "adb-doctor", "--json", "--dry-run", "--permission", "admin"])
+        code, payload = dispatch([
+            "phone",
+            "adb-doctor",
+            "--serial",
+            "emulator-5554",
+            "--json",
+            "--dry-run",
+            "--permission",
+            "admin",
+        ])
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["data"]["method"], "POST")
-        self.assertEqual(payload["data"]["endpoint"], "/api/diagnostics/repair")
-        self.assertEqual(payload["data"]["body"]["id"], "phone-adb")
+        self.assertEqual(payload["data"]["endpoint"], "/api/phone/adb-doctor")
+        self.assertEqual(payload["data"]["body"]["serial"], "emulator-5554")
         self.assertTrue(payload["data"]["body"]["confirmed"])
 
     def test_phone_adb_doctor_requires_admin_permission(self) -> None:

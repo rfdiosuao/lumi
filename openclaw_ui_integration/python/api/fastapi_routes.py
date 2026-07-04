@@ -7,6 +7,7 @@ import traceback
 from fastapi import Request
 
 from api.routes_account import register_account_routes
+from api.routes_components import register_component_routes
 from api.routes_config import register_config_routes
 from api.routes_desktop_agent import register_desktop_agent_routes
 from api.routes_diagnostics import register_diagnostics_routes
@@ -37,6 +38,7 @@ def register_fastapi_routes(app, ctx) -> None:
     register_license_routes(app, ctx)
     register_member_routes(app, ctx)
     register_account_routes(app, ctx)
+    register_component_routes(app, ctx)
     register_job_routes(app, ctx)
     register_media_routes(app, ctx)
     register_phone_automation_routes(app, ctx)

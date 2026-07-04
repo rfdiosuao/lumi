@@ -125,6 +125,10 @@ release/
 /openclaw_new_launcher/data/.installer/
 /openclaw_new_launcher/data/phone-frames/
 /openclaw_new_launcher/data/phone-videos/
+/openclaw_new_launcher/data/phone-test-artifacts/
+/openclaw_new_launcher/redist/platform-tools/
+/openclaw_new_launcher/*.err
+/openclaw_new_launcher/*.out
 /openclaw_new_launcher/agents/*
 !/openclaw_new_launcher/agents/.gitkeep
 /openclaw_new_launcher/releases/
@@ -155,3 +159,4 @@ release/
 Thumbs.db
 .gstack/
 .agent-workspace/
+.superpowers/

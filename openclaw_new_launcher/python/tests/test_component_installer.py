@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import hashlib
 import io
+import json
 import tarfile
 import zipfile
 from dataclasses import dataclass
@@ -1289,7 +1290,7 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             with open(entry, "w", encoding="utf-8") as handle:
                 handle.write("@echo off\n")
             with open(os.path.join(config_dir, "opencode.json"), "w", encoding="utf-8") as handle:
-                handle.write('{"model":"loom/agnes-2.0-flash","provider":{"loom":{"options":{"apiKey":"{env:LOOM_OPENCODE_API_KEY}"}}}}')
+                handle.write('{"model":"loom/qwen3.7-plus","provider":{"loom":{"options":{"apiKey":"{env:LOOM_OPENCODE_API_KEY}"}}}}')
 
             build_command = getattr(component_installer_module, "build_agent_launcher_command", lambda *_args, **_kwargs: [])
             build_env = getattr(component_installer_module, "build_agent_launcher_environment", lambda *_args, **_kwargs: {})
@@ -1297,9 +1298,25 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             env = build_env(temp_dir, "opencode")
 
             self.assertEqual(command[:3], ["cmd", "/c", entry])
-            self.assertEqual(command[-3:], ["--pure", "-m", "loom/agnes-2.0-flash"])
+            self.assertEqual(command[-3:], ["--pure", "-m", "loom/qwen3.7-plus"])
             self.assertEqual(env["OPENCODE_CONFIG_DIR"], config_dir)
             self.assertEqual(env["OPENCODE_CONFIG"], os.path.join(config_dir, "opencode.json"))
+
+    def test_opencode_launcher_rejects_stale_phone_model_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "agents", "opencode", "opencode.cmd")
+            config_dir = os.path.join(temp_dir, "data", ".opencode")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            os.makedirs(config_dir, exist_ok=True)
+            with open(entry, "w", encoding="utf-8") as handle:
+                handle.write("@echo off\n")
+            with open(os.path.join(config_dir, "opencode.json"), "w", encoding="utf-8") as handle:
+                handle.write('{"model":"loom/agnes-2.0-flash","provider":{"loom":{"options":{"apiKey":"{env:LOOM_OPENCODE_API_KEY}"}}}}')
+
+            build_command = getattr(component_installer_module, "build_agent_launcher_command", lambda *_args, **_kwargs: [])
+
+            with self.assertRaises(ComponentInstallError):
+                build_command("opencode", entry, os.path.dirname(entry), base_path=temp_dir)
 
     def test_opencode_launcher_fails_without_private_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1329,8 +1346,33 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(env["LOOM_CLAUDE_API_KEY"], secret)
             self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], secret)
             self.assertEqual(env["ANTHROPIC_API_KEY"], secret)
-            self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://api.heang.top/v1")
+            self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://api.heang.top")
             self.assertEqual(env["ANTHROPIC_MODEL"], "qwen3.7-plus")
+
+    def test_agent_launcher_environment_does_not_inject_phone_model_as_desktop_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            os.makedirs(os.path.dirname(paths.wire_current), exist_ok=True)
+            with open(paths.wire_current, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "baseUrl": "https://api.heang.top/v1",
+                        "apiKey": "sk-stale-phone-model",
+                        "models": {"text": "agnes-2.0-flash", "phone": "agnes-2.0-flash"},
+                    },
+                    handle,
+                )
+
+            build_env = getattr(component_installer_module, "build_agent_launcher_environment", lambda *_args, **_kwargs: {})
+            codex_env = build_env(temp_dir, "codex-desktop")
+            claude_env = build_env(temp_dir, "claude-code")
+
+            self.assertEqual(codex_env["OPENAI_API_KEY"], "sk-stale-phone-model")
+            self.assertEqual(codex_env["OPENAI_BASE_URL"], "https://api.heang.top/v1")
+            self.assertNotIn("OPENAI_MODEL", codex_env)
+            self.assertEqual(claude_env["ANTHROPIC_API_KEY"], "sk-stale-phone-model")
+            self.assertEqual(claude_env["ANTHROPIC_BASE_URL"], "https://api.heang.top")
+            self.assertNotIn("ANTHROPIC_MODEL", claude_env)
 
     def test_agent_launcher_environment_scrubs_stale_model_env_before_injecting_loom(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1376,7 +1418,7 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(claude_env["LOOM_CLAUDE_API_KEY"], secret)
             self.assertEqual(claude_env["ANTHROPIC_AUTH_TOKEN"], secret)
             self.assertEqual(claude_env["ANTHROPIC_API_KEY"], secret)
-            self.assertEqual(claude_env["ANTHROPIC_BASE_URL"], "https://api.heang.top/v1")
+            self.assertEqual(claude_env["ANTHROPIC_BASE_URL"], "https://api.heang.top")
             self.assertEqual(claude_env["ANTHROPIC_MODEL"], "qwen3.7-plus")
             self.assertNotIn("OPENAI_API_KEY", claude_env)
             self.assertNotIn("OPENAI_BASE_URL", claude_env)

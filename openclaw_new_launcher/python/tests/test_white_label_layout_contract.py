@@ -35,7 +35,7 @@ class WhiteLabelLayoutContractTests(unittest.TestCase):
 
         self.assertIn('data-white-label-layout="account-subscription"', account)
         self.assertIn("loom-account-layout", account)
-        self.assertIn("loom-subscription-frame", account)
+        self.assertIn("data-subscription-external-fallback", account)
 
         self.assertIn('data-white-label-layout="phone-matrix"', matrix)
         self.assertIn("loom-matrix-shell", matrix)

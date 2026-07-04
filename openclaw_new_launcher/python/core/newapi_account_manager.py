@@ -33,7 +33,7 @@ ACCOUNT_SOURCE = "newapi_account"
 LEGACY_ACCOUNT_SOURCE = "heang_account"
 SESSION_GRACE_DAYS = 14
 DEFAULT_TEXT_MODEL = "qwen3.7-plus"
-DEFAULT_PHONE_MODEL = "agnes-2.0-flash"
+DEFAULT_PHONE_MODEL = "qwen3.7-plus"
 LAUNCHER_TOKEN_NAME_PREFIX = "LOOM Launcher"
 TEXT_MODEL_PRIORITY = (
     "qwen3.7-plus",
@@ -43,7 +43,7 @@ TEXT_MODEL_PRIORITY = (
     "kimi-k2.5",
     "MiniMax-M2.5",
 )
-PHONE_MODEL_IDS = {DEFAULT_PHONE_MODEL.lower()}
+PHONE_MODEL_IDS = {"agnes-2.0-flash"}
 MANAGED_ACCOUNT_SOURCES = {ACCOUNT_SOURCE, LEGACY_ACCOUNT_SOURCE}
 NEWAPI_EMAIL_CODE_SEND_PATH = "/api/verification"
 OPENCLAW_EMAIL_CODE_SEND_PATHS = (
@@ -1036,7 +1036,7 @@ class NewApiAccountManager:
         text_model = _choose_model(classified["text"], DEFAULT_TEXT_MODEL, flat_models)
         image_model = _pick_text(defaults.get("imageModel"), session.get("gatewayImageModel"))
         video_model = _pick_text(defaults.get("videoDraftModel"), defaults.get("videoModel"), session.get("gatewayVideoDraftModel"))
-        phone_model = _pick_text(defaults.get("phoneModel"), phone_models[0] if phone_models else "", DEFAULT_PHONE_MODEL)
+        phone_model = _pick_text(defaults.get("phoneModel"), DEFAULT_PHONE_MODEL, phone_models[0] if phone_models else "")
         session.update({
             "gatewayBaseUrl": api_base_url,
             "gatewayImageBaseUrl": api_base_url,

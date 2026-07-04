@@ -40,6 +40,21 @@ class MatrixControlPlaneTests(unittest.TestCase):
         self.assertIn("eventsStreamUrl", api)
         self.assertIn("/api/matrix/events/stream", api)
 
+    def test_matrix_workbench_hides_agent_prompt_and_uses_cn_task_labels(self) -> None:
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        page_path = os.path.join(repo_root, "src", "components", "matrix", "MatrixWorkbenchPage.tsx")
+        with open(page_path, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertNotIn("CONTROL_PROMPT", source)
+        self.assertNotIn("复制提示词", source)
+        self.assertNotIn("CODEX CONTROL", source)
+        self.assertIn("modeLabel(item)", source)
+        self.assertIn("profileLabel(item)", source)
+        for label in ["只读", "受控", "完整控制", "快速", "标准", "深度"]:
+            self.assertIn(label, source)
+        self.assertIn("max-w-[1180px]", source)
+
     def test_device_registry_redacts_tokens_and_tracks_runtime_fields(self) -> None:
         from core.paths import AppPaths
         from core.phone_matrix import MatrixControlPlane
@@ -142,7 +157,7 @@ class MatrixControlPlaneTests(unittest.TestCase):
         self.assertTrue(device["selected"])
         self.assertFalse(device["online"])
         self.assertFalse(device["busy"])
-        self.assertEqual(device["model"], "agnes-2.0-flash")
+        self.assertEqual(device["model"], "qwen3.7-plus")
         serialized = json.dumps(status, ensure_ascii=False)
         self.assertNotIn("phone-secret-token", serialized)
         self.assertNotIn("192.168.1.13", serialized)

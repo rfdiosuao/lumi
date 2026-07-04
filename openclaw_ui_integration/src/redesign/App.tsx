@@ -6,6 +6,7 @@ import type { RouteKey } from './types';
 import { DashboardPage } from './pages/DashboardPage';
 
 const ServicePage = React.lazy(() => import('./pages/ServicePage').then((module) => ({ default: module.ServicePage })));
+const AgentsPage = React.lazy(() => import('./pages/AgentsPage').then((module) => ({ default: module.AgentsPage })));
 const LicensePage = React.lazy(() => import('./pages/LicensePage').then((module) => ({ default: module.LicensePage })));
 const IntegrationsPage = React.lazy(() => import('./pages/IntegrationsPage').then((module) => ({ default: module.IntegrationsPage })));
 const StudioPage = React.lazy(() => import('./pages/StudioPage').then((module) => ({ default: module.StudioPage })));
@@ -16,14 +17,15 @@ const DiagnosticsPage = React.lazy(() => import('./pages/DiagnosticsPage').then(
 const SettingsPage = React.lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
 
 const ROUTE_TITLES: Record<RouteKey, string> = {
-  dashboard: '启动器总览',
-  service: '服务 / CLI',
-  license: '授权内测',
+  agents: '智能体',
+  dashboard: '安装首页',
+  service: '核心服务',
+  license: '账号 / 授权',
   integrations: '平台对接',
   studio: '图像 / 视频',
-  phone: '手机控制台',
-  desktop: '桌面自动化',
-  skills: 'Skills 工作区',
+  phone: '手机控制',
+  desktop: '桌面 RPA',
+  skills: 'Skills',
   diagnostics: '环境检测',
   settings: '统一设置',
 };
@@ -39,6 +41,9 @@ function PageRouter() {
   let page: React.ReactNode;
 
   switch (route) {
+    case 'agents':
+      page = <AgentsPage />;
+      break;
     case 'service':
       page = <ServicePage />;
       break;
@@ -102,7 +107,7 @@ export default function App() {
     if (window.location.hash.replace(/^#\/?/, '').split('/')[0] !== route) {
       window.history.replaceState(null, '', `#/${route}`);
     }
-    document.title = `OpenClaw 预览 - ${ROUTE_TITLES[route]}`;
+    document.title = `OpenClaw - ${ROUTE_TITLES[route]}`;
   }, [route, initialized]);
 
   return (

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 
 test('open-settings template run uses action_fast instead of async Agent task', async () => {
@@ -135,6 +138,8 @@ test('read-screen template run uses observe_fast without requiring an LLM model'
       'template',
       '--template',
       'read-screen',
+      '--daemon',
+      'off',
       '--prompt',
       '读取当前屏幕',
       '--json',
@@ -150,6 +155,7 @@ test('read-screen template run uses observe_fast without requiring an LLM model'
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.mode, 'observe_fast');
+    assert.equal(payload.stalePossible, true);
     assert.equal(payload.metrics.rounds, 0);
     assert.equal(payload.currentStep, 'success');
     assert.equal(seen.includes('POST /api/lumi/agent/tasks'), false);
@@ -161,6 +167,8 @@ test('read-screen template run uses observe_fast without requiring an LLM model'
 
 test('parallel explicit CLI calls reuse the same generated Lumi launcher id', async () => {
   const launcherIds = [];
+  let activeActions = 0;
+  let maxActiveActions = 0;
   const server = http.createServer(async (request, response) => {
     const body = await readBody(request);
 
@@ -179,6 +187,10 @@ test('parallel explicit CLI calls reuse the same generated Lumi launcher id', as
       });
     }
     if (request.method === 'POST' && request.url.startsWith('/api/lumi/agent/action_fast')) {
+      activeActions += 1;
+      maxActiveActions = Math.max(maxActiveActions, activeActions);
+      await delay(120);
+      activeActions -= 1;
       return sendJson(response, {
         success: true,
         data: {
@@ -224,8 +236,94 @@ test('parallel explicit CLI calls reuse the same generated Lumi launcher id', as
     assert.equal(results[1].code, 0, results[1].stderr);
     assert.equal(launcherIds.length, 2);
     assert.equal(new Set(launcherIds).size, 1);
+    assert.equal(maxActiveActions, 1);
   } finally {
     await close(server);
+  }
+});
+
+test('unreachable phone url returns structured LAN Config guidance', async () => {
+  const port = await unusedPort();
+  const result = await runCli([
+    'metrics',
+    '--daemon',
+    'off',
+    '--phone-url',
+    `http://127.0.0.1:${port}`,
+    '--phone-token',
+    'test-token',
+    '--json',
+    '--step-timeout-sec',
+    '5',
+  ]);
+
+  assert.notEqual(result.code, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.errorCode, 'phone_config_server_unreachable');
+  assert.match(payload.message, /APKClaw ConfigServer/);
+  assert.match(payload.remediation.join('\n'), /APKClaw -> Settings -> LAN Config/);
+});
+
+test('vision action supports PowerShell-safe action body file', async () => {
+  let actionBody = null;
+  const server = http.createServer(async (request, response) => {
+    const body = await readBody(request);
+    if (request.method === 'POST' && request.url === '/api/lumi/security/pair') {
+      const parsed = JSON.parse(body || '{}');
+      return sendJson(response, {
+        success: true,
+        data: { launcherId: parsed.launcherId, launcherSecret: 'vision-secret' },
+      });
+    }
+    if (request.method === 'POST' && request.url.startsWith('/api/lumi/agent/action_fast')) {
+      actionBody = JSON.parse(body || '{}');
+      return sendJson(response, {
+        success: true,
+        data: {
+          mode: 'action_fast',
+          action: actionBody.action,
+          currentStep: 'complete',
+          metrics: { mode: 'action_fast', totalMs: 9, rounds: 0 },
+        },
+      });
+    }
+    return sendJson(response, { success: false, error: `unexpected ${request.method} ${request.url}` }, 404);
+  });
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'loom-vision-body-'));
+  await listen(server);
+  try {
+    const bodyPath = path.join(tmpDir, 'action.json');
+    await fs.writeFile(bodyPath, JSON.stringify({
+      action: 'tap',
+      gridCell: 'C7',
+      targetLabel: 'settings button',
+      reason: 'open settings',
+    }), 'utf8');
+    const port = server.address().port;
+    const result = await runVisionCli([
+      'action',
+      '--force-action',
+      '--fast-path',
+      'action_fast',
+      '--phone-url',
+      `http://127.0.0.1:${port}`,
+      '--phone-token',
+      'test-token',
+      '--action-body-file',
+      bodyPath,
+      '--json',
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.success, true);
+    assert.equal(actionBody.action, 'tap');
+    assert.equal(actionBody.gridCell, 'C7');
+  } finally {
+    await close(server);
+    await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -269,6 +367,42 @@ function runCli(args) {
       resolve({ code, stdout, stderr });
     });
   });
+}
+
+function runVisionCli(args) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['scripts/openclaw-phone-vision.mjs', ...args], {
+      cwd: new URL('..', import.meta.url),
+      env: {
+        ...process.env,
+        NO_COLOR: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('close', (code) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+async function unusedPort() {
+  const server = http.createServer();
+  await listen(server);
+  const port = server.address().port;
+  await close(server);
+  return port;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readBody(request) {

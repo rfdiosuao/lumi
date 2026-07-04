@@ -1,186 +1,108 @@
+import React from 'react';
 import {
-  ArrowRight,
+  Bot,
   CheckCircle2,
   Circle,
-  Cpu,
   ExternalLink,
-  Gauge,
-  Layers3,
-  Phone,
+  PlayCircle,
   RefreshCcw,
   Server,
-  Settings2,
   ShieldCheck,
-  Sparkles,
-  TriangleAlert,
+  UserRound,
+  Wrench,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { Button, Chip, EmptyState, InlineState, Panel, SectionHeader, StatTile } from '../components/ui';
-import { formatDateTime } from '../lib/format';
-import { loadDashboardSnapshot, startProcess, stopProcess } from '../api/adapters';
+import { Button, Chip, EmptyState, InlineState, Panel, StatTile, cx } from '../components/ui';
+import {
+  loadAccountSnapshot,
+  loadComponentsSnapshot,
+  loadDashboardSnapshot,
+  startProcess,
+  stopProcess,
+  type DashboardSnapshot,
+} from '../api/adapters';
 import { translateError } from '../lib/errors';
+import { formatDateTime } from '../lib/format';
 import { useAsync } from '../lib/useAsync';
-import { usePreviewStore } from '../store/appStore';
+import { usePreviewStore, type PreviewSettings } from '../store/appStore';
+import type { AccountSnapshot, ComponentSnapshot, ComponentSummary, StatusTone } from '../types';
 
-const nextStepCardStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 16,
-  flexWrap: 'wrap',
-} as const;
+const REQUIRED_AGENT_IDS = ['codex-desktop', 'claude-code', 'opencode', 'openclaw-companion', 'hermes'] as const;
+
+const AGENT_FALLBACK: Record<string, { name: string; description: string }> = {
+  'codex-desktop': { name: 'Codex', description: 'OpenAI 编程智能体' },
+  'claude-code': { name: 'Claude Code', description: 'Anthropic 命令行编程智能体' },
+  opencode: { name: 'opencode', description: '终端优先的 AI 编程工具' },
+  'openclaw-companion': { name: 'OpenClaw', description: 'OpenClaw 多智能体工作台' },
+  hermes: { name: 'Hermes', description: 'Hermes 智能体运行时' },
+};
+
+interface InstallerDashboardSnapshot extends DashboardSnapshot {
+  account: AccountSnapshot | null;
+  components: ComponentSnapshot | null;
+  accountError: string;
+  componentsError: string;
+}
+
+async function loadInstallerDashboard(settings: PreviewSettings): Promise<InstallerDashboardSnapshot> {
+  const [dashboard, account, components] = await Promise.all([
+    loadDashboardSnapshot(settings),
+    loadAccountSnapshot(settings)
+      .then((value) => ({ value, error: '' }))
+      .catch((error) => ({ value: null, error: String(error) })),
+    loadComponentsSnapshot(settings)
+      .then((value) => ({ value, error: '' }))
+      .catch((error) => ({ value: null, error: String(error) })),
+  ]);
+
+  return {
+    ...dashboard,
+    account: account.value,
+    components: components.value,
+    accountError: account.error,
+    componentsError: components.error,
+  };
+}
 
 export function DashboardPage() {
   const settings = usePreviewStore((state) => state.settings);
   const navigate = usePreviewStore((state) => state.navigate);
   const pushToast = usePreviewStore((state) => state.pushToast);
-  const { data, loading, error, refresh } = useAsync(() => loadDashboardSnapshot(settings), [settings]);
+  const { data, loading, error, refresh } = useAsync(() => loadInstallerDashboard(settings), [settings]);
 
   const service = data?.service;
+  const account = data?.account;
   const license = data?.license;
-  const diagnostics = data?.diagnostics;
-  const skills = data?.skills;
   const gateway = data?.gateway;
-  const enabledSkills = skills?.skills.filter((item) => item.enabled).length ?? 0;
-  const skillsMeta = skills?.skills.length ? `已启用 ${enabledSkills}` : '按需加载';
-  const startupStage = toCnState(service?.startupStage || '待命');
-  const environmentState = diagnostics?.summary.total ? toCnState(diagnostics.summary.status) : '按需检测';
-
-  const primaryTiles = [
-    {
-      icon: Gauge,
-      title: '启动核心服务',
-      desc: '运行时、日志与 CLI 先就绪。',
-      meta: service?.running ? '运行中' : '待启动',
-      tone: service?.running ? 'ok' : 'warn',
-      featured: true,
-      route: 'service' as const,
-    },
-    {
-      icon: Settings2,
-      title: '统一设置',
-      desc: '模型、图像、视频与桥接参数统一收纳。',
-      meta: gateway?.hasGateway ? '已配置' : '待配置',
-      tone: gateway?.hasGateway ? 'ok' : 'warn',
-      featured: true,
-      route: 'settings' as const,
-    },
-    {
-      icon: Cpu,
-      title: '桌面自动化',
-      desc: '托管 Luminode 桌面代理，统一处理截图、未读检测和受控回复。',
-      meta: 'Luminode',
-      tone: 'neutral' as const,
-      featured: true,
-      route: 'desktop' as const,
-    },
-    {
-      icon: Phone,
-      title: '手机控制台',
-      desc: '仅作 APKClaw 轻量桥接，不承担启动职责。',
-      meta: '辅助桥接',
-      tone: 'neutral' as const,
-      featured: true,
-      route: 'phone' as const,
-    },
-  ] as const;
-
-  const secondaryTiles = [
-    {
-      icon: Layers3,
-      title: 'Skills 工作区',
-      desc: '安装、启用和查看本地能力模块。',
-      meta: skillsMeta,
-      tone: 'ok' as const,
-      route: 'skills' as const,
-    },
-    {
-      icon: ShieldCheck,
-      title: '授权内测',
-      desc: '授权码、成员租约和邀请制内测入口。',
-      meta: license?.authorized ? displayEdition(license.edition) : '未授权',
-      tone: license?.authorized ? 'ok' : 'warn',
-      route: 'license' as const,
-    },
-    {
-      icon: TriangleAlert,
-      title: '环境检测',
-      desc: '检查启动前的运行环境与可修复项。',
-      meta: diagnostics?.summary.status || 'warn',
-      tone: diagnostics?.summary.status === 'ok' ? 'ok' : diagnostics?.summary.status === 'fail' ? 'danger' : 'warn',
-      route: 'diagnostics' as const,
-    },
-    {
-      icon: Sparkles,
-      title: '图像 / 视频',
-      desc: '图像与视频生成的密钥统一从设置读取。',
-      meta: '统一密钥',
-      tone: 'neutral' as const,
-      route: 'studio' as const,
-    },
-  ] as const;
-
-  const hasPhoneLink = Boolean(settings.phoneBaseUrl);
-
-  const setupSteps = [
-    { key: 'core', label: '启动核心', done: Boolean(service?.running) },
-    { key: 'gateway', label: '配置模型接口', done: Boolean(gateway?.hasGateway) },
-    { key: 'link', label: '连接手机（可选）', done: hasPhoneLink },
-  ] as const;
-
-  const nextStep = !service?.running
-    ? {
-        title: '先启动核心服务',
-        desc: '核心服务是其它功能运行的前提，先把它启动起来。',
-        actionLabel: '启动核心',
-        icon: Server,
-        onAction: () => handleStart(),
-      }
-    : !gateway?.hasGateway
-      ? {
-          title: '配置模型接口',
-          desc: '核心已运行，接下来去统一设置里填上模型接口参数。',
-          actionLabel: '前往设置',
-          icon: Settings2,
-          onAction: () => navigate('settings'),
-        }
-      : !license?.authorized
-        ? {
-            title: '完成授权',
-            desc: '核心与接口都已就绪，完成授权后即可解锁全部能力。',
-            actionLabel: '前往授权',
-            icon: ShieldCheck,
-            onAction: () => navigate('license'),
-          }
-        : {
-            title: '一切就绪，去图像/视频或手机工作区',
-            desc: '核心、接口与授权都已准备好，可以开始生成或连接手机了。',
-            actionLabel: '进入工作区',
-            icon: Sparkles,
-            onAction: () => navigate('studio'),
-          };
+  const diagnostics = data?.diagnostics;
+  const components = data?.components;
+  const agents = React.useMemo(() => requiredAgentRows(components), [components]);
+  const readyAgents = agents.filter((agent) => agent.status === 'ready').length;
+  const accountReady = Boolean(account?.loggedIn || license?.authorized || data?.member.status === 'active');
+  const agentsReady = agents.length > 0 && readyAgents === agents.length;
+  const coreReady = Boolean(service?.running);
+  const gatewayReady = Boolean(gateway?.hasGateway);
+  const modelCount = countModels(account);
+  const failedAgents = agents.filter((agent) => agent.status.endsWith('_failed'));
+  const activeStep = !accountReady ? 0 : !agentsReady ? 1 : !coreReady ? 2 : 3;
+  const overall = resolveOverallStatus({ loading, error, accountReady, agentsReady, coreReady, failedAgents: failedAgents.length });
+  const mainAction = resolveMainAction({
+    accountReady,
+    agentsReady,
+    coreReady,
+    navigate,
+    onStart: () => void handleStart(),
+    onOpenConsole: () => void handleOpenConsole(),
+  });
 
   const handleStart = async () => {
     try {
       await startProcess(settings);
-      pushToast({ tone: 'ok', title: '核心服务已启动', detail: '桥接端已接收启动指令。' });
+      pushToast({ tone: 'ok', title: '核心服务已启动', detail: 'OpenClaw 已接收启动指令。' });
       refresh();
     } catch (err) {
       const f = translateError(err);
       pushToast({ tone: 'danger', title: '启动失败', detail: f.hint, diagnostic: f.diagnostic, logRoute: f.logRoute });
-    }
-  };
-
-  // Open the OpenClaw web console in the system browser. Uses the shell plugin
-  // in the desktop app (so it opens the real browser, not the app webview) and
-  // falls back to window.open in the web preview.
-  const handleOpenConsole = async () => {
-    const url = 'http://127.0.0.1:18790';
-    try {
-      const { open } = await import('@tauri-apps/plugin-shell');
-      await open(url);
-    } catch {
-      window.open(url, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -195,183 +117,151 @@ export function DashboardPage() {
     }
   };
 
-  const NextStepIcon = nextStep.icon;
+  const handleOpenConsole = async () => {
+    const url = 'http://127.0.0.1:18790';
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(url);
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
 
   return (
-    <div className="page-grid page-grid-dashboard">
-      <section className="launcher-hero">
-        <div className="launcher-hero-copy">
-          <div className="eyebrow">OpenClaw 开源启动器</div>
-          <h1>满船清梦压星河，偷捧时间煮酒喝。</h1>
-          <p>先让核心服务稳定升空，再进入工作区处理 CLI、RPA、Skills 与生成任务。</p>
+    <div className="page-grid installer-page">
+      <section className="installer-hero">
+        <div className="installer-hero-copy">
+          <div className="eyebrow">OpenClaw Installer</div>
+          <h1>启动三方智能体</h1>
+          <p>安装 Codex、Claude Code、opencode、OpenClaw 与 Hermes，并把中转站模型配置同步到本机。</p>
           <div className="hero-mini-signals">
-            <Chip tone={service?.running ? 'ok' : 'warn'}>{service?.running ? '核心运行中' : '核心待启动'}</Chip>
-            <Chip tone={gateway?.hasGateway ? 'ok' : 'warn'}>{gateway?.hasGateway ? '接口已配置' : '需要设置接口'}</Chip>
+            <Chip tone={overall.tone}>{overall.label}</Chip>
+            <Chip tone={accountReady ? 'ok' : 'warn'}>{accountReady ? '账号就绪' : '可访客浏览'}</Chip>
+            <Chip tone={coreReady ? 'ok' : 'neutral'}>{coreReady ? '核心运行中' : '核心待启动'}</Chip>
           </div>
         </div>
-        <div className="launcher-hero-actions hero-action-card">
+        <Panel className="installer-hero-card">
           <div className="hero-action-label">当前状态</div>
-          <div className="hero-action-value">{service?.running ? '运行中' : '待启动'}</div>
-          <div className="hero-action-note">{service?.running ? `PID ${service?.pid ?? '未知'}` : startupStage || '准备启动'}</div>
+          <div className="hero-action-value">{overall.label}</div>
+          <div className="hero-action-note">{overall.note}</div>
           <div className="hero-action-buttons">
-            {service?.running ? (
-              <Button variant="danger" icon={Server} onClick={handleStop}>
+            <Button variant="primary" icon={mainAction.icon} onClick={mainAction.onClick} disabled={loading || Boolean(error)}>
+              {mainAction.label}
+            </Button>
+            {coreReady ? (
+              <Button variant="quiet" icon={Server} onClick={handleStop}>
                 停止核心
               </Button>
-            ) : (
-              <Button variant="success" icon={Server} onClick={handleStart}>
-                启动核心
-              </Button>
-            )}
-            <Button
-              variant="secondary"
-              icon={ExternalLink}
-              onClick={handleOpenConsole}
-              disabled={!service?.running}
-              title={service?.running ? '在浏览器打开 127.0.0.1:18790' : '启动核心后可打开'}
-            >
-              打开网页
-            </Button>
+            ) : null}
             <Button variant="quiet" icon={RefreshCcw} onClick={refresh}>
               刷新
             </Button>
           </div>
-        </div>
+        </Panel>
       </section>
 
-      {!loading && !error && data ? (
-        <section className="surface-panel" style={nextStepCardStyle}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flex: '1 1 320px', minWidth: 0 }}>
-            <span className="launcher-tile-icon" style={{ flexShrink: 0 }}>
-              <NextStepIcon size={18} />
-            </span>
-            <div style={{ minWidth: 0 }}>
-              <div className="eyebrow">推荐下一步</div>
-              <div style={{ fontSize: 16, fontWeight: 600, marginTop: 2 }}>{nextStep.title}</div>
-              <p style={{ margin: '4px 0 0', opacity: 0.75 }}>{nextStep.desc}</p>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {setupSteps.map((step, index) => (
-                <span key={step.key} className={`chip chip-${step.done ? 'ok' : 'neutral'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  {step.done ? <CheckCircle2 size={14} /> : <Circle size={14} />}
-                  {index + 1}. {step.label}{step.done ? '' : '（未完成）'}
-                </span>
-              ))}
-            </div>
-            <Button variant="primary" icon={nextStep.icon} onClick={nextStep.onAction}>
-              {nextStep.actionLabel}
-            </Button>
-          </div>
-        </section>
-      ) : null}
+      {error ? <InlineState tone="danger" title="安装器状态读取失败" description={error} /> : null}
+      {data?.componentsError ? <InlineState tone="warn" title="智能体目录不可用" description={data.componentsError} /> : null}
+      {data?.accountError ? <InlineState tone="warn" title="账号状态暂不可用" description={data.accountError} /> : null}
+
+      <section className="installer-flow-grid">
+        <InstallerStep
+          index={1}
+          title="登录账号"
+          description={accountReady ? accountLabel(account, license?.licensee) : '登录中转站后自动同步模型；也可以继续访客模式安装。'}
+          icon={UserRound}
+          done={accountReady}
+          active={activeStep === 0}
+          action={<Button variant="secondary" icon={ShieldCheck} onClick={() => navigate('license')}>账号 / 授权</Button>}
+        />
+        <InstallerStep
+          index={2}
+          title="安装智能体"
+          description={`${readyAgents}/${agents.length} 个已就绪`}
+          icon={Bot}
+          done={agentsReady}
+          active={activeStep === 1}
+          action={<Button variant="secondary" icon={Bot} onClick={() => navigate('agents')}>管理智能体</Button>}
+        />
+        <InstallerStep
+          index={3}
+          title="启动核心"
+          description={coreReady ? `PID ${service?.pid ?? '未知'}` : startupText(service?.startupStage)}
+          icon={Server}
+          done={coreReady}
+          active={activeStep === 2}
+          action={
+            coreReady
+              ? <Button variant="quiet" icon={Server} onClick={handleStop}>停止</Button>
+              : <Button variant="success" icon={PlayCircle} onClick={handleStart}>启动</Button>
+          }
+        />
+        <InstallerStep
+          index={4}
+          title="进入工作台"
+          description={coreReady ? '打开 OpenClaw Web 控制台。' : '核心启动后可进入工作台。'}
+          icon={ExternalLink}
+          done={accountReady && agentsReady && coreReady}
+          active={activeStep === 3}
+          action={<Button variant="secondary" icon={ExternalLink} onClick={handleOpenConsole} disabled={!coreReady}>打开</Button>}
+        />
+      </section>
 
       {loading ? (
-        <Panel className="panel-loading">正在读取启动器状态...</Panel>
-      ) : error ? (
-        <Panel className="panel-error">
-          <InlineState tone="danger" title="启动器状态读取失败" description={error} />
-        </Panel>
+        <Panel className="panel-loading">正在读取安装器状态...</Panel>
       ) : data ? (
         <>
-          <section className="stats-grid">
-            <StatTile
-              label="核心服务"
-              value={service?.running ? '运行中' : '待启动'}
-              hint={service?.running ? `PID ${service?.pid ?? '未知'}` : startupStage || '可以启动'}
-              tone={service?.running ? 'ok' : 'warn'}
-            />
-            <StatTile
-              label="授权内测"
-              value={license?.authorized ? '已授权' : '未授权'}
-              hint={license?.licensee || '需要授权码'}
-              tone={license?.authorized ? 'ok' : 'warn'}
-            />
-            <StatTile
-              label="模型接口"
-              value={gateway?.hasGateway ? '已配置' : '未配置'}
-              hint={gateway?.baseUrl || '进入统一设置'}
-              tone={gateway?.hasGateway ? 'ok' : 'warn'}
-            />
-            <StatTile
-              label="环境"
-              value={environmentState}
-              hint={diagnostics?.summary.total ? `${diagnostics.summary.ok}/${diagnostics.summary.total} 项通过` : '进入环境检测运行'}
-              tone={diagnostics?.summary.status === 'ok' ? 'ok' : diagnostics?.summary.status === 'warn' ? 'warn' : 'danger'}
-            />
+          <section className="stats-grid installer-status-grid">
+            <StatTile label="账号" value={accountReady ? '已接入' : '未登录'} hint={accountLabel(account, license?.licensee)} tone={accountReady ? 'ok' : 'warn'} />
+            <StatTile label="模型" value={modelCount ? `${modelCount} 个` : '未同步'} hint={gatewayReady ? gateway?.baseUrl : '登录后自动同步'} tone={modelCount || gatewayReady ? 'ok' : 'warn'} />
+            <StatTile label="智能体" value={`${readyAgents}/${agents.length}`} hint={failedAgents.length ? `${failedAgents.length} 个失败` : components?.manifest?.version || '等待目录'} tone={failedAgents.length ? 'danger' : agentsReady ? 'ok' : 'warn'} />
+            <StatTile label="环境" value={diagnostics?.summary.status === 'ok' ? '正常' : diagnostics?.summary.status === 'fail' ? '失败' : '待检查'} hint={diagnostics?.summary.total ? `${diagnostics.summary.ok}/${diagnostics.summary.total} 项通过` : '按需检测'} tone={diagnostics?.summary.status === 'ok' ? 'ok' : diagnostics?.summary.status === 'fail' ? 'danger' : 'warn'} />
           </section>
 
-          <section className="launch-stack">
-            <div className="launch-group">
-              <div className="launch-group-head">
-                <div className="eyebrow">主要入口</div>
-                <h2>首页只放最常用的入口。</h2>
-                <p>核心服务与统一设置放在前面，桌面 RPA 和手机控制台保持独立。</p>
-              </div>
-              <div className="launcher-grid launcher-grid-primary">
-                {primaryTiles.map((tile) => (
-                  <LauncherTile
-                    key={tile.title}
-                    icon={tile.icon}
-                    title={tile.title}
-                    desc={tile.desc}
-                    meta={tile.meta}
-                    tone={tile.tone}
-                    featured={tile.featured}
-                    onClick={() => navigate(tile.route)}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div className="launch-group launch-group-secondary">
-              <div className="launch-group-head">
-                <div className="eyebrow">能力区</div>
-                <h2>完整能力收纳在后方。</h2>
-                <p>Skills、授权、环境检测与图像视频都可进入，但不抢首页重心。</p>
-              </div>
-              <div className="launcher-grid launcher-grid-secondary">
-                {secondaryTiles.map((tile) => (
-                  <LauncherTile
-                    key={tile.title}
-                    icon={tile.icon}
-                    title={tile.title}
-                    desc={tile.desc}
-                    meta={tile.meta}
-                    tone={tile.tone}
-                    onClick={() => navigate(tile.route)}
-                  />
-                ))}
-              </div>
-            </div>
-          </section>
-
-          <section className="content-grid content-grid-dashboard-bottom">
+          <section className="content-grid installer-main-grid">
             <Panel className="surface-panel">
-              <SectionHeader eyebrow="CLI / 日志" title="运行摘要" subtitle="保留原来的日志与 CLI 入口，首页只展示最短摘要。" />
-              {data.recentLogs.length ? (
-                <div className="log-list">
-                  {data.recentLogs.map((line, index) => (
-                    <div key={index} className="log-line">
-                      {line}
-                    </div>
-                  ))}
+              <div className="installer-panel-head">
+                <div>
+                  <div className="eyebrow">Agents</div>
+                  <h2>智能体安装状态</h2>
                 </div>
-              ) : (
-                <EmptyState title="暂无日志" description="启动核心服务或刷新后，这里会显示最近输出。" />
-              )}
+                <Button variant="quiet" icon={Bot} onClick={() => navigate('agents')}>查看全部</Button>
+              </div>
+              <div className="installer-agent-list">
+                {agents.map((agent) => (
+                  <button key={agent.id} type="button" className="installer-agent-row" onClick={() => navigate('agents')}>
+                    <span className="installer-agent-mark">{agent.status === 'ready' ? <CheckCircle2 size={16} /> : <Circle size={16} />}</span>
+                    <span className="installer-agent-copy">
+                      <strong>{agent.name}</strong>
+                      <span>{agent.description || AGENT_FALLBACK[agent.id]?.description || agent.id}</span>
+                    </span>
+                    <Chip tone={componentTone(agent.status)}>{componentStatusLabel(agent.status)}</Chip>
+                  </button>
+                ))}
+              </div>
             </Panel>
 
             <Panel className="surface-panel">
-              <SectionHeader eyebrow="信号" title="状态摘要" subtitle="只保留判断启动与生成是否可用的关键信号。" />
+              <div className="installer-panel-head">
+                <div>
+                  <div className="eyebrow">Runtime</div>
+                  <h2>运行摘要</h2>
+                </div>
+                <Button variant="quiet" icon={Wrench} onClick={() => navigate('diagnostics')}>诊断</Button>
+              </div>
               <div className="detail-stack">
-                <div className="detail-row"><span className="detail-label">连接方式</span><span className="detail-value">{toCnState(service?.source || 'mock')}</span></div>
-                <div className="detail-row"><span className="detail-label">主题</span><span className="detail-value">{data.themeName}</span></div>
-                <div className="detail-row"><span className="detail-label">图像密钥</span><span className="detail-value">{gateway?.imageApiKeyMasked || '暂无'}</span></div>
-                <div className="detail-row"><span className="detail-label">视频密钥</span><span className="detail-value">{gateway?.videoApiKeyMasked || '暂无'}</span></div>
+                <div className="detail-row"><span className="detail-label">核心服务</span><span className="detail-value">{coreReady ? '运行中' : '未启动'}</span></div>
+                <div className="detail-row"><span className="detail-label">模型网关</span><span className="detail-value">{gatewayReady ? gateway?.baseUrl : '未配置'}</span></div>
+                <div className="detail-row"><span className="detail-label">文本模型</span><span className="detail-value">{account?.models.text[0] || gateway?.defaultModel || '未同步'}</span></div>
                 <div className="detail-row"><span className="detail-label">刷新时间</span><span className="detail-value">{formatDateTime(Date.now())}</span></div>
               </div>
+              {data.recentLogs.length ? (
+                <div className="log-list installer-log-list">
+                  {data.recentLogs.slice(-5).map((line, index) => <div key={index} className="log-line">{line}</div>)}
+                </div>
+              ) : (
+                <EmptyState title="暂无日志" description="启动核心或执行安装后会显示最近输出。" />
+              )}
             </Panel>
           </section>
         </>
@@ -380,54 +270,133 @@ export function DashboardPage() {
   );
 }
 
-function LauncherTile({
-  icon: Icon,
+function InstallerStep({
+  index,
   title,
-  desc,
-  meta,
-  tone,
-  featured = false,
-  onClick,
+  description,
+  icon: Icon,
+  done,
+  active,
+  action,
 }: {
-  icon: LucideIcon;
+  index: number;
   title: string;
-  desc: string;
-  meta: string;
-  tone: 'ok' | 'warn' | 'danger' | 'neutral';
-  featured?: boolean;
-  onClick: () => void;
+  description: React.ReactNode;
+  icon: LucideIcon;
+  done: boolean;
+  active: boolean;
+  action: React.ReactNode;
 }) {
   return (
-    <button type="button" className={`launcher-tile ${featured ? 'launcher-tile-featured' : ''}`} onClick={onClick}>
-      <span className="launcher-tile-icon"><Icon size={18} /></span>
-      <span className="launcher-tile-copy">
-        <span className="launcher-tile-title">{title}</span>
-        <span className="launcher-tile-desc">{desc}</span>
-      </span>
-      <span className={`launcher-tile-meta chip chip-${tone}`}>{toCnState(meta)}</span>
-      <ArrowRight size={16} />
-    </button>
+    <Panel className={cx('installer-step-card', active && 'installer-step-active', done && 'installer-step-done')}>
+      <div className="installer-step-index">{done ? <CheckCircle2 size={18} /> : index}</div>
+      <div className="installer-step-body">
+        <div className="installer-step-title"><Icon size={17} /> {title}</div>
+        <div className="installer-step-desc">{description}</div>
+      </div>
+      <div className="installer-step-action">{action}</div>
+    </Panel>
   );
 }
 
-function toCnState(value: string) {
-  const lower = String(value || '').toLowerCase();
-  const map: Record<string, string> = {
-    idle: '待命',
-    warn: '警告',
-    ok: '正常',
-    fail: '失败',
-    running: '运行中',
-    stopped: '已停止',
-    mock: '预览',
-    live: '已连接',
-  };
-  return map[lower] || value;
+function requiredAgentRows(components: ComponentSnapshot | null | undefined): ComponentSummary[] {
+  const byId = new Map((components?.components || []).map((item) => [item.id, item]));
+  return REQUIRED_AGENT_IDS.map((id) => {
+    const component = byId.get(id);
+    if (component) return component;
+    const fallback = AGENT_FALLBACK[id];
+    return {
+      id,
+      name: fallback?.name || id,
+      version: '-',
+      installedVersion: null,
+      previousVersion: null,
+      status: 'not_installed',
+      platform: 'windows',
+      arch: 'x64',
+      type: 'installer',
+      size: 0,
+      entry: null,
+      installPath: '',
+      category: 'agent',
+      officialUrl: '',
+      description: fallback?.description || '',
+      urls: [],
+      updatedAt: null,
+      errorCode: null,
+      errorMessage: null,
+    };
+  });
 }
 
-function displayEdition(value?: string) {
-  if (!value) return '已授权';
-  if (value === 'Pro') return '专业版';
-  if (value === 'Free') return '免费版';
-  return value;
+function countModels(account: AccountSnapshot | null | undefined): number {
+  if (!account?.models) return 0;
+  return account.models.text.length + account.models.image.length + account.models.video.length;
+}
+
+function accountLabel(account: AccountSnapshot | null | undefined, licensee?: string): string {
+  if (account?.loggedIn) return account.account || account.memberId || '中转站账号';
+  if (licensee) return licensee;
+  return '访客模式';
+}
+
+function startupText(stage?: string): string {
+  if (!stage || stage === 'idle') return '等待启动';
+  if (stage === 'running') return '启动中';
+  return stage;
+}
+
+function componentTone(status: string): Exclude<StatusTone, 'busy'> | 'neutral' {
+  if (status === 'ready') return 'ok';
+  if (status.endsWith('_failed')) return 'danger';
+  if (status === 'not_installed') return 'warn';
+  return 'neutral';
+}
+
+function componentStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    ready: '已就绪',
+    not_installed: '未安装',
+    downloading: '下载中',
+    verifying: '校验中',
+    extracting: '安装中',
+    configuring: '配置中',
+    health_checking: '检测中',
+    rollback_available: '可回滚',
+    download_failed: '下载失败',
+    verify_failed: '校验失败',
+    extract_failed: '安装失败',
+  };
+  return labels[status] || status;
+}
+
+function resolveOverallStatus(input: {
+  loading: boolean;
+  error: string | null | undefined;
+  accountReady: boolean;
+  agentsReady: boolean;
+  coreReady: boolean;
+  failedAgents: number;
+}): { label: string; note: string; tone: Exclude<StatusTone, 'busy'> | 'neutral' } {
+  if (input.loading) return { label: '读取中', note: '正在读取本机状态。', tone: 'neutral' };
+  if (input.error) return { label: '桥接异常', note: '本机桥接不可用，先查看诊断。', tone: 'danger' };
+  if (!input.accountReady) return { label: '待登录', note: '登录后会自动同步模型，也可以访客安装。', tone: 'warn' };
+  if (input.failedAgents) return { label: '安装失败', note: `${input.failedAgents} 个智能体需要处理。`, tone: 'danger' };
+  if (!input.agentsReady) return { label: '待安装', note: '先安装需要的智能体组件。', tone: 'warn' };
+  if (!input.coreReady) return { label: '待启动', note: '组件和账号已就绪，启动核心即可使用。', tone: 'warn' };
+  return { label: '已就绪', note: '可以进入 OpenClaw 工作台。', tone: 'ok' };
+}
+
+function resolveMainAction(input: {
+  accountReady: boolean;
+  agentsReady: boolean;
+  coreReady: boolean;
+  navigate: (route: any) => void;
+  onStart: () => void;
+  onOpenConsole: () => void;
+}): { label: string; icon: LucideIcon; onClick: () => void } {
+  if (!input.accountReady) return { label: '登录账号', icon: ShieldCheck, onClick: () => input.navigate('license') };
+  if (!input.agentsReady) return { label: '安装智能体', icon: Bot, onClick: () => input.navigate('agents') };
+  if (!input.coreReady) return { label: '启动核心', icon: PlayCircle, onClick: input.onStart };
+  return { label: '打开工作台', icon: ExternalLink, onClick: input.onOpenConsole };
 }

@@ -7,6 +7,7 @@ import unittest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REGISTRY_FILE = os.path.join(REPO_ROOT, "src", "features", "registry.ts")
 MATRIX_PAGE = os.path.join(REPO_ROOT, "src", "components", "matrix", "MatrixWorkbenchPage.tsx")
+CAPABILITIES_PAGE = os.path.join(REPO_ROOT, "src", "components", "capabilities", "CapabilityCenterPage.tsx")
 
 
 class UiNavigationContractTests(unittest.TestCase):
@@ -14,12 +15,12 @@ class UiNavigationContractTests(unittest.TestCase):
         with open(REGISTRY_FILE, "r", encoding="utf-8") as handle:
             source = handle.read()
 
-        for key in ("creative", "workbench", "agentAccess", "capabilities"):
+        for key in ("creative", "workbench", "capabilities"):
             self.assertRegex(source, rf"key:\s*'{key}'[\s\S]+?requiresLicense:\s*true")
         self.assertRegex(source, r"key:\s*'phone'[\s\S]+?visible:\s*HIDDEN")
+        self.assertRegex(source, r"key:\s*'agentAccess'[\s\S]+?visible:\s*HIDDEN")
         self.assertNotRegex(source, r"key:\s*'creative'[\s\S]+?visible:\s*false")
         self.assertNotRegex(source, r"key:\s*'workbench'[\s\S]+?visible:\s*false")
-        self.assertNotRegex(source, r"key:\s*'agentAccess'[\s\S]+?visible:\s*false")
         self.assertNotRegex(source, r"key:\s*'capabilities'[\s\S]+?visible:\s*false")
 
     def test_matrix_workbench_uses_real_backend_data_without_demo_fallback(self) -> None:
@@ -35,6 +36,19 @@ class UiNavigationContractTests(unittest.TestCase):
         self.assertNotIn("FALLBACK_EVENTS", source)
         self.assertNotIn("matrixDemoMode", source)
         self.assertNotIn("success: 128", source)
+
+    def test_other_page_only_lists_unopened_capabilities(self) -> None:
+        with open(CAPABILITIES_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("桌面 RPA", source)
+        self.assertIn("平台发布", source)
+        self.assertIn("任务库 / 定时任务", source)
+        self.assertIn("主题配置", source)
+        self.assertNotIn("图片生成", source)
+        self.assertNotIn("视频生成", source)
+        self.assertNotIn("CLI 自动化", source)
+        self.assertNotIn("Agent 接入", source)
 
 
 if __name__ == "__main__":

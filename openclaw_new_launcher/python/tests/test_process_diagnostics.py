@@ -140,6 +140,124 @@ class MinimalDiagnosticProcessService(OpenClawProcessService):
 
 
 class ProcessDiagnosticsRepairTests(unittest.TestCase):
+    def test_phone_adb_doctor_reports_missing_adb_with_repair_instructions(self) -> None:
+        import services.process as process_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TestableProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+
+            original_which = process_module.shutil.which
+            process_module.shutil.which = lambda name: None if name in {"adb", "adb.exe"} else original_which(name)
+            try:
+                result = service.phone_adb_doctor()
+            finally:
+                process_module.shutil.which = original_which
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "missing_adb")
+        self.assertIn("platform-tools", " ".join(result["instructions"]))
+
+    def test_phone_adb_doctor_wakes_and_launches_apkclaw_when_device_is_ready(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_runner(command: list[str], _timeout_sec: int) -> FakeCompletedProcess:
+            calls.append(command)
+            if command[1:] == ["devices", "-l"]:
+                return FakeCompletedProcess(returncode=0, stdout="List of devices attached\nemulator-5554\tdevice product:sdk\n")
+            return FakeCompletedProcess(returncode=0, stdout="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            adb_dir = os.path.join(temp_dir, "platform-tools")
+            os.makedirs(adb_dir)
+            adb_path = os.path.join(adb_dir, "adb.exe")
+            with open(adb_path, "wb") as file:
+                file.write(b"fake adb")
+
+            service = TestableProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=fake_runner,
+            )
+
+            result = service.phone_adb_doctor(serial="emulator-5554")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "ready")
+        flattened = [" ".join(command) for command in calls]
+        self.assertTrue(any("KEYCODE_WAKEUP" in command for command in flattened))
+        self.assertTrue(any("KEYCODE_HOME" in command for command in flattened))
+        self.assertTrue(any("monkey -p com.apk.claw.android" in command for command in flattened))
+
+    def test_phone_adb_doctor_does_not_fallback_to_wrong_device_when_serial_is_missing(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_runner(command: list[str], _timeout_sec: int) -> FakeCompletedProcess:
+            calls.append(command)
+            if command[1:] == ["devices", "-l"]:
+                return FakeCompletedProcess(returncode=0, stdout="List of devices attached\nphone-a\tdevice product:test\n")
+            return FakeCompletedProcess(returncode=0, stdout="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            adb_dir = os.path.join(temp_dir, "platform-tools")
+            os.makedirs(adb_dir)
+            with open(os.path.join(adb_dir, "adb.exe"), "wb") as file:
+                file.write(b"fake adb")
+
+            service = TestableProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=fake_runner,
+            )
+
+            result = service.phone_adb_doctor(serial="phone-b")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "device_not_found")
+        flattened = [" ".join(command) for command in calls]
+        self.assertFalse(any("KEYCODE_WAKEUP" in command for command in flattened))
+        self.assertFalse(any("monkey -p" in command for command in flattened))
+
+    def test_phone_adb_doctor_requires_serial_when_multiple_devices_exist(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_runner(command: list[str], _timeout_sec: int) -> FakeCompletedProcess:
+            calls.append(command)
+            if command[1:] == ["devices", "-l"]:
+                return FakeCompletedProcess(
+                    returncode=0,
+                    stdout="List of devices attached\nphone-a\tdevice product:test\nphone-b\tdevice product:test\n",
+                )
+            return FakeCompletedProcess(returncode=0, stdout="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            adb_dir = os.path.join(temp_dir, "platform-tools")
+            os.makedirs(adb_dir)
+            with open(os.path.join(adb_dir, "adb.exe"), "wb") as file:
+                file.write(b"fake adb")
+
+            service = TestableProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=fake_runner,
+            )
+
+            result = service.phone_adb_doctor()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "multiple_devices")
+        self.assertEqual([device["serial"] for device in result["devices"]], ["phone-a", "phone-b"])
+        flattened = [" ".join(command) for command in calls]
+        self.assertFalse(any("KEYCODE_WAKEUP" in command for command in flattened))
+        self.assertFalse(any("monkey -p" in command for command in flattened))
+
     def test_diagnostics_use_system_node_and_npm_as_prerequisite_fallback(self) -> None:
         import services.process as process_module
 

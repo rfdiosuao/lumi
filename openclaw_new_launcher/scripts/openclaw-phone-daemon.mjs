@@ -10,6 +10,7 @@ import {
   isAuthorized,
   readRuntimeState,
 } from './lib/phone-daemon/runtime-auth.mjs';
+import { phoneBridgeErrorPayload } from './openclaw-phone-secure.mjs';
 
 const sessions = new Map();
 const DEFAULT_MAX_ROUNDS_BY_MODE = {
@@ -191,9 +192,10 @@ function writeNdjson(response, payload) {
 }
 
 function safeErrorPayload(error, fallback = 'daemon_error') {
+  const payload = phoneBridgeErrorPayload(error || new Error(fallback), {}, fallback);
   return {
-    ok: false,
-    error: error?.code || error?.message || String(error || fallback) || fallback,
+    ...payload,
+    error: payload.error || fallback,
   };
 }
 

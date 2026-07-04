@@ -4,6 +4,7 @@ import type {
   GatewaySnapshot,
   ImageResult,
   AccountSnapshot,
+  ComponentSnapshot,
   LicenseSnapshot,
   MemberSnapshot,
   PromptTemplate,
@@ -358,6 +359,15 @@ function normalizeAccountSnapshot(raw: any): AccountSnapshot {
     usage: account.usage && typeof account.usage === 'object' ? account.usage : {},
     lastOnlineAt: pickText(account.lastOnlineAt, ''),
     graceExpiresAt: pickText(account.graceExpiresAt, ''),
+    offline: Boolean(account.offline),
+    stale: Boolean(account.stale),
+    lastSyncResults: Array.isArray(account.lastSyncResults)
+      ? account.lastSyncResults.map((item: any) => ({
+          target: pickText(item.target, ''),
+          ok: Boolean(item.ok),
+          error: pickText(item.error, ''),
+        }))
+      : [],
   };
 }
 
@@ -832,6 +842,39 @@ export async function uninstallSkill(settings: PreviewSettings, id: string) {
 
 export async function readSkillReadme(settings: PreviewSettings, id: string) {
   return requestBridgeData(settings, '/api/skills/readme', 'POST', { id });
+}
+
+export async function loadComponentsSnapshot(settings: PreviewSettings): Promise<ComponentSnapshot> {
+  const response = await requestBridgeData<Omit<ComponentSnapshot, 'source'>>(settings, '/api/components/status');
+  return { ...response.data, source: response.source };
+}
+
+export async function installComponent(settings: PreviewSettings, componentId: string): Promise<ComponentSnapshot> {
+  const response = await requestBridgeData<{ jobId?: string; job?: BridgeJob<any>; catalog?: Omit<ComponentSnapshot, 'source'> }>(
+    settings,
+    '/api/components/install',
+    'POST',
+    { componentId },
+  );
+  const jobId = pickText(response.data?.jobId, response.data?.job?.id);
+  if (jobId) {
+    const result = await waitForBridgeJob<{ catalog?: Omit<ComponentSnapshot, 'source'> }>(settings, jobId, 60 * 60 * 1000);
+    return {
+      ...(result.data?.catalog || response.data.catalog || { manifest: null, components: [], error: 'install_response_missing_catalog' }),
+      source: mergeSource(response.source, result.source),
+    };
+  }
+  return { ...(response.data.catalog || { manifest: null, components: [], error: 'install_response_missing_catalog' }), source: response.source };
+}
+
+export async function rollbackComponent(settings: PreviewSettings, componentId: string): Promise<ComponentSnapshot> {
+  const response = await requestBridgeData<{ catalog?: Omit<ComponentSnapshot, 'source'> }>(
+    settings,
+    '/api/components/rollback',
+    'POST',
+    { componentId },
+  );
+  return { ...(response.data.catalog || { manifest: null, components: [], error: 'rollback_response_missing_catalog' }), source: response.source };
 }
 
 export async function loadDiagnosticsSnapshot(settings: PreviewSettings): Promise<DiagnosticsSnapshot> {

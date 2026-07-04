@@ -211,7 +211,7 @@ class WireServiceTests(unittest.TestCase):
 
             claude_config = json.loads(claude_text)
             self.assertEqual(claude_config["env"]["ANTHROPIC_MODEL"], "qwen3.7-plus")
-            self.assertEqual(claude_config["env"]["ANTHROPIC_BASE_URL"], "https://api.heang.top/v1")
+            self.assertEqual(claude_config["env"]["ANTHROPIC_BASE_URL"], "https://api.heang.top")
             self.assertEqual(claude_config["env"]["ANTHROPIC_AUTH_TOKEN"], "{env:LOOM_CLAUDE_API_KEY}")
             self.assertEqual(claude_config["env"]["ANTHROPIC_API_KEY"], "{env:LOOM_CLAUDE_API_KEY}")
             self.assertNotIn(secret, claude_text)
@@ -286,6 +286,33 @@ class WireServiceTests(unittest.TestCase):
             self.assertIn(("LOOM_OPENCODE_API_KEY", secret), calls)
             self.assertIn(("LOOM_CODEX_API_KEY", secret), calls)
             self.assertIn(("LOOM_CLAUDE_API_KEY", secret), calls)
+
+    def test_agent_model_sync_clears_stale_model_env_without_deleting_api_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            stale_env = {
+                "OPENAI_MODEL": "agnes-2.0-flash",
+                "ANTHROPIC_MODEL": "agnes-2.0-flash",
+                "OPENAI_API_KEY": "sk-user-key-should-stay",
+            }
+
+            with (
+                mock.patch.dict(os.environ, stale_env, clear=False),
+                mock.patch("core.wire_config._should_persist_user_env", return_value=True),
+                mock.patch("core.wire_config._delete_user_env_var") as delete_env,
+                mock.patch("core.wire_config._write_user_env_var"),
+            ):
+                service.sync_from_session(session_snapshot(), targets=("codex", "claude", "opencode"))
+
+                self.assertNotIn("OPENAI_MODEL", os.environ)
+                self.assertNotIn("ANTHROPIC_MODEL", os.environ)
+                self.assertEqual(os.environ["OPENAI_API_KEY"], "sk-user-key-should-stay")
+
+            deleted_names = {call.args[0] for call in delete_env.call_args_list}
+            self.assertIn("OPENAI_MODEL", deleted_names)
+            self.assertIn("ANTHROPIC_MODEL", deleted_names)
+            self.assertNotIn("OPENAI_API_KEY", deleted_names)
 
     def test_openclaw_agent_model_config_writes_managed_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -435,7 +462,7 @@ class WireServiceTests(unittest.TestCase):
 
             public_wire = result["wire"]
             self.assertEqual(public_wire["models"]["text"], "claude-3-5-sonnet")
-            self.assertEqual(public_wire["models"]["phone"], "agnes-2.0-flash")
+            self.assertEqual(public_wire["models"]["phone"], "qwen3.7-plus")
 
             with open(os.path.join(paths.data_dir, ".codex", "config.toml"), "r", encoding="utf-8") as handle:
                 codex_text = handle.read()
@@ -445,8 +472,10 @@ class WireServiceTests(unittest.TestCase):
 
             self.assertIn('model = "claude-3-5-sonnet"', codex_text)
             self.assertNotIn('model = "agnes-2.0-flash"', codex_text)
-            self.assertEqual(json.loads(claude_text)["env"]["ANTHROPIC_MODEL"], "claude-3-5-sonnet")
-            self.assertEqual(phone_config["llm"]["model"], "agnes-2.0-flash")
+            claude_env = json.loads(claude_text)["env"]
+            self.assertEqual(claude_env["ANTHROPIC_MODEL"], "claude-3-5-sonnet")
+            self.assertEqual(claude_env["ANTHROPIC_BASE_URL"], "https://third.example")
+            self.assertEqual(phone_config["llm"]["model"], "qwen3.7-plus")
 
     def test_codex_model_config_rejects_phone_agent_model(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -456,6 +485,21 @@ class WireServiceTests(unittest.TestCase):
 
             with self.assertRaises(WireConfigError):
                 service.sync_agent_model_config("codex-desktop", model="agnes-2.0-flash")
+
+    def test_custom_provider_rejects_non_text_models_as_desktop_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = WireService(AppPaths(temp_dir))
+
+            for invalid_model in ("agnes-2.0-flash", "agnes-image-2.1-flash", "agnes-video-v2.0"):
+                with self.subTest(model=invalid_model):
+                    with self.assertRaises(WireConfigError):
+                        service.sync_custom_provider(
+                            provider="custom",
+                            base_url="https://third.example/v1",
+                            api_key="sk-test-token-not-real",
+                            text_model=invalid_model,
+                            targets=("codex",),
+                        )
 
     def test_codex_status_detects_user_config_model_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -479,6 +523,31 @@ class WireServiceTests(unittest.TestCase):
             self.assertEqual(status["status"], "unconfigured")
             self.assertEqual(status["expectedModel"], "qwen3.7-plus")
             self.assertEqual(status["actualModel"], "gpt-5.5")
+
+    def test_codex_status_flags_phone_model_in_user_config_as_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            service.sync_from_session(session_snapshot())
+            user_codex_config = os.path.join(paths.data_dir, ".codex-user", "config.toml")
+            with open(user_codex_config, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(
+                    "\n".join([
+                        "# stale bad model written by older LOOM builds",
+                        'model = "agnes-2.0-flash"',
+                        'model_provider = "heang"',
+                        "",
+                    ])
+                )
+
+            status = service.agent_model_config_status("codex-desktop")
+
+            self.assertFalse(status["configured"])
+            self.assertEqual(status["status"], "unconfigured")
+            self.assertEqual(status["expectedModel"], "qwen3.7-plus")
+            self.assertEqual(status["actualModel"], "agnes-2.0-flash")
+            self.assertEqual(status["invalidModel"], "agnes-2.0-flash")
+            self.assertIn("桌面 Agent", status["message"])
 
     def test_openclaw_model_sync_rejects_phone_only_model_list(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

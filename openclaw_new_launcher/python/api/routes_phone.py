@@ -2740,6 +2740,26 @@ def register_phone_routes(app, ctx) -> None:
             step_timeout_sec=_PHONE_DIRECT_STEP_TIMEOUT_SEC,
         )
 
+    @app.post("/api/phone/adb-doctor")
+    async def phone_adb_doctor(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        if not _phone_bool(body.get("confirmed")):
+            return ctx.fastapi_json({"error": "ADB 修复需要明确确认"}, 403)
+        wake = True if "wake" not in body else _phone_bool(body.get("wake"))
+        launch = True if "launch" not in body else _phone_bool(body.get("launch"))
+        restart_server = True if "restartServer" not in body and "restart_server" not in body else _phone_bool(
+            body.get("restartServer", body.get("restart_server"))
+        )
+        result = ctx.get_process_svc().phone_adb_doctor(
+            serial=_clip(body.get("serial") or body.get("deviceId") or body.get("device_id"), 120),
+            wake=wake,
+            launch=launch,
+            restart_server=restart_server,
+        )
+        return ctx.fastapi_json(result)
+
     @app.post("/api/phone/events/start")
     async def phone_events_start(request: Request):
         if error := ctx.auth_error(request):

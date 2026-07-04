@@ -281,28 +281,49 @@ export const BusyOverlay: React.FC<{
   active: boolean;
   title?: string;
   detail?: string;
+  mode?: 'blocking' | 'corner';
 }> = ({
   active,
   title = '正在处理',
   detail = '请稍候，LOOM 正在完成当前操作。',
+  mode = 'blocking',
 }) => {
   if (!active) return null;
 
+  const isCorner = mode === 'corner';
   const overlay = (
     <div
       data-busy-overlay
+      data-busy-overlay-mode={mode}
       role="status"
       aria-live="polite"
-      className="pointer-events-auto fixed inset-0 z-[99940] flex items-center justify-center bg-[#071916]/64 px-6"
+      className={
+        isCorner
+          ? 'pointer-events-none fixed left-[calc(var(--sidebar-width,88px)+16px)] top-4 z-[99940] flex max-w-[min(360px,calc(100vw-2rem))] items-start'
+          : 'pointer-events-auto fixed inset-0 z-[99940] flex items-center justify-center bg-[#071916]/64 px-6'
+      }
     >
-      <div
-        data-busy-overlay-card
-        className="flex min-w-[260px] max-w-[360px] max-h-[min(80vh,420px)] flex-col items-center overflow-auto rounded-[18px] border border-[#0B4A3E]/18 bg-surface/98 px-6 py-5 text-center shadow-[0_24px_72px_rgba(5,35,29,0.22)]"
-      >
-        <span className="loom-busy-ring" aria-hidden="true" />
-        <div className="mt-4 text-base font-black text-text">{title}</div>
-        {detail ? <div className="mt-1 max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-text-muted">{detail}</div> : null}
-      </div>
+      {isCorner ? (
+        <div
+          data-busy-overlay-corner-card
+          className="pointer-events-none flex min-w-[220px] items-center gap-3 rounded-[14px] border border-[#0B4A3E]/18 bg-surface/95 px-4 py-3 text-left shadow-[0_14px_34px_rgba(5,35,29,0.16)]"
+        >
+          <span className="loom-busy-ring shrink-0" aria-hidden="true" />
+          <div className="min-w-0">
+            <div className="truncate text-sm font-black text-text">{title}</div>
+            {detail ? <div className="mt-0.5 max-w-full truncate text-xs leading-5 text-text-muted">{detail}</div> : null}
+          </div>
+        </div>
+      ) : (
+        <div
+          data-busy-overlay-card
+          className="flex min-w-[260px] max-w-[360px] max-h-[min(80vh,420px)] flex-col items-center overflow-auto rounded-[18px] border border-[#0B4A3E]/18 bg-surface/98 px-6 py-5 text-center shadow-[0_24px_72px_rgba(5,35,29,0.22)]"
+        >
+          <span className="loom-busy-ring" aria-hidden="true" />
+          <div className="mt-4 text-base font-black text-text">{title}</div>
+          {detail ? <div className="mt-1 max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-text-muted">{detail}</div> : null}
+        </div>
+      )}
     </div>
   );
 

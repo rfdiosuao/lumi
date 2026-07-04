@@ -37,6 +37,7 @@ def register_account_routes(app, ctx) -> None:
             return ctx.fastapi_json({
                 "account": ctx.get_newapi_account_mgr().public_session(),
                 "member": session,
+                "syncResults": session.get("lastSyncResults") if isinstance(session.get("lastSyncResults"), list) else [],
             })
         except NewApiAccountError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)
@@ -60,6 +61,7 @@ def register_account_routes(app, ctx) -> None:
             return ctx.fastapi_json({
                 "account": ctx.get_newapi_account_mgr().public_session(),
                 "member": session,
+                "syncResults": session.get("lastSyncResults") if isinstance(session.get("lastSyncResults"), list) else [],
             })
         except NewApiAccountError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)
@@ -70,10 +72,17 @@ def register_account_routes(app, ctx) -> None:
             return error
         try:
             session = ctx.get_newapi_account_mgr().refresh_current()
-            ctx.sync_openclaw_models_from_api_profiles()
+            openclaw_sync = {"target": "openclaw", "ok": True}
+            try:
+                ctx.sync_openclaw_models_from_api_profiles()
+            except Exception as sync_error:
+                openclaw_sync = {"target": "openclaw", "ok": False, "error": str(sync_error)}
+                ctx.append_log(f"[Account] OpenClaw model sync failed during account sync: {sync_error}\n")
+            sync_results = session.get("lastSyncResults") if isinstance(session.get("lastSyncResults"), list) else []
             return ctx.fastapi_json({
                 "account": ctx.get_newapi_account_mgr().public_session(),
                 "member": session,
+                "syncResults": [*sync_results, openclaw_sync],
             })
         except NewApiAccountError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)

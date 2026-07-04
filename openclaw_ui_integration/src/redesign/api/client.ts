@@ -77,6 +77,7 @@ const LUMI_SIGNATURE_HEADER = 'X-LUMI-SIGNATURE';
 const LUMI_BODY_SHA256_HEADER = 'X-LUMI-BODY-SHA256';
 const LUMI_PAIRING_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_PHONE_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 90_000;
 const LUMI_SIGNATURE_REPAIR_ATTEMPTS = 2;
 
 export interface PhoneRequestOptions {
@@ -137,11 +138,15 @@ export async function bridgeRequest<T = unknown>(
   if (isTauriRuntime()) {
     try {
       const invoke = await getTauriInvoke();
-      const payload = await invoke<string>('proxy_request', {
-        path,
-        method,
-        body: body ? JSON.stringify(body) : null,
-      });
+      const payload = await withTimeout(
+        invoke<string>('proxy_request', {
+          path,
+          method,
+          body: body ? JSON.stringify(body) : null,
+        }),
+        DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS,
+        'bridge_request_timeout',
+      );
       const parsed = parseJson(String(payload));
       throwIfBridgeError(parsed);
       return parsed as T;
@@ -155,14 +160,17 @@ export async function bridgeRequest<T = unknown>(
   }
 
   const url = `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS);
   const response = await fetch(url, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { 'X-Bridge-Token': token } : {}),
     },
+    signal: controller.signal,
     body: body ? JSON.stringify(body) : undefined,
-  });
+  }).finally(() => window.clearTimeout(timeout));
 
   const payload = parseJson(await response.text());
   if (!response.ok) {
@@ -171,6 +179,18 @@ export async function bridgeRequest<T = unknown>(
   }
   throwIfBridgeError(payload);
   return payload as T;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: number | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) window.clearTimeout(timer);
+  });
 }
 
 export async function phoneRequest<T = unknown>(

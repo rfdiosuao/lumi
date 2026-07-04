@@ -11,6 +11,7 @@ import type {
   DiagnosticStatus,
 } from '../../services/loomContracts';
 import { loadCachedPreflight, preflightCacheUsable, saveCachedPreflight } from '../../services/startupCache';
+import { buildMcpJson, buildOneShotAgentPrompt } from '../agentAccess/AgentAccessPage';
 import { BusyOverlay, Button, Input, Select, showConfirm, showToast } from '../common';
 import { AgentLogo } from './AgentLogo';
 
@@ -34,6 +35,39 @@ const PREREQ_IDS = ['python_runtime', 'node', 'npm', 'git', 'git_bash', 'uv', 'w
 const MODEL_CONFIG_COMPONENT_IDS = new Set(['codex-desktop', 'claude-code', 'openclaw-companion']);
 const INSTALL_LOG_VISIBLE_LIMIT = 6;
 const OPENCLAW_WEB_URL = 'http://127.0.0.1:18790';
+
+type CustomProviderOption = {
+  id: string;
+  label: string;
+  baseUrl: string;
+};
+
+const CUSTOM_PROVIDER_OPTIONS: CustomProviderOption[] = [
+  { id: 'custom', label: '自定义...', baseUrl: '' },
+  { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1' },
+  { id: 'anthropic', label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1' },
+  { id: 'gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+  { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1' },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1' },
+  { id: 'moonshot', label: 'Moonshot - Kimi', baseUrl: 'https://api.moonshot.cn/v1' },
+];
+
+type AgentCustomProviderDraft = {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+};
+
+function providerOptionById(id: string): CustomProviderOption {
+  return CUSTOM_PROVIDER_OPTIONS.find((option) => option.id === id) || CUSTOM_PROVIDER_OPTIONS[0];
+}
+
+function providerIdForLabel(label?: string): string {
+  const normalized = (label || '').trim().toLowerCase();
+  if (!normalized) return 'custom';
+  return CUSTOM_PROVIDER_OPTIONS.find((option) => option.label.toLowerCase() === normalized)?.id || 'custom';
+}
 
 type InstallLogEntry = {
   id: string;
@@ -430,19 +464,19 @@ const CompactPrerequisitePanel: React.FC<{
       : allReady ? '可以继续安装和启动智能体。' : '缺失项会优先处理，详情可展开查看。';
 
   return (
-    <section className="px-6 py-5">
-      <div className="rounded-[18px] border border-border/80 bg-surface/70 p-5 shadow-[0_18px_48px_rgba(8,35,48,0.06)]">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+    <section className="px-6 py-3">
+      <div className="rounded-[14px] border border-border/80 bg-surface/70 p-4 shadow-[0_12px_30px_rgba(8,35,48,0.05)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] ${
+            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] ${
               allReady ? 'bg-status-success/12 text-status-success' : busy ? 'bg-[#0B4A3E]/10 text-[#0B4A3E]' : 'bg-surface-alt text-text-muted'
             }`}>
               {busy ? <ActivityRing /> : <span className="text-lg font-black">{allReady ? '✓' : '•'}</span>}
             </div>
             <div className="min-w-0">
               <div className="text-[10px] font-black tracking-[0.22em] text-text-subtle">前置环境</div>
-              <h2 className="mt-0.5 text-xl font-black text-text">{title}</h2>
-              <p className="mt-1 text-sm text-text-muted">{subtitle}</p>
+              <h2 className="mt-0.5 text-lg font-black text-text">{title}</h2>
+              <p className="mt-1 text-xs text-text-muted">{subtitle}</p>
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-2">
@@ -455,7 +489,7 @@ const CompactPrerequisitePanel: React.FC<{
           </div>
         </div>
 
-        <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#0B4A3E]/10">
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#0B4A3E]/10">
           <div
             className={`h-full rounded-full bg-[#0B4A3E] transition-all duration-300 ${busy ? 'loom-scan-line' : ''}`}
             style={{ width: `${Math.max(8, pct)}%` }}
@@ -468,9 +502,9 @@ const CompactPrerequisitePanel: React.FC<{
           </div>
         ) : null}
 
-        <div className="mt-4 grid gap-3 md:grid-cols-5">
+        <div className="mt-3 grid gap-2 md:grid-cols-5">
           {visibleChecks.map((check) => (
-            <div key={check.id} className="rounded-[12px] border border-border/70 bg-surface/60 px-3 py-3">
+            <div key={check.id} className="rounded-[10px] border border-border/70 bg-surface/60 px-3 py-2.5">
               <div className="flex items-center justify-between gap-2">
                 <div className="truncate text-sm font-black text-text">{check.label}</div>
                 <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${
@@ -504,6 +538,10 @@ function supportsModelConfig(component?: ComponentSummary): boolean {
   return Boolean(component && MODEL_CONFIG_COMPONENT_IDS.has(component.id));
 }
 
+function canWriteAgentModelConfig(component: ComponentSummary, status?: AgentModelConfigStatus): boolean {
+  return Boolean(status?.installed || ['ready', 'started', 'upgrade_available'].includes(component.status));
+}
+
 function modelConfigLabel(status?: AgentModelConfigStatus): string {
   if (!status) return '读取中';
   if (status.status === 'not_installed') return '未安装';
@@ -530,9 +568,14 @@ const AgentModelConfigPanel: React.FC<{
   locked: boolean;
   onDraftModelChange: (value: string) => void;
   onApply: () => void;
+  onApplyCustom: (draft: AgentCustomProviderDraft) => void;
   onRollback: () => void;
-}> = ({ component, status, draftModel, busy, locked, onDraftModelChange, onApply, onRollback }) => {
+}> = ({ component, status, draftModel, busy, locked, onDraftModelChange, onApply, onApplyCustom, onRollback }) => {
   const [sourceMode, setSourceMode] = React.useState<'off' | 'oneClick' | 'custom'>('custom');
+  const [customProviderId, setCustomProviderId] = React.useState('custom');
+  const [customProvider, setCustomProvider] = React.useState('OpenAI 兼容');
+  const [customBaseUrl, setCustomBaseUrl] = React.useState('');
+  const [customApiKey, setCustomApiKey] = React.useState('');
   const availableModels = status?.availableModels || [];
   const canUseWire = Boolean(status?.installed && status.status !== 'no_wire');
   const managedBy = status?.managedBy || '';
@@ -545,6 +588,25 @@ const AgentModelConfigPanel: React.FC<{
   const oneClickLocked = locked || !canUseWire || !isManagedAccount || availableModels.length === 0;
   const customModelPlaceholder = '输入当前账号可用文本模型';
   const modelConfigTitle = isOpenClawComponent(component) ? 'OpenClaw 模型' : 'Codex / Claude Code 模型';
+  const customProviderOption = providerOptionById(customProviderId);
+  const customProviderName = customProviderId === 'custom' ? customProvider.trim() : customProviderOption.label;
+  const canApplyCustom = Boolean(customProviderName && customBaseUrl.trim() && customApiKey.trim() && draftModel.trim());
+
+  React.useEffect(() => {
+    if (status?.managedBy !== 'custom_provider') return;
+    const provider = status.provider || 'OpenAI 兼容';
+    setSourceMode('custom');
+    setCustomProvider(provider);
+    setCustomProviderId(providerIdForLabel(provider));
+    setCustomBaseUrl(status.baseUrl || '');
+  }, [status?.managedBy, status?.provider, status?.baseUrl]);
+
+  const selectCustomProvider = (providerId: string) => {
+    const option = providerOptionById(providerId);
+    setCustomProviderId(providerId);
+    setCustomProvider(option.label);
+    if (option.baseUrl) setCustomBaseUrl(option.baseUrl);
+  };
 
   return (
     <section data-agent-model-config className="border-t border-border/70 pt-4">
@@ -600,21 +662,99 @@ const AgentModelConfigPanel: React.FC<{
           </button>
         </div>
         <div className="mt-3 text-xs text-text-muted">
-          {oneClickLocked ? '一键配置需登录后解锁，并同步中转站模型。' : '一键配置会写入当前中转站默认模型。'}
+          {sourceMode === 'custom'
+            ? '自定义会先保存本机第三方 Provider；已安装智能体会继续写入配置。'
+            : oneClickLocked ? '一键配置需登录后解锁，并同步中转站模型。' : '一键配置会写入当前中转站默认模型。'}
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-        {sourceMode === 'custom' ? (
-          <Input
-            data-agent-custom-model-input
-            value={draftModel}
-            onChange={(event) => onDraftModelChange(event.target.value)}
-            disabled={locked || busy || !canUseWire}
-            placeholder={customModelPlaceholder}
-            className="w-full"
-          />
-        ) : (
+      {sourceMode === 'custom' ? (
+        <div data-agent-custom-provider-card className="mt-4 rounded-[14px] border border-border/70 bg-surface-alt/25 p-4">
+          <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
+            <label className="block">
+              <div className="mb-2 text-xs font-bold text-text-muted">Provider</div>
+              <Select
+                data-agent-custom-provider-select
+                value={customProviderId}
+                onChange={(event) => selectCustomProvider(event.target.value)}
+                disabled={locked || busy}
+                className="w-full"
+              >
+                {CUSTOM_PROVIDER_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </Select>
+            </label>
+            <label className="block">
+              <div className="mb-2 text-xs font-bold text-text-muted">默认文本模型</div>
+              <Input
+                data-agent-custom-model-input
+                value={draftModel}
+                onChange={(event) => onDraftModelChange(event.target.value)}
+                disabled={locked || busy}
+                placeholder={customModelPlaceholder}
+                className="w-full"
+              />
+            </label>
+            {customProviderId === 'custom' ? (
+              <label className="block md:col-span-2">
+                <div className="mb-2 text-xs font-bold text-text-muted">Provider 名称</div>
+                <Input
+                  data-agent-custom-provider-name-input
+                  value={customProvider}
+                  onChange={(event) => setCustomProvider(event.target.value)}
+                  disabled={locked || busy}
+                  placeholder="自定义..."
+                />
+              </label>
+            ) : null}
+            <label className="block md:col-span-2">
+              <div className="mb-2 text-xs font-bold text-text-muted">Base URL</div>
+              <Input
+                data-agent-custom-base-url-input
+                value={customBaseUrl}
+                onChange={(event) => setCustomBaseUrl(event.target.value)}
+                disabled={locked || busy}
+                placeholder="https://example.com/v1"
+              />
+            </label>
+            <label className="block md:col-span-2">
+              <div className="mb-2 flex items-center justify-between gap-3 text-xs font-bold text-text-muted">
+                <span>API Key</span>
+                <span className="text-[#0B6B57]">仅保存到本机受保护配置</span>
+              </div>
+              <Input
+                data-agent-custom-api-key-input
+                type="password"
+                value={customApiKey}
+                onChange={(event) => setCustomApiKey(event.target.value)}
+                disabled={locked || busy}
+                placeholder="粘贴自己的 API Key"
+                autoComplete="off"
+              />
+            </label>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button
+              variant="primary"
+              onClick={() => onApplyCustom({
+                provider: customProviderName,
+                baseUrl: customBaseUrl,
+                apiKey: customApiKey,
+                model: draftModel,
+              })}
+              disabled={locked || busy || !canApplyCustom}
+            >
+              {busy ? '写入中...' : canUseWire ? '保存并写入' : '保存配置'}
+            </Button>
+            <Button variant="quiet" onClick={onRollback} disabled={locked || busy || !status?.backupAvailable}>
+              回滚配置
+            </Button>
+            <span className="text-xs font-bold text-text-muted">密钥不会回显；换 Key 时重新粘贴即可覆盖。</span>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
           <Select
             value={draftModel}
             onChange={(event) => onDraftModelChange(event.target.value)}
@@ -625,14 +765,14 @@ const AgentModelConfigPanel: React.FC<{
               <option key={model} value={model}>{model}</option>
             ))}
           </Select>
+          <Button variant="primary" onClick={onApply} disabled={locked || busy || !canApply || sourceMode === 'off'}>
+            {busy ? '写入中...' : '写入配置'}
+          </Button>
+          <Button variant="quiet" onClick={onRollback} disabled={locked || busy || !status?.backupAvailable}>
+            回滚配置
+          </Button>
+        </div>
         )}
-        <Button variant="primary" onClick={onApply} disabled={locked || busy || !canApply || sourceMode === 'off'}>
-          {busy ? '写入中...' : '写入配置'}
-        </Button>
-        <Button variant="quiet" onClick={onRollback} disabled={locked || busy || !status?.backupAvailable}>
-          回滚配置
-        </Button>
-      </div>
 
       <div className="mt-3 grid gap-2 text-xs text-text-muted md:grid-cols-3">
         <div className="truncate">模型：{status?.model || draftModel || '-'}</div>
@@ -661,6 +801,15 @@ export const AgentInstallerPage: React.FC = () => {
   const [modelConfigs, setModelConfigs] = React.useState<Record<string, AgentModelConfigStatus>>({});
   const [modelDrafts, setModelDrafts] = React.useState<Record<string, string>>({});
   const [modelConfigBusy, setModelConfigBusy] = React.useState('');
+
+  const copyAgentAccessPrompt = React.useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(buildOneShotAgentPrompt(buildMcpJson()));
+      showToast('接入提示词已复制', 'success');
+    } catch {
+      showToast('复制失败，请打开 Agent 接入页手动复制', 'error');
+    }
+  }, []);
 
   const pushLog = React.useCallback((message: string, tone = 'neutral', componentId?: string) => {
     const entry: InstallLogEntry = {
@@ -1128,6 +1277,45 @@ export const AgentInstallerPage: React.FC = () => {
     }
   };
 
+  const applyCustomModelConfig = async (component: ComponentSummary, draft: AgentCustomProviderDraft) => {
+    const provider = draft.provider.trim() || '自定义 Provider';
+    const baseUrl = draft.baseUrl.trim();
+    const apiKey = draft.apiKey.trim();
+    const model = draft.model.trim();
+    if (!baseUrl || !apiKey || !model) {
+      showToast('请填写 Base URL、API Key 和默认文本模型', 'error');
+      return;
+    }
+    setModelConfigBusy(component.id);
+    try {
+      await loomClient.wire.custom({
+        provider,
+        baseUrl,
+        apiKey,
+        textModel: model,
+      });
+      let message = '第三方模型配置已保存';
+      if (canWriteAgentModelConfig(component, modelConfigs[component.id])) {
+        const result = await loomClient.components.applyModelConfig({ componentId: component.id, model });
+        setModelConfigs((current) => ({ ...current, [component.id]: result.status }));
+        message = `${component.name} 第三方模型已保存并写入`;
+      } else {
+        await refreshModelConfig(component.id);
+        message = '第三方模型已保存；安装智能体后可写入配置';
+      }
+      setModelDrafts((current) => ({ ...current, [component.id]: model }));
+      pushLog(message, 'ok', component.id);
+      showToast(message, 'success');
+    } catch (err: any) {
+      const message = loomErrorText(err, '第三方模型配置失败');
+      pushLog(message, 'danger', component.id);
+      showToast(message, 'error');
+      await refreshModelConfig(component.id);
+    } finally {
+      setModelConfigBusy('');
+    }
+  };
+
   const rollbackModelConfig = async (component: ComponentSummary) => {
     setModelConfigBusy(component.id);
     try {
@@ -1222,8 +1410,12 @@ export const AgentInstallerPage: React.FC = () => {
     : modelConfigBusy
       ? components.find((item) => item.id === modelConfigBusy)?.name || ''
       : '';
-  const busyOverlayActive = loading || Boolean(busyId) || preflightLoading || preflightRepairing || Boolean(modelConfigBusy);
-  const controlsLocked = busyOverlayActive;
+  const preflightBusy = preflightLoading || preflightRepairing;
+  const blockingBusy = loading || Boolean(busyId) || Boolean(modelConfigBusy);
+  const busyOverlayActive = blockingBusy || preflightBusy;
+  const pageLocked = blockingBusy;
+  const controlsLocked = blockingBusy;
+  const busyOverlayMode = preflightBusy && !blockingBusy ? 'corner' : 'blocking';
   const busyOverlayTitle = modelConfigBusy
     ? '正在写入模型配置'
     : preflightRepairing
@@ -1251,11 +1443,11 @@ export const AgentInstallerPage: React.FC = () => {
     <div
       data-agent-page-scroll
       data-white-label-layout="installer"
-      data-agent-page-locked={busyOverlayActive ? 'true' : undefined}
+      data-agent-page-locked={pageLocked ? 'true' : undefined}
       aria-busy={busyOverlayActive}
-      className={`loom-white-page loom-installer-shell h-full bg-app-bg ${busyOverlayActive ? 'overflow-y-hidden' : 'overflow-y-auto'}`}
+      className={`loom-white-page loom-installer-shell h-full bg-app-bg ${pageLocked ? 'overflow-y-hidden' : 'overflow-y-auto'}`}
     >
-      <BusyOverlay active={busyOverlayActive} title={busyOverlayTitle} detail={busyOverlayDetail} />
+      <BusyOverlay active={busyOverlayActive} mode={busyOverlayMode} title={busyOverlayTitle} detail={busyOverlayDetail} />
       <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-6 px-8 py-7">
         <header className="flex flex-wrap items-end justify-between gap-6">
           <div>
@@ -1292,6 +1484,21 @@ export const AgentInstallerPage: React.FC = () => {
             onRefresh={() => void refreshPreflight({ force: true })}
             onRepair={() => void repairPreflight()}
           />
+
+          <section data-agent-access-inline className="border-t border-border/70 px-6 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] border border-[#0B4A3E]/15 bg-[#0B4A3E]/[0.035] px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-[10px] font-black tracking-[0.24em] text-accent">AGENT 接入</div>
+                <h2 className="mt-1 text-base font-black text-text">让 Codex / Claude Code 控制 LOOM</h2>
+                <p className="mt-1 text-xs leading-5 text-text-muted">
+                  一条提示词接入 CLI/MCP，支持安装智能体、生图、生视频、手机矩阵和只读监控。
+                </p>
+              </div>
+              <Button variant="quiet" onClick={() => void copyAgentAccessPrompt()}>
+                复制接入提示词
+              </Button>
+            </div>
+          </section>
 
           <section className="border-t border-border/70 px-6 py-6">
             <div className="flex flex-wrap items-end justify-between gap-4">
@@ -1451,6 +1658,7 @@ export const AgentInstallerPage: React.FC = () => {
                         locked={controlsLocked}
                         onDraftModelChange={(value) => updateModelDraft(selected.id, value)}
                         onApply={() => void applyModelConfig(selected)}
+                        onApplyCustom={(draft) => void applyCustomModelConfig(selected, draft)}
                         onRollback={() => void rollbackModelConfig(selected)}
                       />
                     ) : null}

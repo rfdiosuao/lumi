@@ -8,6 +8,7 @@ import {
   ensurePhoneConfig,
   fetchWithTimeout,
   normalizePhoneUrl,
+  phoneBridgeErrorPayload,
   readLauncherPhoneConfigByDevice,
   readLauncherPhoneLlmConfig,
   signedJsonRequest,
@@ -40,6 +41,8 @@ const SCREENSHOT_TEMPLATES = new Set(['screenshot', 'take-screenshot', 'take_scr
 const BACK_TEMPLATES = new Set(['back', 'press-back', 'press_back', 'system-back', 'system_back']);
 const HOME_TEMPLATES = new Set(['home', 'press-home', 'press_home', 'system-home', 'system_home']);
 const OPEN_SETTINGS_TEMPLATES = new Set(['open-settings', 'open_settings', 'settings', 'android-settings', 'android_settings']);
+let lastArgs = { json: process.argv.includes('--json'), command: '' };
+let lastConfig = null;
 
 function usage() {
   return `
@@ -889,7 +892,7 @@ async function readHistory(limit) {
 }
 
 function print(config, payload, human) {
-  if (config.json) console.log(JSON.stringify(payload, null, 2));
+  if (config.json) console.log(JSON.stringify(withConfigSource(config, payload), null, 2));
   else console.log(human);
 }
 
@@ -898,6 +901,7 @@ function printPhoneEvent(config, event) {
     ok: true,
     type: 'phone_event',
     deviceId: config.deviceId || '',
+    configSource: config.source || '',
     receivedAt: new Date().toISOString(),
     ...event,
   };
@@ -910,6 +914,7 @@ function printPhoneEventSyncSummary(config, summary) {
     ok: true,
     type: 'phone_event_sync_summary',
     deviceId: config.deviceId || '',
+    configSource: config.source || '',
     receivedAt: new Date().toISOString(),
     ...summary,
   };
@@ -917,13 +922,23 @@ function printPhoneEventSyncSummary(config, summary) {
   else console.log(`event sync stopped: ${summary.stoppedBy}, events=${summary.eventCount}`);
 }
 
+function withConfigSource(config, payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  return {
+    ...payload,
+    configSource: payload.configSource || config.source || '',
+  };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  lastArgs = args;
   if (args.help) {
     console.log(usage());
     return;
   }
   const config = await resolveConfig(args);
+  lastConfig = config;
 
   if (config.command === 'history') {
     const rows = await readHistory(config.limit);
@@ -1093,6 +1108,12 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`ERROR: ${error?.message || error}`);
+  const config = lastConfig || lastArgs || {};
+  const payload = phoneBridgeErrorPayload(error, config, config.command || 'phone');
+  if (config.json || process.argv.includes('--json')) {
+    console.log(JSON.stringify(payload, null, 2));
+  } else {
+    console.error(`ERROR: ${payload.message}`);
+  }
   process.exitCode = 1;
 });

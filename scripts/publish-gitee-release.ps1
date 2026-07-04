@@ -55,14 +55,18 @@ function Invoke-GiteeApi {
         }
     }
     $payload["access_token"] = $Token
-    return Invoke-RestMethod -Method $Method -Uri $uri -Body $payload
+    return Invoke-RestMethod -Method $Method -Uri $uri -Body $payload -ContentType "application/x-www-form-urlencoded"
 }
 
 function Get-ReleaseByTag {
     param([string]$Tag)
 
     try {
-        return Invoke-GiteeApi -Method "GET" -Path "/repos/$Owner/$Repo/releases/tags/$Tag"
+        $result = Invoke-GiteeApi -Method "GET" -Path "/repos/$Owner/$Repo/releases/tags/$Tag"
+        if ($null -eq $result -or ($result -is [string] -and $result -eq "null")) {
+            return $null
+        }
+        return $result
     } catch {
         return $null
     }
@@ -90,7 +94,11 @@ function Publish-Asset {
 
     foreach ($item in $existing) {
         if ($item.name -eq $fileName -or $item.filename -eq $fileName) {
-            Invoke-GiteeApi -Method "DELETE" -Path "/repos/$Owner/$Repo/releases/$ReleaseId/attach_files/$($item.id)" | Out-Null
+            try {
+                Invoke-GiteeApi -Method "DELETE" -Path "/repos/$Owner/$Repo/releases/$ReleaseId/attach_files/$($item.id)" | Out-Null
+            } catch {
+                Write-Host "Skipping stale Gitee asset delete failure: $fileName"
+            }
         }
     }
 
@@ -112,12 +120,7 @@ function Publish-Asset {
 $release = Get-ReleaseByTag -Tag $TagName
 
 if ($release) {
-    Write-Host "Updating existing Gitee release: $TagName"
-    $release = Invoke-GiteeApi -Method "PATCH" -Path "/repos/$Owner/$Repo/releases/$($release.id)" -Body @{
-        name = $Name
-        body = $Body
-        prerelease = "false"
-    }
+    Write-Host "Using existing Gitee release: $TagName"
 } else {
     Write-Host "Creating Gitee release: $TagName"
     $release = Invoke-GiteeApi -Method "POST" -Path "/repos/$Owner/$Repo/releases" -Body @{

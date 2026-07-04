@@ -27,7 +27,7 @@ export const FEATURE_DEFINITIONS: FeatureDefinition[] = [
   { key: 'phone', label: '手机', desc: '连接 / 截图 / 读屏', icon: 'PHN', group: GROUP_CORE, action: { type: 'page' }, requiresLicense: true, visible: HIDDEN },
   { key: 'workbench', label: '工作台', desc: '手机矩阵 / 任务发布', icon: 'MATRIX', group: GROUP_CORE, accent: true, action: { type: 'page' }, requiresLicense: true },
   { key: 'license', label: '模型账号', desc: '登录 / 模型', icon: 'ACC', group: GROUP_CORE, action: { type: 'page' } },
-  { key: 'agentAccess', label: 'Agent 接入', desc: 'MCP / CLI / 提示词', icon: 'MCP', group: GROUP_CORE, action: { type: 'page' }, requiresLicense: true },
+  { key: 'agentAccess', label: 'Agent 接入', desc: 'MCP / CLI / 提示词', icon: 'MCP', group: GROUP_CORE, action: { type: 'page' }, requiresLicense: true, visible: HIDDEN },
   { key: 'capabilities', label: '其他', desc: '暂未开放', icon: 'CAP', group: GROUP_CORE, action: { type: 'page' }, requiresLicense: true },
   { key: 'settings', label: '设置', desc: '系统设置', icon: 'SET', group: GROUP_CORE, action: { type: 'page' }, visible: HIDDEN },
   { key: 'models', label: '模型', desc: '模型选择', icon: 'MDL', group: GROUP_CORE, action: { type: 'page' }, visible: HIDDEN },

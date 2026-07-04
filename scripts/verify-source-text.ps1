@@ -31,7 +31,6 @@ $sourceRoots = @(
     "$LauncherRootName/src-tauri/src",
     "$LauncherRootName/src-tauri/capabilities",
     "scripts",
-    "docs",
     "license_server"
 )
 

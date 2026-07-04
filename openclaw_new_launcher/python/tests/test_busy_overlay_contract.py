@@ -26,6 +26,7 @@ class BusyOverlayContractTests(unittest.TestCase):
         self.assertIn("createPortal", source)
         self.assertIn("document.body", source)
         self.assertIn("data-busy-overlay", source)
+        self.assertIn("data-busy-overlay-mode={mode}", source)
         self.assertIn("fixed inset-0", source)
         self.assertIn("z-[99940]", source)
         self.assertIn("pointer-events-auto", source)
@@ -45,11 +46,25 @@ class BusyOverlayContractTests(unittest.TestCase):
         self.assertIn("whitespace-pre-wrap", source)
         self.assertNotIn("absolute inset-0", source)
 
+    def test_busy_overlay_supports_compact_non_blocking_corner_mode(self) -> None:
+        source = _busy_overlay_source()
+
+        self.assertIn("mode?: 'blocking' | 'corner'", source)
+        self.assertIn("mode = 'blocking'", source)
+        self.assertIn("const isCorner = mode === 'corner'", source)
+        self.assertIn("pointer-events-none fixed left-", source)
+        self.assertIn("data-busy-overlay-corner-card", source)
+
     def test_install_account_and_phone_pages_use_shared_busy_overlay(self) -> None:
         for path in (AGENT_PAGE, ACCOUNT_PAGE, PHONE_PAGE):
             with open(path, "r", encoding="utf-8") as handle:
                 source = handle.read()
             self.assertIn("<BusyOverlay", source, path)
+
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            agent_source = handle.read()
+        self.assertIn("busyOverlayMode", agent_source)
+        self.assertIn("mode={busyOverlayMode}", agent_source)
 
         with open(PHONE_PAGE, "r", encoding="utf-8") as handle:
             phone_source = handle.read()

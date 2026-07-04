@@ -99,14 +99,29 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("loomClient.diagnostics.repair({ confirmed: true })", source)
         self.assertIn("loomClient.components.install(component.id, { confirmed: true", source)
 
-    def test_busy_detection_state_locks_page_scroll_and_visible_actions(self) -> None:
+    def test_preflight_detection_uses_corner_busy_state_without_locking_page_scroll(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
             source = handle.read()
 
         self.assertIn("data-agent-page-locked", source)
+        self.assertIn("preflightBusy", source)
+        self.assertIn("blockingBusy", source)
+        self.assertIn("const pageLocked = blockingBusy", source)
+        self.assertIn("const controlsLocked = blockingBusy", source)
+        self.assertIn("const busyOverlayMode = preflightBusy && !blockingBusy ? 'corner' : 'blocking'", source)
         self.assertIn("overflow-y-hidden", source)
         self.assertIn("aria-busy={busyOverlayActive}", source)
-        self.assertIn("controlsLocked", source)
+        self.assertIn("pageLocked ? 'overflow-y-hidden' : 'overflow-y-auto'", source)
+
+    def test_agent_access_copy_is_embedded_in_installer_page(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("data-agent-access-inline", source)
+        self.assertIn("copyAgentAccessPrompt", source)
+        self.assertIn("buildOneShotAgentPrompt(buildMcpJson())", source)
+        self.assertIn("复制接入提示词", source)
+        self.assertIn("生图、生视频、手机矩阵", source)
 
     def test_codex_and_claude_model_config_controls_are_exposed(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
@@ -115,8 +130,15 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("data-agent-model-config", source)
         self.assertIn("data-agent-model-source-card", source)
         self.assertIn("data-agent-one-click-config-lock", source)
+        self.assertIn("data-agent-custom-provider-card", source)
+        self.assertIn("data-agent-custom-provider-select", source)
+        self.assertIn("data-agent-custom-base-url-input", source)
+        self.assertIn("data-agent-custom-api-key-input", source)
         self.assertIn("data-agent-custom-model-input", source)
         self.assertIn("customModelPlaceholder", source)
+        self.assertIn("loomClient.wire.custom", source)
+        self.assertIn("type=\"password\"", source)
+        self.assertIn("autoComplete=\"off\"", source)
         self.assertIn("managedBy === 'heang_account'", source)
         self.assertIn("登录后解锁", source)
         self.assertIn("loomClient.components.modelConfigStatus", source)

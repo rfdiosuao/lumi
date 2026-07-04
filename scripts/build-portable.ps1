@@ -904,6 +904,20 @@ function Copy-WebView2Redist {
     Copy-Item -LiteralPath $source -Destination (Join-Path $targetDir "MicrosoftEdgeWebView2RuntimeInstallerX64.exe") -Force
 }
 
+function Copy-AndroidPlatformTools {
+    param([string]$PackageDir)
+
+    $source = Join-Path $LauncherDir "redist\platform-tools"
+    $adb = Join-Path $source "adb.exe"
+    if (-not (Test-Path -LiteralPath $adb)) {
+        throw "Android platform-tools are missing: $adb. Run scripts\download-android-platform-tools.ps1 before packaging."
+    }
+
+    $target = Join-Path $PackageDir "platform-tools"
+    Remove-SafePath $target
+    Copy-Directory -Source $source -Destination $target
+}
+
 function Copy-DesktopAgentSidecar {
     param([string]$PackageDir)
 
@@ -1295,6 +1309,7 @@ Invoke-Step "Create portable directory" {
 
     Copy-PhoneAgentApks -PackageDir $packageDir
     Copy-WebView2Redist -PackageDir $packageDir
+    Copy-AndroidPlatformTools -PackageDir $packageDir
     Copy-DesktopAgentSidecar -PackageDir $packageDir
     Copy-InstallerReleaseManifest -PackageDir $packageDir
 

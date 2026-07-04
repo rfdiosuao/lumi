@@ -14,6 +14,53 @@ const pairingInflight = new Map();
 const pairingFailures = new Map();
 const pairingRepairInflight = new Map();
 const pairingAuthRetryTails = new Map();
+const PHONE_CONFIG_REMEDIATION = Object.freeze([
+  '请打开 APKClaw -> Settings -> LAN Config，并确认局域网服务已开启。',
+  '确认手机和电脑在同一网络，端口通常为 9527。',
+  "PowerShell 示例：$env:OPENCLAW_PHONE_BASE_URL='http://手机IP:9527'; $env:OPENCLAW_PHONE_TOKEN='<连接令牌>'",
+  'CLI 示例：node scripts\\openclaw-phone-agent.mjs metrics --phone-url http://手机IP:9527 --phone-token <连接令牌> --json',
+]);
+
+export class PhoneBridgeError extends Error {
+  constructor(code, message, options = {}) {
+    super(message);
+    this.name = 'PhoneBridgeError';
+    this.code = code || 'phone_bridge_error';
+    this.errorCode = this.code;
+    this.retryable = options.retryable !== false;
+    this.phase = options.phase || '';
+    this.currentStep = options.currentStep || 'preflight';
+    this.details = options.details && typeof options.details === 'object' ? options.details : {};
+    this.remediation = Array.isArray(options.remediation) && options.remediation.length
+      ? options.remediation
+      : PHONE_CONFIG_REMEDIATION;
+    if (options.cause) this.cause = options.cause;
+  }
+}
+
+export function phoneBridgeErrorPayload(error, config = {}, phase = 'phone') {
+  const normalized = normalizeBridgeError(error);
+  const configSource = String(config?.source || config?.configSource || '').trim();
+  const configSourceKind = configSourceKindForPath(configSource);
+  return {
+    ok: false,
+    errorCode: normalized.errorCode,
+    error: normalized.errorCode,
+    message: normalized.message,
+    retryable: normalized.retryable,
+    phase: normalized.phase || phase,
+    currentStep: normalized.currentStep || 'preflight',
+    remediation: normalized.remediation,
+    config: {
+      phoneUrlConfigured: Boolean(config?.phoneUrl),
+      phoneTokenConfigured: Boolean(config?.phoneToken),
+      phoneUrl: safePhoneUrl(config?.phoneUrl),
+      source: configSource,
+      sourceKind: config?.sourceKind || configSourceKind,
+    },
+    details: normalized.details,
+  };
+}
 
 export function normalizePhoneUrl(url) {
   let text = String(url || '')
@@ -66,9 +113,151 @@ function normalizeStoredPhoneUrl(value) {
   }
 }
 
+function normalizeBridgeError(error) {
+  if (error?.payload && typeof error.payload === 'object' && error.payload.ok === false) {
+    return {
+      errorCode: error.payload.errorCode || error.payload.error || error.code || 'phone_bridge_error',
+      message: error.payload.message || error.message || '手机桥接请求失败。',
+      retryable: error.payload.retryable !== false,
+      phase: error.payload.phase || error.phase || '',
+      currentStep: error.payload.currentStep || error.currentStep || 'preflight',
+      remediation: Array.isArray(error.payload.remediation) && error.payload.remediation.length ? error.payload.remediation : PHONE_CONFIG_REMEDIATION,
+      details: error.payload.details && typeof error.payload.details === 'object' ? error.payload.details : {},
+    };
+  }
+  if (error instanceof PhoneBridgeError || error?.name === 'PhoneBridgeError') {
+    return {
+      errorCode: error.errorCode || error.code || 'phone_bridge_error',
+      message: error.message || '手机桥接请求失败。',
+      retryable: error.retryable !== false,
+      phase: error.phase || '',
+      currentStep: error.currentStep || 'preflight',
+      remediation: Array.isArray(error.remediation) && error.remediation.length ? error.remediation : PHONE_CONFIG_REMEDIATION,
+      details: error.details && typeof error.details === 'object' ? error.details : {},
+    };
+  }
+  const message = String(error?.message || error || '').trim();
+  if (/Missing phone URL/i.test(message)) {
+    return normalizeBridgeError(new PhoneBridgeError(
+      'missing_phone_url',
+      '手机连接地址缺失。请在麓鸣手机页保存手机 IP，或打开 APKClaw -> Settings -> LAN Config 后复制地址。',
+      { retryable: true },
+    ));
+  }
+  if (/Missing phone token/i.test(message)) {
+    return normalizeBridgeError(new PhoneBridgeError(
+      'missing_phone_token',
+      '手机连接令牌缺失。请在 APKClaw -> Settings -> LAN Config 中复制连接令牌，再回到麓鸣保存。',
+      { retryable: true },
+    ));
+  }
+  if (looksLikeConnectionFailure(error)) {
+    return normalizeBridgeError(new PhoneBridgeError(
+      'phone_config_server_unreachable',
+      '无法连接手机端 APKClaw ConfigServer。请打开 APKClaw -> Settings -> LAN Config，并确认手机和电脑在同一网络。',
+      { retryable: true, details: { reason: errorMessageWithCause(error) } },
+    ));
+  }
+  const prefix = message.match(/^([a-z][a-z0-9_:-]{2,64}):/i)?.[1]?.replace(/[:-]+$/, '');
+  return {
+    errorCode: prefix || 'phone_bridge_error',
+    message: message || '手机桥接请求失败。',
+    retryable: true,
+    phase: '',
+    currentStep: 'error',
+    remediation: PHONE_CONFIG_REMEDIATION,
+    details: {},
+  };
+}
+
+function looksLikeConnectionFailure(error) {
+  const text = errorMessageWithCause(error);
+  return /(fetch failed|failed to fetch|ECONNREFUSED|ECONNRESET|ECONNABORTED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|socket hang up|networkerror|network error|terminated)/i.test(text);
+}
+
+function errorMessageWithCause(error) {
+  const values = [
+    error?.message,
+    error?.code,
+    error?.cause?.message,
+    error?.cause?.code,
+    error?.cause?.errno,
+  ];
+  return values.filter(Boolean).map((value) => String(value)).join(' ');
+}
+
+function safePhoneUrl(value) {
+  try {
+    return normalizePhoneUrl(value);
+  } catch {
+    return String(value || '').trim().replace(/\/+$/, '');
+  }
+}
+
+function configSourceKindForPath(filePath) {
+  const normalized = String(filePath || '').replace(/\\/g, '/');
+  if (!normalized) return 'none';
+  if (normalized.includes('/LOOMFiles/')) return 'packaged-loom';
+  if (normalized.includes('/OpenClawFiles/')) return 'packaged-openclaw';
+  if (normalized.includes('/data/.openclaw/launcher/')) return 'source';
+  return 'custom';
+}
+
+function launcherConfigCandidates(fileName) {
+  const relative = ['data', '.openclaw', 'launcher', fileName];
+  const candidates = [];
+  for (const root of configSearchRoots()) {
+    candidates.push(path.join(root, ...relative));
+    candidates.push(path.join(root, 'LOOMFiles', ...relative));
+    candidates.push(path.join(root, 'OpenClawFiles', ...relative));
+  }
+  return uniquePaths(candidates);
+}
+
+function configSearchRoots() {
+  const roots = [
+    PROJECT_ROOT,
+    path.resolve(PROJECT_ROOT, '..'),
+    process.cwd(),
+    process.env.LOOM_LAUNCHER_ROOT,
+    process.env.OPENCLAW_LAUNCHER_ROOT,
+    process.env.LOOM_HOME,
+  ].filter(Boolean);
+  if (path.basename(PROJECT_ROOT).toLowerCase() === '_up_') {
+    roots.push(path.resolve(PROJECT_ROOT, '..'));
+    roots.push(path.resolve(PROJECT_ROOT, '..', '..'));
+  }
+  return uniquePaths(roots.map((root) => path.resolve(String(root))));
+}
+
+function uniquePaths(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const resolved = path.resolve(String(value || ''));
+    const key = resolved.toLowerCase();
+    if (!resolved || seen.has(key)) continue;
+    seen.add(key);
+    result.push(resolved);
+  }
+  return result;
+}
+
 export function ensurePhoneConfig(config) {
-  if (!config.phoneUrl) throw new Error('Missing phone URL. Configure it in the launcher Phone Control page, or use --phone-url / OPENCLAW_PHONE_BASE_URL.');
-  if (!config.phoneToken) throw new Error('Missing phone token. Configure it in the launcher Phone Control page, or use --phone-token / OPENCLAW_PHONE_TOKEN.');
+  if (!config.phoneUrl) {
+    throw new PhoneBridgeError(
+      'missing_phone_url',
+      '手机连接地址缺失。请在麓鸣手机页保存手机 IP，或打开 APKClaw -> Settings -> LAN Config 后复制地址。',
+      { retryable: true, remediation: PHONE_CONFIG_REMEDIATION },
+    );
+  }
+  if (!config.phoneToken) {
+    throw new PhoneBridgeError(
+      'missing_phone_token',
+      '手机连接令牌缺失。请在 APKClaw -> Settings -> LAN Config 中复制连接令牌，再回到麓鸣保存。',
+      { retryable: true, remediation: PHONE_CONFIG_REMEDIATION },
+    );
+  }
 }
 
 export async function readLauncherPhoneConfig() {
@@ -77,11 +266,7 @@ export async function readLauncherPhoneConfig() {
 }
 
 export async function readLauncherPhoneLlmConfig() {
-  const candidates = [
-    path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agent.json'),
-    path.join(PROJECT_ROOT, 'LOOMFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
-    path.join(PROJECT_ROOT, 'OpenClawFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
-  ];
+  const candidates = launcherConfigCandidates('phone-agent.json');
 
   for (const filePath of candidates) {
     try {
@@ -101,11 +286,7 @@ export async function readLauncherPhoneLlmConfig() {
 }
 
 export async function readLauncherPhoneStore() {
-  const candidates = [
-    path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agents.json'),
-    path.join(PROJECT_ROOT, 'LOOMFiles', 'data', '.openclaw', 'launcher', 'phone-agents.json'),
-    path.join(PROJECT_ROOT, 'OpenClawFiles', 'data', '.openclaw', 'launcher', 'phone-agents.json'),
-  ];
+  const candidates = launcherConfigCandidates('phone-agents.json');
 
   for (const filePath of candidates) {
     try {
@@ -156,9 +337,7 @@ export async function readLauncherPhoneConfigByDevice(deviceId = '') {
   }
 
   const candidates = [
-    path.join(PROJECT_ROOT, 'data', '.openclaw', 'launcher', 'phone-agent.json'),
-    path.join(PROJECT_ROOT, 'LOOMFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
-    path.join(PROJECT_ROOT, 'OpenClawFiles', 'data', '.openclaw', 'launcher', 'phone-agent.json'),
+    ...launcherConfigCandidates('phone-agent.json'),
   ];
 
   for (const filePath of candidates) {
@@ -203,6 +382,22 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TI
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new PhoneBridgeError(
+        'phone_config_server_timeout',
+        '连接手机端 APKClaw 超时。请打开 APKClaw -> Settings -> LAN Config，确认局域网服务开启后重试。',
+        { retryable: true, cause: error, details: { url: safePhoneUrl(url), timeoutMs } },
+      );
+    }
+    if (looksLikeConnectionFailure(error)) {
+      throw new PhoneBridgeError(
+        'phone_config_server_unreachable',
+        '无法连接手机端 APKClaw ConfigServer。请打开 APKClaw -> Settings -> LAN Config，并确认手机和电脑在同一网络。',
+        { retryable: true, cause: error, details: { url: safePhoneUrl(url), reason: errorMessageWithCause(error) } },
+      );
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -298,7 +493,16 @@ export async function signedJsonRequest(config, method, endpoint, body = undefin
     });
   }
   if (!response.ok || payload?.success === false) {
-    throw new Error(payload?.error || payload?.message || `Phone request failed: HTTP ${response.status}`);
+    const detail = payload?.error || payload?.message || `Phone request failed: HTTP ${response.status}`;
+    throw new PhoneBridgeError(
+      response.status === 404 ? 'phone_endpoint_not_found' : 'phone_request_failed',
+      String(detail),
+      {
+        retryable: response.status >= 500 || response.status === 404,
+        currentStep: 'request',
+        details: { status: response.status, endpoint },
+      },
+    );
   }
   return payload;
 }
@@ -484,8 +688,12 @@ async function persistLumiPairing(config, data) {
   const source = typeof config.source === 'string' ? config.source : '';
   if (!source || !data?.launcherId || !data?.launcherSecret) return;
   const resolved = path.resolve(source);
-  const allowedRoot = path.resolve(PROJECT_ROOT);
-  if (!resolved.toLowerCase().startsWith(`${allowedRoot.toLowerCase()}${path.sep}`)) return;
+  const allowedRoots = configSearchRoots();
+  if (!allowedRoots.some((root) => {
+    const normalizedRoot = root.toLowerCase();
+    const normalizedResolved = resolved.toLowerCase();
+    return normalizedResolved === normalizedRoot || normalizedResolved.startsWith(`${normalizedRoot}${path.sep}`);
+  })) return;
 
   let payload;
   try {
@@ -525,7 +733,11 @@ async function parseJsonResponse(response, message) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`${message}: HTTP ${response.status}`);
+    throw new PhoneBridgeError(
+      'phone_non_json_response',
+      `${message}: HTTP ${response.status}`,
+      { retryable: true, currentStep: 'parse_response', details: { status: response.status } },
+    );
   }
 }
 

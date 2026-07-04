@@ -24,7 +24,11 @@ class NewApiAccountError(RuntimeError):
 DEFAULT_BASE_URL = "https://api.heang.top"
 DEFAULT_API_BASE = "https://api.heang.top/v1"
 ACCOUNT_SOURCE = "newapi_account"
+LEGACY_ACCOUNT_SOURCE = "heang_account"
 SESSION_GRACE_DAYS = 14
+DEFAULT_TEXT_MODEL = "qwen3.7-plus"
+DEFAULT_PHONE_MODEL = "agnes-2.0-flash"
+MANAGED_ACCOUNT_SOURCES = {ACCOUNT_SOURCE, LEGACY_ACCOUNT_SOURCE}
 
 
 def _utc_now() -> datetime:
@@ -218,6 +222,17 @@ def _classify_models(models: list[str]) -> dict[str, list[str]]:
         else:
             classified["text"].append(model)
     return classified
+
+
+def _choose_model(candidates: list[str], preferred: str, fallback: list[str] | None = None) -> str:
+    if preferred in candidates:
+        return preferred
+    if candidates:
+        return candidates[0]
+    fallback = fallback or []
+    if preferred in fallback:
+        return preferred
+    return fallback[0] if fallback else preferred
 
 
 class NewApiAccountManager:
@@ -470,7 +485,7 @@ class NewApiAccountManager:
         account_name = _extract_account_name(self_data, login_data) or username
         user_id = _extract_user_id(self_data, login_data) or account_name
         classified = _classify_models(models)
-        text_model = classified["text"][0] if classified["text"] else (models[0] if models else "")
+        text_model = _choose_model(classified["text"], DEFAULT_TEXT_MODEL, models)
         image_model = classified["image"][0] if classified["image"] else ""
         video_model = classified["video"][0] if classified["video"] else ""
         now = _utc_now()
@@ -497,6 +512,11 @@ class NewApiAccountManager:
             "gatewayImageModel": image_model,
             "gatewayVideoModel": video_model,
             "gatewayModels": models,
+            "lastGoodModels": {
+                "models": models,
+                "classified": classified,
+                "updatedAt": _iso(now),
+            },
             "memberToken": api_token,
             "gatewayImageAccessToken": api_token,
             "gatewayVideoAccessToken": "",
@@ -528,6 +548,12 @@ class NewApiAccountManager:
                 "lastOnlineAt": _iso(now),
                 "graceExpiresAt": _iso(now + timedelta(days=SESSION_GRACE_DAYS)),
                 "modelClasses": classified,
+            },
+            "phoneAgent": {
+                "managedBy": ACCOUNT_SOURCE,
+                "baseUrl": f"{base_url}/v1",
+                "apiKey": api_token,
+                "model": DEFAULT_PHONE_MODEL,
             },
             "updatedAt": _iso(now),
             "managedBy": ACCOUNT_SOURCE,
@@ -574,7 +600,7 @@ class NewApiAccountManager:
             models = self._fetch_models(opener, base_url, api_token_value, headers)
         session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
         self._write_session(session)
-        self._sync_image_config(session)
+        self.sync_targets(session)
         return session
 
     def bind_ticket(self, ticket: str, *, base_url: str = "") -> dict[str, Any]:
@@ -612,7 +638,7 @@ class NewApiAccountManager:
         }
         session = self._build_session(base_url, username, api_token_value, login_payload, self_payload, token_meta, models, cookie_jar)
         self._write_session(session)
-        self._sync_image_config(session)
+        self.sync_targets(session)
         return session
 
     def refresh_current(self) -> dict[str, Any]:
@@ -631,13 +657,22 @@ class NewApiAccountManager:
             self_payload = self._request_json(opener, f"{base_url}/api/user/self", headers=headers)
         except NewApiAccountError:
             self_payload = {}
-        models = self._fetch_models(opener, base_url, api_token, headers)
+        online = False
+        try:
+            models = self._fetch_models(opener, base_url, api_token, headers)
+            online = bool(models)
+        except NewApiAccountError:
+            models = []
         if not models and isinstance(session.get("gatewayModels"), list):
             models = list(session.get("gatewayModels") or [])
+        if not models:
+            last_good = session.get("lastGoodModels") if isinstance(session.get("lastGoodModels"), dict) else {}
+            if isinstance(last_good.get("models"), list):
+                models = list(last_good.get("models") or [])
         classified = _classify_models(models)
         now = _utc_now()
         session["gatewayModels"] = models
-        session["gatewayDefaultModel"] = classified["text"][0] if classified["text"] else (models[0] if models else _pick_text(session.get("gatewayDefaultModel")))
+        session["gatewayDefaultModel"] = _choose_model(classified["text"], DEFAULT_TEXT_MODEL, models or [_pick_text(session.get("gatewayDefaultModel"))])
         session["gatewayImageModel"] = classified["image"][0] if classified["image"] else _pick_text(session.get("gatewayImageModel"))
         session["gatewayVideoModel"] = classified["video"][0] if classified["video"] else _pick_text(session.get("gatewayVideoModel"))
         gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
@@ -649,7 +684,7 @@ class NewApiAccountManager:
             "videoModel": session["gatewayVideoModel"],
         })
         session["gateway"] = gateway
-        if isinstance(self_payload, dict):
+        if isinstance(self_payload, dict) and self_payload:
             self_data = _unwrap(self_payload)
             if isinstance(self_data, dict):
                 session["usage"] = {
@@ -657,16 +692,30 @@ class NewApiAccountManager:
                     "usedQuota": self_data.get("used_quota") or self_data.get("usedQuota"),
                     "requestCount": self_data.get("request_count") or self_data.get("requestCount"),
                 }
+                online = True
+        if online:
+            newapi.update({
+                "lastOnlineAt": _iso(now),
+                "graceExpiresAt": _iso(now + timedelta(days=SESSION_GRACE_DAYS)),
+            })
+            session["lastGoodModels"] = {
+                "models": models,
+                "classified": classified,
+                "updatedAt": _iso(now),
+            }
+        else:
+            newapi.update({
+                "offline": True,
+                "stale": True,
+            })
         newapi.update({
             "baseUrl": base_url,
-            "lastOnlineAt": _iso(now),
-            "graceExpiresAt": _iso(now + timedelta(days=SESSION_GRACE_DAYS)),
             "modelClasses": classified,
         })
         session["newApi"] = newapi
         session["updatedAt"] = _iso(now)
         self._write_session(session)
-        self._sync_image_config(session)
+        self.sync_targets(session)
         return session
 
     def _write_session(self, session: dict[str, Any]) -> None:
@@ -682,7 +731,7 @@ class NewApiAccountManager:
     def public_session(self) -> dict[str, Any]:
         session = self.current()
         if not session:
-            return {"loggedIn": False, "source": "", "account": "", "tokenMasked": "", "models": {"text": [], "image": [], "video": []}, "usage": {}}
+            return {"loggedIn": False, "source": "", "account": "", "tokenMasked": "", "models": {"text": [], "image": [], "video": []}, "usage": {}, "lastSyncResults": []}
         newapi = session.get("newApi") if isinstance(session.get("newApi"), dict) else {}
         gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
         classes = gateway.get("classifiedModels") if isinstance(gateway.get("classifiedModels"), dict) else newapi.get("modelClasses")
@@ -706,6 +755,9 @@ class NewApiAccountManager:
             "usage": session.get("usage") if isinstance(session.get("usage"), dict) else {},
             "lastOnlineAt": _pick_text(newapi.get("lastOnlineAt")),
             "graceExpiresAt": _pick_text(newapi.get("graceExpiresAt"), session.get("leaseExpiresAt")),
+            "offline": bool(newapi.get("offline")),
+            "stale": bool(newapi.get("stale")),
+            "lastSyncResults": session.get("lastSyncResults") if isinstance(session.get("lastSyncResults"), list) else [],
         }
 
     def _sync_image_config(self, session: dict[str, Any]) -> None:
@@ -726,6 +778,97 @@ class NewApiAccountManager:
         })
         write_json(self.paths.image_config, current)
 
+    def _sync_video_config(self, session: dict[str, Any]) -> None:
+        video_model = _pick_text(session.get("gatewayVideoModel"))
+        if not video_model:
+            return
+        payload = {
+            "gatewayMode": "member",
+            "managedBy": ACCOUNT_SOURCE,
+            "baseUrl": session.get("gatewayVideoBaseUrl") or session.get("gatewayBaseUrl"),
+            "apiBase": session.get("gatewayVideoBaseUrl") or session.get("gatewayBaseUrl"),
+            "apiKey": session.get("gatewayVideoAccessToken") or session.get("memberToken"),
+            "model": video_model,
+            "providerId": "agnes" if video_model.startswith("agnes-video") else "",
+        }
+        for path in (self.paths.video_config, self.paths.videoapi_config):
+            current = read_json(path, {})
+            if not isinstance(current, dict):
+                current = {}
+            if current.get("lockedByUser") is True:
+                continue
+            current.update(payload)
+            write_json(path, current)
+
+    def _sync_desktop_agent_config(self, session: dict[str, Any]) -> None:
+        model = _pick_text(session.get("gatewayDefaultModel"), DEFAULT_TEXT_MODEL)
+        base_url = _pick_text(session.get("gatewayBaseUrl"), DEFAULT_API_BASE)
+        api_key = _pick_text(session.get("memberToken"))
+        path = os.path.join(self.paths.launcher_dir, "desktop-agent.json")
+        current = read_json(path, {})
+        if not isinstance(current, dict):
+            current = {}
+        provider = {
+            "managedBy": ACCOUNT_SOURCE,
+            "apiKey": api_key,
+            "baseUrl": base_url,
+            "baseURL": base_url,
+            "model": model,
+        }
+        current.setdefault("provider", {})
+        current.setdefault("llm", {})
+        current.setdefault("chatProvider", {})
+        current["chatProvider"].setdefault("config", {})
+        current["provider"].update(provider)
+        current["llm"].update(provider)
+        current["chatProvider"]["config"].update(provider)
+        write_json(path, current)
+
+    def _sync_phone_agent_config(self, session: dict[str, Any]) -> None:
+        phone_agent = session.get("phoneAgent") if isinstance(session.get("phoneAgent"), dict) else {}
+        base_url = _pick_text(phone_agent.get("baseUrl"), session.get("gatewayBaseUrl"), DEFAULT_API_BASE)
+        api_key = _pick_text(phone_agent.get("apiKey"), session.get("memberToken"))
+        model = _pick_text(phone_agent.get("model"), DEFAULT_PHONE_MODEL)
+        path = os.path.join(self.paths.launcher_dir, "phone-agent.json")
+        current = read_json(path, {})
+        if not isinstance(current, dict):
+            current = {}
+        current.setdefault("llm", {})
+        current["llm"].update({
+            "managedBy": ACCOUNT_SOURCE,
+            "baseUrl": base_url,
+            "apiKey": api_key,
+            "model": model,
+        })
+        write_json(path, current)
+
+    def sync_targets(self, session: dict[str, Any] | None = None, *, targets: tuple[str, ...] = ("image", "video", "desktop", "phone")) -> list[dict[str, Any]]:
+        session = session or self.current()
+        if not session:
+            raise NewApiAccountError("not_logged_in")
+        actions = {
+            "image": self._sync_image_config,
+            "video": self._sync_video_config,
+            "desktop": self._sync_desktop_agent_config,
+            "phone": self._sync_phone_agent_config,
+        }
+        results: list[dict[str, Any]] = []
+        for target in targets:
+            action = actions.get(target)
+            if action is None:
+                results.append({"target": target, "ok": False, "error": "unknown_target"})
+                continue
+            try:
+                action(session)
+                results.append({"target": target, "ok": True})
+            except Exception as exc:
+                self.append_log(f"[Account] sync target {target} failed: {exc}\n")
+                results.append({"target": target, "ok": False, "error": str(exc)})
+        session["lastSyncResults"] = results
+        if isinstance(session, dict) and session.get("source") == ACCOUNT_SOURCE:
+            self._write_session(session)
+        return results
+
     def logout(self) -> bool:
         session = self.current()
         if not session:
@@ -743,14 +886,14 @@ class NewApiAccountManager:
             models = profiles.get("models") if isinstance(profiles.get("models"), dict) else {}
             providers = models.get("providers") if isinstance(models.get("providers"), dict) else {}
             if isinstance(providers, dict):
-                provider = providers.get("member_gateway")
-                if isinstance(provider, dict) and provider.get("managedBy") == ACCOUNT_SOURCE:
-                    providers.pop("member_gateway", None)
-                    if models.get("primary") == "member_gateway":
-                        models["primary"] = next(iter(providers), "")
+                for provider_id, provider in list(providers.items()):
+                    if isinstance(provider, dict) and provider.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
+                        providers.pop(provider_id, None)
+                if models.get("primary") not in providers:
+                    models["primary"] = next(iter(providers), "")
                     write_json(self.paths.auth_profiles, profiles)
 
         for path in (self.paths.image_config, self.paths.video_config, os.path.join(self.paths.base_path, "videoapi_config.json")):
             data = read_json(path, {})
-            if isinstance(data, dict) and data.get("managedBy") == ACCOUNT_SOURCE:
+            if isinstance(data, dict) and data.get("managedBy") in MANAGED_ACCOUNT_SOURCES:
                 write_json(path, {})

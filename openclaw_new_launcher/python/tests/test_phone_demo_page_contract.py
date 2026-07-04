@@ -25,6 +25,20 @@ class PhoneDemoPageContractTests(unittest.TestCase):
         self.assertIn("tokenAvailable", source)
         self.assertIn("setPhoneToken('')", source)
 
+    def test_phone_demo_exposes_multi_phone_add_and_select_flow(self) -> None:
+        with open(PHONE_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("phoneConfigSnapshot", source)
+        self.assertIn("nextPhoneDeviceId", source)
+        self.assertIn("startAddPhone", source)
+        self.assertIn("selectConfiguredPhone", source)
+        self.assertIn("添加手机", source)
+        self.assertIn("已保存 {configuredPhones.length} 台", source)
+        self.assertIn("id: deviceId", source)
+        self.assertIn("selectedDeviceId: deviceId", source)
+        self.assertIn("await checkConnection(deviceId)", source)
+
     def test_phone_actions_are_disabled_until_connection_config_exists(self) -> None:
         with open(PHONE_PAGE, "r", encoding="utf-8") as handle:
             source = handle.read()

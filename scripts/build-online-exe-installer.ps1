@@ -107,10 +107,7 @@ namespace LoomOnlineInstaller
         public bool Silent;
         public bool CreateShortcuts = true;
         public bool LaunchAfterInstall = true;
-        public string InstallRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LOOM"
-        );
+        public string InstallRoot = DefaultInstallRoot();
 
         public static InstallerOptions Parse(string[] args)
         {
@@ -141,6 +138,24 @@ namespace LoomOnlineInstaller
         private static bool EqualsArg(string actual, string expected)
         {
             return string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string DefaultInstallRoot()
+        {
+            try
+            {
+                if (Directory.Exists(@"D:\"))
+                {
+                    return @"D:\LOOM";
+                }
+            }
+            catch
+            {
+            }
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LOOM"
+            );
         }
     }
 
@@ -441,6 +456,7 @@ namespace LoomOnlineInstaller
                     throw new InvalidOperationException("\u8bf7\u5148\u9009\u62e9\u5b89\u88c5\u76ee\u5f55\u3002");
                 }
                 string installRoot = Path.GetFullPath(rawInstallRoot);
+                InstallerCore.ValidateInstallRoot(installRoot);
                 options.InstallRoot = installRoot;
                 ShowStep(2);
                 SetInstalling(true);
@@ -525,7 +541,9 @@ namespace LoomOnlineInstaller
     {
         public static void Install(string installRoot, UiProgress ui, bool createShortcuts, bool launchAfterInstall)
         {
-            string workDir = Path.Combine(Path.GetTempPath(), "loom-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            installRoot = Path.GetFullPath(installRoot);
+            ValidateInstallRoot(installRoot);
+            string workDir = CreateShortWorkDir(installRoot);
             string zipPath = Path.Combine(workDir, "loom-online.zip");
             string stageDir = Path.Combine(workDir, "stage");
             try
@@ -569,6 +587,38 @@ namespace LoomOnlineInstaller
             {
                 TryDelete(workDir);
             }
+        }
+
+        public static void ValidateInstallRoot(string installRoot)
+        {
+            if (string.IsNullOrWhiteSpace(installRoot))
+            {
+                throw new InvalidOperationException("\u8bf7\u5148\u9009\u62e9\u5b89\u88c5\u76ee\u5f55\u3002");
+            }
+            string fullPath = Path.GetFullPath(installRoot);
+            if (fullPath.Length > 140)
+            {
+                throw new InvalidOperationException("\u5b89\u88c5\u76ee\u5f55\u8def\u5f84\u592a\u957f\u3002\u8bf7\u6539\u7528 D:\\LOOM \u6216 C:\\LOOM \u8fd9\u6837\u7684\u77ed\u8def\u5f84\uff0c\u907f\u514d Windows \u8def\u5f84\u957f\u5ea6\u9650\u5236\u5bfc\u81f4\u5b89\u88c5\u5931\u8d25\u3002");
+            }
+        }
+
+        private static string CreateShortWorkDir(string installRoot)
+        {
+            string root = "";
+            try
+            {
+                root = Path.GetPathRoot(Path.GetFullPath(installRoot));
+            }
+            catch
+            {
+                root = Path.GetPathRoot(Path.GetTempPath());
+            }
+            if (string.IsNullOrEmpty(root))
+            {
+                root = Path.GetPathRoot(Path.GetTempPath());
+            }
+            string parent = Path.Combine(root, ".loomtmp");
+            return Path.Combine(parent, Guid.NewGuid().ToString("N").Substring(0, 8));
         }
 
         private static void Download(string[] urls, string target, UiProgress ui)
@@ -672,7 +722,7 @@ namespace LoomOnlineInstaller
                 Status(ui, "\u6b63\u5728\u4f7f\u7528\u7cfb\u7edf\u4e0b\u8f7d\u901a\u9053...");
                 ProcessStartInfo startInfo = new ProcessStartInfo();
                 startInfo.FileName = "curl.exe";
-                startInfo.Arguments = "-fL --connect-timeout 15 --speed-limit 262144 --speed-time 30 --max-time 150 -o " + Quote(target) + " " + Quote(url);
+                startInfo.Arguments = "-fL --connect-timeout 20 --speed-limit 32768 --speed-time 60 --max-time 600 -o " + Quote(target) + " " + Quote(url);
                 startInfo.CreateNoWindow = true;
                 startInfo.UseShellExecute = false;
                 startInfo.RedirectStandardError = true;
@@ -707,11 +757,11 @@ namespace LoomOnlineInstaller
             protected override WebRequest GetWebRequest(Uri address)
             {
                 WebRequest request = base.GetWebRequest(address);
-                request.Timeout = 20000;
+                request.Timeout = 60000;
                 HttpWebRequest http = request as HttpWebRequest;
                 if (http != null)
                 {
-                    http.ReadWriteTimeout = 20000;
+                    http.ReadWriteTimeout = 60000;
                     http.KeepAlive = false;
                 }
                 return request;
@@ -960,6 +1010,10 @@ namespace LoomOnlineInstaller
             if (error is WebException)
             {
                 return "\u4e0b\u8f7d\u5b89\u88c5\u5305\u5931\u8d25\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\uff0c\u6216\u7a0d\u540e\u91cd\u8bd5\u56fd\u5185\u6e90 / GitHub \u5907\u7528\u901a\u9053\u3002";
+            }
+            if (error is PathTooLongException)
+            {
+                return "\u5b89\u88c5\u76ee\u5f55\u8def\u5f84\u592a\u957f\u3002\u8bf7\u6539\u7528 D:\\LOOM \u6216 C:\\LOOM \u8fd9\u6837\u7684\u77ed\u8def\u5f84\u540e\u91cd\u8bd5\u3002";
             }
             return error.Message;
         }

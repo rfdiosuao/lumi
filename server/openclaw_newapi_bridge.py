@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import http.cookiejar
 import hashlib
+import hmac
 import json
 import os
 import secrets
 import sqlite3
+import smtplib
 import time
 import urllib.error
 import urllib.request
+from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -29,6 +32,11 @@ NEWAPI_BASE = os.environ.get("OPENCLAW_NEWAPI_BASE", "http://127.0.0.1:3000").rs
 DB_PATH = os.environ.get("OPENCLAW_NEWAPI_DB", "/mnt/data/new-api/one-api.db")
 BIND_DB_PATH = os.environ.get("OPENCLAW_BIND_DB", "/tmp/openclaw-bind-tickets.db")
 BIND_TICKET_TTL_SEC = int(os.environ.get("OPENCLAW_BIND_TICKET_TTL_SEC", "600"))
+EMAIL_CODE_TTL_SEC = int(os.environ.get("OPENCLAW_EMAIL_CODE_TTL_SEC", "600"))
+EMAIL_CODE_RATE_WINDOW_SEC = int(os.environ.get("OPENCLAW_EMAIL_CODE_RATE_WINDOW_SEC", "900"))
+EMAIL_CODE_RATE_LIMIT = int(os.environ.get("OPENCLAW_EMAIL_CODE_RATE_LIMIT", "5"))
+EMAIL_CODE_PEPPER = os.environ.get("OPENCLAW_EMAIL_CODE_SECRET") or secrets.token_hex(32)
+PRODUCT_NAME = os.environ.get("OPENCLAW_PRODUCT_NAME", "LOOM / 麓鸣")
 BIND_PAGE_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -184,8 +192,30 @@ def token_usable(row: sqlite3.Row) -> bool:
         return False
 
 
+def launcher_token_name(name: str | None) -> bool:
+    value = str(name or "")
+    return value.startswith("LOOM Launcher ") or value.startswith("OpenClaw Launcher ")
+
+
+def launcher_token_usable(row: sqlite3.Row) -> bool:
+    return token_usable(row) and not bool(row["model_limits_enabled"])
+
+
+def token_payload(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "key": row["key"],
+        "name": row["name"],
+        "remainQuota": row["remain_quota"],
+        "unlimitedQuota": bool(row["unlimited_quota"]),
+        "modelLimitsEnabled": bool(row["model_limits_enabled"]),
+        "modelLimits": row["model_limits"] or "",
+    }
+
+
 def select_token(user_id: str, preferred_name: str = "") -> dict[str, Any] | None:
-    with sqlite3.connect(DB_PATH) as connection:
+    connection = sqlite3.connect(DB_PATH)
+    try:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """
@@ -197,22 +227,29 @@ def select_token(user_id: str, preferred_name: str = "") -> dict[str, Any] | Non
             """,
             (user_id,),
         ).fetchall()
+    finally:
+        connection.close()
     if not rows:
         return None
 
-    preferred = [row for row in rows if preferred_name and row["name"] == preferred_name]
-    usable = [row for row in rows if token_usable(row)]
-    ordered = preferred + [row for row in usable if row not in preferred] + [row for row in rows if row not in preferred and row not in usable]
-    row = ordered[0]
-    return {
-        "id": row["id"],
-        "key": row["key"],
-        "name": row["name"],
-        "remainQuota": row["remain_quota"],
-        "unlimitedQuota": bool(row["unlimited_quota"]),
-        "modelLimitsEnabled": bool(row["model_limits_enabled"]),
-        "modelLimits": row["model_limits"] or "",
-    }
+    if preferred_name:
+        preferred = [row for row in rows if row["name"] == preferred_name and token_usable(row)]
+        if preferred:
+            return token_payload(preferred[0])
+        return None
+
+    # Do not reuse arbitrary historical tokens. Old user tokens may have
+    # model_limits enabled, which makes Codex see only agnes models and behave
+    # like a chat bot instead of a tool-using coding agent.
+    launcher_rows = [row for row in rows if launcher_token_name(row["name"]) and launcher_token_usable(row)]
+    if launcher_rows:
+        return token_payload(launcher_rows[0])
+
+    unrestricted_rows = [row for row in rows if launcher_token_usable(row)]
+    if unrestricted_rows:
+        return token_payload(unrestricted_rows[0])
+
+    return None
 
 
 def create_token(opener: urllib.request.OpenerDirector, user_id: str, group: str) -> dict[str, Any] | None:
@@ -239,6 +276,42 @@ def create_token(opener: urllib.request.OpenerDirector, user_id: str, group: str
     if last_error:
         raise RuntimeError(last_error)
     return None
+
+
+def create_token_direct(user_id: str, group: str) -> dict[str, Any]:
+    token_name = f"LOOM Launcher {int(time.time())}-{secrets.token_hex(3)}"
+    key = secrets.token_urlsafe(36)[:48]
+    now = int(time.time())
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        connection.execute(
+            """
+            insert into tokens(
+                user_id, key, status, name, created_time, accessed_time,
+                expired_time, remain_quota, unlimited_quota, model_limits_enabled,
+                model_limits, allow_ips, used_quota, "group", cross_group_retry, deleted_at
+            )
+            values(?, ?, 1, ?, ?, 0, -1, 0, 1, 0, '', '', 0, ?, 0, null)
+            """,
+            (user_id, key, token_name, now, group or "default"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    token = select_token(user_id, token_name)
+    if token and token.get("key"):
+        token["source"] = "created"
+        return token
+    return {
+        "id": None,
+        "key": key,
+        "name": token_name,
+        "remainQuota": 0,
+        "unlimitedQuota": True,
+        "modelLimitsEnabled": False,
+        "modelLimits": "",
+        "source": "created",
+    }
 
 
 def fetch_models(token: str) -> list[str]:
@@ -278,21 +351,39 @@ def handle_launcher_token(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     if not user_id:
         return 500, {"success": False, "error": "login succeeded but user id was not returned"}
 
+    return build_launcher_payload(
+        user_id=user_id,
+        account=username,
+        group=user_group(login_payload),
+        preferred_name=preferred_name,
+    )
+
+
+def build_launcher_payload(
+    *,
+    user_id: str,
+    account: str,
+    group: str = "default",
+    preferred_name: str = "",
+) -> tuple[int, dict[str, Any]]:
     token = select_token(user_id, preferred_name)
     source = "existing"
     if not token:
-        token = create_token(opener, user_id, user_group(login_payload))
+        token = create_token_direct(user_id, group)
         source = "created"
     if not token or not token.get("key"):
         return 500, {"success": False, "error": "no usable token found or created"}
 
     key = str(token["key"])
+    models = fetch_models(key)
     return 200, {
         "success": True,
         "data": {
             "userId": user_id,
-            "account": username,
+            "account": account,
             "key": key,
+            "apiKey": key,
+            "apiToken": key,
             "tokenMasked": mask_secret(key),
             "tokenId": token.get("id"),
             "tokenName": token.get("name"),
@@ -301,9 +392,245 @@ def handle_launcher_token(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             "unlimitedQuota": token.get("unlimitedQuota"),
             "modelLimitsEnabled": token.get("modelLimitsEnabled"),
             "modelLimits": token.get("modelLimits"),
-            "models": fetch_models(key),
+            "models": models,
+            "api": {
+                "token": key,
+                "apiKey": key,
+                "baseUrl": "https://api.heang.top/v1",
+            },
+            "defaults": {
+                "textModel": models[0] if models else "",
+            },
         },
     }
+
+
+def normalize_email(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def option_value(key: str, default: str = "") -> str:
+    connection = None
+    try:
+        connection = sqlite3.connect(DB_PATH)
+        row = connection.execute("select value from options where key = ? limit 1", (key,)).fetchone()
+        if row and row[0] is not None:
+            return str(row[0])
+    except Exception:
+        return default
+    finally:
+        if connection is not None:
+            connection.close()
+    return default
+
+
+def option_bool(key: str, default: bool = False) -> bool:
+    value = option_value(key, "true" if default else "false").strip().lower()
+    return value in {"1", "true", "yes", "on", "enabled"}
+
+
+def find_user_by_email(email: str) -> dict[str, Any] | None:
+    normalized = normalize_email(email)
+    if not normalized or "@" not in normalized:
+        return None
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            select id, username, email, display_name, status, "group", deleted_at
+            from users
+            where lower(email) = ? and deleted_at is null
+            order by id desc
+            limit 1
+            """,
+            (normalized,),
+        ).fetchone()
+    finally:
+        connection.close()
+    return dict(row) if row else None
+
+
+def _email_code_hash(email: str, purpose: str, code: str) -> str:
+    message = f"{normalize_email(email)}:{purpose}:{code}".encode("utf-8")
+    return hmac.new(EMAIL_CODE_PEPPER.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def _send_login_email_code(email: str, code: str) -> None:
+    server = option_value("SMTPServer")
+    account = option_value("SMTPAccount")
+    password = option_value("SMTPToken")
+    sender = option_value("SMTPFrom", account)
+    port = int(option_value("SMTPPort", "465") or "465")
+    ssl_enabled = option_bool("SMTPSSLEnabled", True)
+    if not server or not account or not password or not sender:
+        raise RuntimeError("SMTP is not configured")
+
+    message = EmailMessage()
+    message["Subject"] = f"{PRODUCT_NAME} 登录验证码"
+    message["From"] = sender
+    message["To"] = email
+    message.set_content(
+        "\n".join(
+            [
+                f"你的 {PRODUCT_NAME} 登录验证码是：{code}",
+                "",
+                f"验证码 {EMAIL_CODE_TTL_SEC // 60} 分钟内有效。若不是你本人操作，请忽略这封邮件。",
+            ]
+        )
+    )
+    if ssl_enabled:
+        with smtplib.SMTP_SSL(server, port, timeout=20) as client:
+            client.login(account, password)
+            client.send_message(message)
+    else:
+        with smtplib.SMTP(server, port, timeout=20) as client:
+            client.starttls()
+            client.login(account, password)
+            client.send_message(message)
+
+
+def _email_code_connection() -> sqlite3.Connection:
+    connection = _bind_connection()
+    connection.execute(
+        """
+        create table if not exists email_code_challenges (
+            id integer primary key autoincrement,
+            email text not null,
+            purpose text not null,
+            code_hash text not null,
+            created_at integer not null,
+            expires_at integer not null,
+            attempts integer not null default 0,
+            consumed_at integer
+        )
+        """
+    )
+    connection.execute("create index if not exists idx_email_code_email_purpose on email_code_challenges(email, purpose, created_at)")
+    return connection
+
+
+def cleanup_email_codes(now: int | None = None) -> None:
+    now = int(now or time.time())
+    connection = _email_code_connection()
+    try:
+        connection.execute(
+            "delete from email_code_challenges where expires_at < ? or (consumed_at is not null and consumed_at < ?)",
+            (now - 60, now - 60),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def handle_email_code_send(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    email = normalize_email(body.get("email"))
+    purpose = str(body.get("purpose") or body.get("scene") or body.get("type") or "login").strip().lower()
+    purpose = "login" if purpose in {"", "login", "signin", "sign_in", "email"} else purpose
+    if "@" not in email:
+        return 400, {"success": False, "error": "请输入有效邮箱"}
+    if purpose != "login":
+        return 400, {"success": False, "error": "邮箱验证码注册请使用 NewAPI 原生注册接口"}
+
+    user = find_user_by_email(email)
+    if not user:
+        return 404, {"success": False, "error": "邮箱尚未注册，请先注册或使用密码登录"}
+    if int(user.get("status") or 0) != 1:
+        return 403, {"success": False, "error": "账号当前不可用，请联系管理员"}
+
+    now = int(time.time())
+    cleanup_email_codes(now)
+    connection = _email_code_connection()
+    try:
+        recent_count = connection.execute(
+            """
+            select count(*) from email_code_challenges
+            where email = ? and purpose = ? and created_at >= ?
+            """,
+            (email, "login", now - EMAIL_CODE_RATE_WINDOW_SEC),
+        ).fetchone()[0]
+        if int(recent_count or 0) >= EMAIL_CODE_RATE_LIMIT:
+            return 429, {"success": False, "error": "验证码发送过于频繁，请稍后再试"}
+
+        code = f"{secrets.randbelow(1000000):06d}"
+        _send_login_email_code(email, code)
+        connection.execute(
+            """
+            insert into email_code_challenges(email, purpose, code_hash, created_at, expires_at, attempts, consumed_at)
+            values(?, ?, ?, ?, ?, 0, null)
+            """,
+            (email, "login", _email_code_hash(email, "login", code), now, now + EMAIL_CODE_TTL_SEC),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    return 200, {
+        "success": True,
+        "data": {
+            "sent": True,
+            "email": email,
+            "expiresIn": EMAIL_CODE_TTL_SEC,
+            "retryAfter": 60,
+        },
+    }
+
+
+def handle_email_code_login(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    email = normalize_email(body.get("email"))
+    code = str(body.get("code") or body.get("emailCode") or "").strip()
+    if "@" not in email:
+        return 400, {"success": False, "error": "请输入有效邮箱"}
+    if not code:
+        return 400, {"success": False, "error": "请输入验证码"}
+
+    now = int(time.time())
+    cleanup_email_codes(now)
+    expected_hash = _email_code_hash(email, "login", code)
+    connection = _email_code_connection()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """
+            select id, code_hash, expires_at, attempts, consumed_at
+            from email_code_challenges
+            where email = ? and purpose = ? and consumed_at is null
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (email, "login"),
+        ).fetchone()
+        if not row:
+            connection.rollback()
+            return 400, {"success": False, "error": "验证码不存在或已过期，请重新发送"}
+        if int(row["expires_at"] or 0) < now:
+            connection.execute("delete from email_code_challenges where id = ?", (row["id"],))
+            connection.commit()
+            return 400, {"success": False, "error": "验证码已过期，请重新发送"}
+        if int(row["attempts"] or 0) >= 5:
+            connection.execute("delete from email_code_challenges where id = ?", (row["id"],))
+            connection.commit()
+            return 400, {"success": False, "error": "验证码尝试次数过多，请重新发送"}
+        if not hmac.compare_digest(str(row["code_hash"]), expected_hash):
+            connection.execute("update email_code_challenges set attempts = attempts + 1 where id = ?", (row["id"],))
+            connection.commit()
+            return 400, {"success": False, "error": "验证码错误，请重新输入"}
+        connection.execute("update email_code_challenges set consumed_at = ? where id = ?", (now, row["id"]))
+        connection.commit()
+    finally:
+        connection.close()
+
+    user = find_user_by_email(email)
+    if not user:
+        return 404, {"success": False, "error": "邮箱尚未注册，请先注册或使用密码登录"}
+    if int(user.get("status") or 0) != 1:
+        return 403, {"success": False, "error": "账号当前不可用，请联系管理员"}
+    account = str(user.get("email") or user.get("username") or email)
+    return build_launcher_payload(
+        user_id=str(user["id"]),
+        account=account,
+        group=str(user.get("group") or "default"),
+    )
 
 
 def _ticket_hash(ticket: str) -> str:
@@ -468,6 +795,10 @@ class Handler(BaseHTTPRequestHandler):
             "/api/openclaw/launcher-token": handle_launcher_token,
             "/api/openclaw/bind/start": handle_bind_start,
             "/api/openclaw/bind/claim": handle_bind_claim,
+            "/api/openclaw/auth/email-code/send": handle_email_code_send,
+            "/api/openclaw/email-code/send": handle_email_code_send,
+            "/api/openclaw/auth/email-code/login": handle_email_code_login,
+            "/api/openclaw/email-code/login": handle_email_code_login,
         }
         handler = routes.get(self.path)
         if not handler:
@@ -479,7 +810,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(413, {"success": False, "error": "request too large"})
                 return
             raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            body = json.loads(raw) if raw else {}
+            try:
+                body = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                self._send(400, {"success": False, "error": "invalid json"})
+                return
             status, payload = handler(body)
             self._send(status, payload)
         except Exception as error:

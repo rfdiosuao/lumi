@@ -20,6 +20,7 @@ from core.paths import AppPaths
 
 
 Json = dict[str, Any]
+DEFAULT_PHONE_MODEL = "qwen3.7-plus"
 
 SENSITIVE_KEYS = {
     "token",
@@ -102,7 +103,7 @@ class MatrixControlPlane:
                 300,
             ),
             "failureCount": _int(raw.get("failureCount"), _int(existing.get("failureCount"), 0)),
-            "model": _clip(raw.get("model") or existing.get("model") or "agnes-2.0-flash", 120),
+            "model": _clip(raw.get("model") or existing.get("model") or DEFAULT_PHONE_MODEL, 120),
             "lastResult": _clip(raw.get("lastResult") or existing.get("lastResult") or "", 300),
             "lastEventAt": _clip(raw.get("lastEventAt") or existing.get("lastEventAt") or "", 64),
             "streamStatus": _clip(raw.get("streamStatus") or existing.get("streamStatus") or "", 40),
@@ -527,7 +528,7 @@ class MatrixControlPlane:
                 "currentTaskId": "",
                 "currentScreenSummary": "",
                 "failureCount": 0,
-                "model": "agnes-2.0-flash",
+                "model": DEFAULT_PHONE_MODEL,
                 "lastResult": "",
                 "updatedAt": _now_iso(),
             }
@@ -615,6 +616,7 @@ class MatrixControlPlane:
                     "lastResult": "",
                     "updatedAt": last_seen,
                     "source": "phone-config",
+                    "configSource": self.phone_devices_path,
                     "selected": device_id == selected_id or (not selected_id and index == 1),
                 }
             )
@@ -628,7 +630,7 @@ class MatrixControlPlane:
             model = _clip(models.get("phone"), 120)
             if model:
                 return model
-        return "agnes-2.0-flash"
+        return DEFAULT_PHONE_MODEL
 
     def _load_tasks(self) -> Json:
         data = self._read_json(self.tasks_path, {"schema": "loom.matrix.tasks.v1", "campaigns": []})
@@ -713,10 +715,11 @@ def _public_device(device: Json) -> Json:
         "currentTaskId": current_task_id,
         "currentScreenSummary": str(device.get("currentScreenSummary") or ""),
         "failureCount": failure_count,
-        "model": str(device.get("model") or "agnes-2.0-flash"),
+        "model": str(device.get("model") or DEFAULT_PHONE_MODEL),
         "lastResult": str(device.get("lastResult") or ""),
         "updatedAt": str(device.get("updatedAt") or ""),
         "source": str(device.get("source") or "matrix-registry"),
+        "configSource": str(device.get("configSource") or ""),
         "selected": bool(device.get("selected")),
         "platform": str(device.get("platform") or device.get("group") or "手机"),
         "account": str(device.get("account") or ""),

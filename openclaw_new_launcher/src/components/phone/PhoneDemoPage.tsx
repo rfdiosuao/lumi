@@ -48,6 +48,7 @@ const PHONE_JOB_LABELS = new Set([
   '手机模型同步',
 ]);
 const DEFAULT_PHONE_PORT = '9527';
+const DEFAULT_PHONE_MODEL = 'qwen3.7-plus';
 const PHONE_AGENT_APK_URL = 'https://gitee.com/rfdiosuao/lumiapkclaw/releases/download/lumiclaw13241/OpenClaw-AgentPhone.apk';
 const PHONE_AGENT_QR_SRC = '/phone-agent-apk-qr.svg';
 const DEFAULT_READ_PROMPT = '只读取当前手机屏幕，不要点击、输入或滑动。请用中文返回当前页面名称和三个可见内容。';
@@ -267,9 +268,17 @@ function createOptimisticPhoneJob(key: string): BridgeJob<CliResult> {
   };
 }
 
-function selectedPhoneDevice(snapshot?: PhoneConfigSnapshot): PhoneDeviceSummary | null {
+function selectedPhoneDevice(snapshot?: PhoneConfigSnapshot, preferredId?: string): PhoneDeviceSummary | null {
   const devices = snapshot?.devices || [];
-  return devices.find((device) => device.id && device.id === snapshot?.selectedDeviceId) || devices[0] || null;
+  const selectedId = String(preferredId || snapshot?.selectedDeviceId || '').trim();
+  return devices.find((device) => device.id && device.id === selectedId) || devices[0] || null;
+}
+
+function nextPhoneDeviceId(devices: PhoneDeviceSummary[]): string {
+  const usedIds = new Set(devices.map((device) => String(device.id || '').trim()).filter(Boolean));
+  let index = Math.max(1, devices.length + 1);
+  while (usedIds.has(`phone-${index}`)) index += 1;
+  return `phone-${index}`;
 }
 
 function cleanPhoneAddressInput(value?: string): string {
@@ -357,7 +366,7 @@ const MatrixDeviceCard: React.FC<{ device: MatrixDeviceSummary }> = ({ device })
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-black text-text">{device.name || device.deviceId}</div>
-          <div className="mt-1 truncate text-xs text-text-muted">{device.group || 'default'} / {device.model || 'agnes-2.0-flash'}</div>
+          <div className="mt-1 truncate text-xs text-text-muted">{device.group || 'default'} / {device.model || DEFAULT_PHONE_MODEL}</div>
         </div>
         <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold ${
           failed
@@ -462,8 +471,11 @@ export const PhoneDemoPage: React.FC = () => {
   const [accountLoggedIn, setAccountLoggedIn] = React.useState(false);
   const [hasWireConfig, setHasWireConfig] = React.useState(false);
   const [phoneAppModalOpen, setPhoneAppModalOpen] = React.useState(false);
+  const [phoneConfigSnapshot, setPhoneConfigSnapshot] = React.useState<PhoneConfigSnapshot | null>(null);
+  const [isAddingDevice, setIsAddingDevice] = React.useState(false);
   const [matrixStatus, setMatrixStatus] = React.useState<MatrixStatusSnapshot | null>(null);
   const [matrixEvents, setMatrixEvents] = React.useState<MatrixEvent[]>([]);
+  const configuredPhones = React.useMemo(() => phoneConfigSnapshot?.devices || [], [phoneConfigSnapshot]);
   const canUsePhone = Boolean(phoneAddress.trim() && (tokenAvailable || phoneToken.trim()));
 
   const refreshJobs = React.useCallback(async () => {
@@ -491,9 +503,10 @@ export const PhoneDemoPage: React.FC = () => {
     }
   }, []);
 
-  const applyPhoneConfig = React.useCallback((snapshot: PhoneConfigSnapshot) => {
-    const selected = selectedPhoneDevice(snapshot);
-    setSelectedDeviceId(snapshot.selectedDeviceId || selected?.id || 'phone-1');
+  const applyPhoneConfig = React.useCallback((snapshot: PhoneConfigSnapshot, preferredId?: string) => {
+    setPhoneConfigSnapshot(snapshot);
+    const selected = selectedPhoneDevice(snapshot, preferredId);
+    setSelectedDeviceId(selected?.id || preferredId || snapshot.selectedDeviceId || 'phone-1');
     setDeviceName(selected?.name || selected?.id || 'Android Phone');
     setPhoneAddress(displayPhoneAddress(selected?.baseUrl || ''));
     setTokenAvailable(Boolean(selected?.tokenAvailable));
@@ -503,6 +516,28 @@ export const PhoneDemoPage: React.FC = () => {
     } else {
       setDeviceSummary('未配置设备');
     }
+  }, []);
+
+  const startAddPhone = React.useCallback(() => {
+    const nextId = nextPhoneDeviceId(configuredPhones);
+    setIsAddingDevice(true);
+    setSelectedDeviceId(nextId);
+    setDeviceName(`Android Phone ${configuredPhones.length + 1}`);
+    setPhoneAddress('');
+    setPhoneToken('');
+    setTokenAvailable(false);
+    setConnectionSummary('未检测');
+  }, [configuredPhones]);
+
+  const selectConfiguredPhone = React.useCallback((device: PhoneDeviceSummary) => {
+    const nextId = device.id || device.name || 'phone-1';
+    setIsAddingDevice(false);
+    setSelectedDeviceId(nextId);
+    setDeviceName(device.name || nextId);
+    setPhoneAddress(displayPhoneAddress(device.baseUrl || ''));
+    setPhoneToken('');
+    setTokenAvailable(Boolean(device.tokenAvailable));
+    setConnectionSummary('未检测');
   }, []);
 
   const loadPhoneConfig = React.useCallback(async () => {
@@ -542,8 +577,8 @@ export const PhoneDemoPage: React.FC = () => {
     }
   }, []);
 
-  const updateMatrixDevicePresence = React.useCallback(async (online: boolean, summary: string) => {
-    const deviceId = selectedDeviceId || deviceName.trim() || 'phone-1';
+  const updateMatrixDevicePresence = React.useCallback(async (online: boolean, summary: string, deviceIdOverride?: string) => {
+    const deviceId = deviceIdOverride || selectedDeviceId || deviceName.trim() || 'phone-1';
     try {
       const next = await matrixApi.registerDevice({
         deviceId,
@@ -553,7 +588,7 @@ export const PhoneDemoPage: React.FC = () => {
         heartbeatAt: new Date().toISOString(),
         currentScreenSummary: summary,
         failureCount: online ? 0 : 1,
-        model: 'agnes-2.0-flash',
+        model: DEFAULT_PHONE_MODEL,
       });
       setMatrixStatus(next.status);
     } catch {
@@ -650,24 +685,26 @@ export const PhoneDemoPage: React.FC = () => {
     }
     setBusy('config');
     try {
+      const deviceId = selectedDeviceId.trim() || nextPhoneDeviceId(configuredPhones);
       const snapshot = await phoneApi.saveDevice({
-        id: selectedDeviceId || cleanName || 'phone-1',
+        id: deviceId,
         name: cleanName,
         baseUrl: cleanAddress,
         token: cleanToken,
-        selectedDeviceId: selectedDeviceId || 'phone-1',
+        selectedDeviceId: deviceId,
       });
-      applyPhoneConfig(snapshot);
+      applyPhoneConfig(snapshot, deviceId);
+      setIsAddingDevice(false);
       void matrixApi.registerDevice({
-        deviceId: selectedDeviceId || cleanName || 'phone-1',
+        deviceId,
         name: cleanName,
         group: 'default',
         online: false,
-        model: 'agnes-2.0-flash',
+        model: DEFAULT_PHONE_MODEL,
       }).then((next) => setMatrixStatus(next.status)).catch(() => undefined);
       setPhoneToken('');
       showToast('手机连接配置已保存', 'success');
-      await checkConnection();
+      await checkConnection(deviceId);
     } catch (error: any) {
       showToast(friendlyPhoneText(parseErrorText(error)) || '保存手机连接配置失败', 'error');
     } finally {
@@ -688,7 +725,7 @@ export const PhoneDemoPage: React.FC = () => {
     });
   };
 
-  const checkConnection = async () => {
+  const checkConnection = async (deviceIdOverride?: string) => {
     if (!canUsePhone) {
       showToast('请先保存手机 IP 和连接令牌', 'info');
       return;
@@ -700,7 +737,7 @@ export const PhoneDemoPage: React.FC = () => {
         parsed?.ok === true ||
         parsed?.success === true ||
         parsed?.results?.some?.((item: any) => item?.ok !== false);
-      void updateMatrixDevicePresence(ok, ok ? '手机连接在线' : text || '手机连接失败');
+      void updateMatrixDevicePresence(ok, ok ? '手机连接在线' : text || '手机连接失败', deviceIdOverride);
       setConnectionSummary(ok ? '已连接' : text || '检测完成');
     });
   };
@@ -900,9 +937,10 @@ export const PhoneDemoPage: React.FC = () => {
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-3">
+            <Button variant="quiet" onClick={startAddPhone} disabled={Boolean(busy)}>添加手机</Button>
             <Button variant="quiet" onClick={() => setPhoneAppModalOpen(true)}>下载手机端 App</Button>
             <Button variant="quiet" onClick={refreshJobs}>刷新任务</Button>
-            <Button variant="primary" onClick={checkConnection} disabled={Boolean(busy) || !canUsePhone}>
+            <Button variant="primary" onClick={() => checkConnection()} disabled={Boolean(busy) || !canUsePhone}>
               {busy === 'status' ? '检测中...' : '检测连接'}
             </Button>
           </div>
@@ -983,10 +1021,43 @@ export const PhoneDemoPage: React.FC = () => {
                       只保存本机连接信息；连接令牌不会回显到界面。
                     </p>
                   </div>
-                  <Button variant="quiet" onClick={loadPhoneConfig} disabled={Boolean(busy)}>
-                    读取配置
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-border/70 bg-surface-alt/40 px-3 py-1 text-xs font-bold text-text-muted">
+                      {isAddingDevice ? '新增手机' : `当前：${selectedDeviceId || 'phone-1'}`}
+                    </span>
+                    <Button variant="quiet" onClick={startAddPhone} disabled={Boolean(busy)}>
+                      添加手机
+                    </Button>
+                    <Button variant="quiet" onClick={loadPhoneConfig} disabled={Boolean(busy)}>
+                      读取配置
+                    </Button>
+                  </div>
                 </div>
+                {configuredPhones.length ? (
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    {configuredPhones.map((device) => {
+                      const active = !isAddingDevice && device.id === selectedDeviceId;
+                      return (
+                        <button
+                          key={device.id}
+                          type="button"
+                          onClick={() => selectConfiguredPhone(device)}
+                          disabled={Boolean(busy)}
+                          className={`min-w-[150px] rounded-[8px] border px-3 py-2 text-left transition ${
+                            active
+                              ? 'border-[#0B4A3E] bg-[#0B4A3E]/10 text-[#0B4A3E]'
+                              : 'border-border/70 bg-surface-alt/40 text-text hover:border-[#0B4A3E]/40'
+                          } ${busy ? 'opacity-60' : ''}`}
+                        >
+                          <span className="block truncate text-sm font-black">{device.name || device.id}</span>
+                          <span className="mt-1 block truncate text-[11px] font-bold text-text-muted">
+                            {displayPhoneAddress(device.baseUrl) || '未填写地址'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 <div className="grid gap-4 lg:grid-cols-[180px_minmax(0,1fr)_220px]">
                   <label className="block">
                     <span className="mb-1 block text-xs font-bold text-text-subtle">设备名称</span>
@@ -1025,7 +1096,7 @@ export const PhoneDemoPage: React.FC = () => {
                     {busy === 'config' || busy === 'status' ? '保存检测中...' : '保存并检测'}
                   </Button>
                   <span className="text-xs font-bold text-text-subtle">
-                    {tokenAvailable ? '令牌已保存' : '未保存令牌'}
+                    {isAddingDevice ? '新手机会保存为独立设备' : tokenAvailable ? '令牌已保存' : '未保存令牌'}
                   </span>
                 </div>
               </section>
@@ -1052,7 +1123,7 @@ export const PhoneDemoPage: React.FC = () => {
                     <Button variant="primary" onClick={refreshDevices} disabled={Boolean(busy) || !canUsePhone}>
                       {busy === 'devices' ? '读取中...' : '刷新设备'}
                     </Button>
-                    <Button variant="quiet" onClick={checkConnection} disabled={Boolean(busy) || !canUsePhone}>
+                    <Button variant="quiet" onClick={() => checkConnection()} disabled={Boolean(busy) || !canUsePhone}>
                       {busy === 'status' ? '检测中...' : '检测连接'}
                     </Button>
                   </div>
@@ -1182,11 +1253,35 @@ export const PhoneDemoPage: React.FC = () => {
                     <div className="text-[10px] font-bold tracking-[0.24em] text-text-subtle">多设备管理</div>
                     <h2 className="mt-1 text-lg font-black text-text">我的手机</h2>
                   </div>
-                  <Button variant="quiet" onClick={refreshMatrix}>刷新</Button>
+                  <div className="flex items-center gap-2">
+                    <Button variant="quiet" onClick={startAddPhone} disabled={Boolean(busy)}>添加</Button>
+                    <Button variant="quiet" onClick={refreshMatrix}>刷新</Button>
+                  </div>
                 </div>
                 <div className="rounded-full border border-border/70 bg-surface-alt/40 px-3 py-1 text-xs font-bold text-text-muted">
-                  {matrixStatus?.summary?.online || 0}/{matrixStatus?.summary?.total || 0} 在线
+                  已保存 {configuredPhones.length} 台 / {matrixStatus?.summary?.online || 0} 在线
                 </div>
+                {configuredPhones.length ? (
+                  <div className="mt-3 space-y-2">
+                    {configuredPhones.map((device) => (
+                      <button
+                        key={device.id}
+                        type="button"
+                        onClick={() => selectConfiguredPhone(device)}
+                        className={`w-full rounded-[8px] border px-3 py-2 text-left transition ${
+                          !isAddingDevice && device.id === selectedDeviceId
+                            ? 'border-[#0B4A3E] bg-[#0B4A3E]/10'
+                            : 'border-border/70 bg-surface-alt/30 hover:border-[#0B4A3E]/35'
+                        }`}
+                      >
+                        <span className="block truncate text-sm font-black text-text">{device.name || device.id}</span>
+                        <span className="mt-1 block truncate text-xs text-text-muted">
+                          {displayPhoneAddress(device.baseUrl) || '未填写地址'} / {device.tokenAvailable ? '令牌已保存' : '待填令牌'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="mt-3">
                   {matrixStatus?.devices?.length ? (
                     matrixStatus.devices.slice(0, 4).map((device) => (

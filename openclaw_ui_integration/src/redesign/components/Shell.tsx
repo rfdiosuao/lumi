@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Activity,
   BellOff,
+  Bot,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -32,29 +33,31 @@ import { copyText } from '../lib/clipboard';
 import type { AccountSnapshot } from '../types';
 
 const NAV_ITEMS: Array<{ key: RouteKey; label: string; desc: string; icon: typeof Gauge }> = [
-  { key: 'dashboard', label: '启动器', desc: '开机总览', icon: Gauge },
-  { key: 'service', label: '服务 / CLI', desc: '启动、日志、终端', icon: SquareTerminal },
-  { key: 'license', label: '授权内测', desc: '授权码与成员状态', icon: ShieldCheck },
-  { key: 'integrations', label: '平台对接', desc: '飞书 / 微信 / Webhook', icon: Webhook },
-  { key: 'studio', label: '图像 / 视频', desc: '生成任务入口', icon: Sparkles },
-  { key: 'phone', label: '手机控制台', desc: 'APKClaw 桥接', icon: Phone },
-  { key: 'desktop', label: '桌面自动化', desc: 'Luminode 控制', icon: Cpu },
-  { key: 'skills', label: 'Skills 工作区', desc: '能力模块管理', icon: Layers3 },
+  { key: 'dashboard', label: '安装首页', desc: '四步完成配置', icon: Gauge },
+  { key: 'license', label: '账号 / 授权', desc: '登录与模型同步', icon: ShieldCheck },
+  { key: 'agents', label: '智能体', desc: 'Codex / Claude / Hermes', icon: Bot },
+  { key: 'service', label: '核心服务', desc: '启动、日志、终端', icon: SquareTerminal },
   { key: 'diagnostics', label: '环境检测', desc: '检测与修复', icon: Activity },
   { key: 'settings', label: '统一设置', desc: '密钥与连接', icon: Settings2 },
+  { key: 'studio', label: '图像 / 视频', desc: '生成任务入口', icon: Sparkles },
+  { key: 'phone', label: '手机控制', desc: 'APKClaw 桥接', icon: Phone },
+  { key: 'desktop', label: '桌面 RPA', desc: 'Luminode 控制', icon: Cpu },
+  { key: 'integrations', label: '平台对接', desc: '飞书 / 微信 / Webhook', icon: Webhook },
+  { key: 'skills', label: 'Skills', desc: '能力模块管理', icon: Layers3 },
 ];
 
 const ROUTE_COPY: Record<RouteKey, { eyebrow: string; title: string }> = {
-  dashboard: { eyebrow: 'Windows 启动器', title: 'OpenClaw 启动器总览' },
-  service: { eyebrow: '运行时 / CLI', title: '启动核心服务，查看日志与 CLI 状态' },
-  license: { eyebrow: '授权内测', title: '授权码、成员状态与发卡入口' },
-  integrations: { eyebrow: '平台对接', title: '飞书、微信、钉钉与 Webhook 的统一接入窗口' },
-  studio: { eyebrow: '生成任务', title: '图像 / 视频生成任务' },
-  phone: { eyebrow: 'APKClaw 桥接', title: '手机控制台，只作控制星桥' },
-  desktop: { eyebrow: '桌面自动化', title: 'lumi 桌面控制台' },
-  skills: { eyebrow: 'Skills 工作区', title: 'Skills 管理与工作区状态' },
-  diagnostics: { eyebrow: '环境检测', title: '启动前环境检测与修复' },
-  settings: { eyebrow: '统一设置', title: '统一配置密钥、桥接和控制端' },
+  agents: { eyebrow: 'Agents', title: '智能体安装' },
+  dashboard: { eyebrow: 'Installer', title: 'OpenClaw 安装首页' },
+  service: { eyebrow: 'Runtime / CLI', title: '核心服务与日志' },
+  license: { eyebrow: 'Account', title: '账号 / 授权' },
+  integrations: { eyebrow: 'Integrations', title: '平台对接' },
+  studio: { eyebrow: 'Studio', title: '图像 / 视频' },
+  phone: { eyebrow: 'APKClaw', title: '手机控制' },
+  desktop: { eyebrow: 'Desktop RPA', title: '桌面 RPA' },
+  skills: { eyebrow: 'Skills', title: 'Skills' },
+  diagnostics: { eyebrow: 'Diagnostics', title: '环境检测' },
+  settings: { eyebrow: 'Settings', title: '统一设置' },
 };
 
 function getBridgeLabel(settings: PreviewSettings): string {
@@ -66,14 +69,15 @@ function getBridgeLabel(settings: PreviewSettings): string {
 }
 
 const ROUTE_LABELS: Record<RouteKey, string> = {
-  dashboard: '启动器',
-  service: '服务 / CLI',
-  license: '授权内测',
+  agents: '智能体',
+  dashboard: '安装首页',
+  service: '核心服务',
+  license: '账号 / 授权',
   integrations: '平台对接',
   studio: '图像 / 视频',
-  phone: '手机控制台',
+  phone: '手机控制',
   desktop: '桌面 RPA',
-  skills: 'Skills 工作区',
+  skills: 'Skills',
   diagnostics: '环境检测',
   settings: '统一设置',
 };
@@ -140,7 +144,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="brand-block" data-tauri-drag-region>
           <div className="brand-copy">
             <div className="brand-title" data-tauri-drag-region>OpenClaw</div>
-            <div className="brand-subtitle" data-tauri-drag-region>满舱清梦压星河</div>
+            <div className="brand-subtitle" data-tauri-drag-region>Agent Installer</div>
           </div>
         </div>
 

@@ -23,10 +23,19 @@ class DaemonUnavailableError extends Error {
 }
 
 class DaemonExecutionError extends Error {
-  constructor(message) {
+  constructor(message, payload = null) {
     super(message);
     this.name = 'DaemonExecutionError';
     this.daemonFailureKind = 'execution';
+    if (payload && typeof payload === 'object') {
+      this.payload = payload;
+      this.errorCode = payload.errorCode || payload.error || '';
+      this.code = this.errorCode || this.code;
+      this.retryable = payload.retryable;
+      this.details = payload.details;
+      this.remediation = payload.remediation;
+      this.currentStep = payload.currentStep;
+    }
   }
 }
 
@@ -135,10 +144,10 @@ async function requestDaemon(runtime, endpoint, requestPayload, timeoutMs) {
     throw new DaemonExecutionError(`daemon_invalid_json: HTTP ${response.status}`);
   }
   if (!response.ok) {
-    throw new DaemonExecutionError(responsePayload?.error || `daemon_http_${response.status}`);
+    throw new DaemonExecutionError(responsePayload?.message || responsePayload?.error || `daemon_http_${response.status}`, responsePayload);
   }
   if (responsePayload?.ok === false) {
-    throw new DaemonExecutionError(responsePayload?.error || 'daemon_execution_failed');
+    throw new DaemonExecutionError(responsePayload?.message || responsePayload?.error || 'daemon_execution_failed', responsePayload);
   }
   return responsePayload;
 }
@@ -162,7 +171,7 @@ async function requestDaemonEventStream(runtime, endpoint, requestPayload, timeo
     } catch {
       throw new DaemonExecutionError(`daemon_http_${response.status}`);
     }
-    throw new DaemonExecutionError(payload?.error || `daemon_http_${response.status}`);
+    throw new DaemonExecutionError(payload?.message || payload?.error || `daemon_http_${response.status}`, payload);
   }
 
   if (!response.body || typeof response.body.getReader !== 'function') {
@@ -185,7 +194,7 @@ async function requestDaemonEventStream(runtime, endpoint, requestPayload, timeo
       throw new DaemonExecutionError('daemon_event_stream_invalid_json');
     }
     if (payload?.ok === false) {
-      throw new DaemonExecutionError(payload.error || 'daemon_events_sync_failed');
+      throw new DaemonExecutionError(payload.message || payload.error || 'daemon_events_sync_failed', payload);
     }
     if (payload?.type === 'phone_event') {
       const event = payload.event || {};

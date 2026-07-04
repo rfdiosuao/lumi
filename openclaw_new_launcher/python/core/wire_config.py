@@ -20,7 +20,7 @@ WIRE_MANAGED_BY = "heang_account"
 WIRE_PROVIDER = "heang"
 WIRE_CUSTOM_MANAGED_BY = "custom_provider"
 DEFAULT_TEXT_MODEL = "qwen3.7-plus"
-DEFAULT_PHONE_MODEL = "agnes-2.0-flash"
+DEFAULT_PHONE_MODEL = "qwen3.7-plus"
 TEXT_MODEL_PRIORITY = (
     "qwen3.7-plus",
     "qwen3.6-plus",
@@ -29,9 +29,32 @@ TEXT_MODEL_PRIORITY = (
     "kimi-k2.5",
     "MiniMax-M2.5",
 )
-PHONE_MODEL_IDS = {DEFAULT_PHONE_MODEL.lower()}
+PHONE_MODEL_IDS = {"agnes-2.0-flash"}
+IMAGE_MODEL_MARKERS = (
+    "image",
+    "dall-e",
+    "gpt-image",
+    "flux",
+    "midjourney",
+    "sd-",
+    "imagen",
+    "seedream",
+)
+VIDEO_MODEL_MARKERS = (
+    "video",
+    "veo",
+    "sora",
+    "seedance",
+    "kling",
+    "wan",
+    "hailuo",
+    "runway",
+    "pika",
+    "luma",
+)
 MANAGED_ACCOUNT_SOURCES = {"newapi_account", WIRE_MANAGED_BY, WIRE_CUSTOM_MANAGED_BY}
 AGENT_ENV_KEYS = ("LOOM_OPENCODE_API_KEY", "LOOM_CODEX_API_KEY", "LOOM_CLAUDE_API_KEY")
+AGENT_STALE_MODEL_ENV_KEYS = ("OPENAI_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_MODEL", "OPENCODE_MODEL", "OPENCODE_PROVIDER")
 AGENT_MODEL_CONFIGS = {
     "codex-desktop": {
         "target": "codex",
@@ -121,6 +144,8 @@ class WireService:
             raise WireConfigError("请输入第三方 API Key")
         if not text_model:
             raise WireConfigError("请输入默认文本模型")
+        if _looks_like_non_text_model(text_model):
+            raise WireConfigError("默认文本模型不能使用手机/图像/视频模型")
 
         wire = {
             "schemaVersion": 1,
@@ -251,11 +276,22 @@ class WireService:
             text_models = [current_model, *text_models]
         metadata_model = _desktop_text_model(metadata.get("model"))
         expected_model = metadata_model or current_model
-        actual_model = _desktop_text_model(_agent_config_model(component_id, config_path))
+        actual_raw_model = _agent_config_model(component_id, config_path)
+        actual_model = _desktop_text_model(actual_raw_model)
         user_config_path = _user_codex_config_path(self.paths) if component_id == "codex-desktop" else ""
-        user_actual_model = _desktop_text_model(_agent_config_model(component_id, user_config_path)) if user_config_path else ""
-        config_matches = not actual_model or not expected_model or actual_model == expected_model
-        user_config_matches = component_id != "codex-desktop" or not user_actual_model or not expected_model or user_actual_model == expected_model
+        user_actual_raw_model = _agent_config_model(component_id, user_config_path) if user_config_path else ""
+        user_actual_model = _desktop_text_model(user_actual_raw_model)
+        invalid_actual_model = bool(actual_raw_model and not actual_model)
+        invalid_user_model = bool(user_actual_raw_model and not user_actual_model)
+        invalid_model = user_actual_raw_model if invalid_user_model else actual_raw_model if invalid_actual_model else ""
+        config_matches = not invalid_actual_model and (not actual_model or not expected_model or actual_model == expected_model)
+        user_config_matches = (
+            component_id != "codex-desktop"
+            or (
+                not invalid_user_model
+                and (not user_actual_model or not expected_model or user_actual_model == expected_model)
+            )
+        )
         configured = bool(
             os.path.isfile(config_path)
             and metadata.get("configured")
@@ -266,6 +302,9 @@ class WireService:
         if not wire:
             status = "no_wire"
             message = "请先登录中转站或应用第三方模型配置"
+        elif invalid_model:
+            status = "unconfigured"
+            message = "检测到手机/图像/视频模型被写入桌面 Agent，请重新写入文本模型配置"
         elif configured:
             status = "configured"
             message = "模型配置已写入"
@@ -281,9 +320,10 @@ class WireService:
             "configured": configured,
             "status": status,
             "message": message,
-            "model": user_actual_model or actual_model or metadata_model or current_model,
+            "model": user_actual_raw_model or actual_raw_model or metadata_model or current_model,
             "expectedModel": expected_model,
-            "actualModel": user_actual_model or actual_model,
+            "actualModel": user_actual_raw_model or actual_raw_model,
+            "invalidModel": invalid_model,
             "provider": _pick_text(wire.get("provider")) if isinstance(wire, dict) else "",
             "baseUrl": _pick_text(wire.get("baseUrl")) if isinstance(wire, dict) else "",
             "managedBy": _wire_managed_by(wire) if isinstance(wire, dict) else "",
@@ -303,13 +343,14 @@ class WireService:
             raise WireConfigError("请先登录中转站或应用第三方模型配置")
         base_url = _pick_text(wire.get("baseUrl")).rstrip("/")
         api_key = _pick_text(wire.get("apiKey"))
-        if _looks_like_phone_model(model):
-            raise WireConfigError("手机 Agent 模型不能写入 Codex / Claude Code，请选择文本模型。")
+        if _looks_like_non_text_model(model):
+            raise WireConfigError("手机/图像/视频模型不能写入 Codex / Claude Code，请选择文本模型。")
         selected_model = _pick_agent_model(wire, model)
         if not selected_model:
             raise WireConfigError("没有可用文本模型，请同步/购买/换模型")
         if not base_url or not api_key:
             raise WireConfigError("中转站模型配置不完整，请先同步模型")
+        _clear_stale_agent_model_env_keys(self.paths)
 
         if component_id == "openclaw-companion":
             return self._sync_openclaw_agent_model_config(component_id, wire, selected_model)
@@ -420,7 +461,9 @@ class WireService:
     def _sync_openclaw(self, wire: dict[str, Any]) -> None:
         models = wire.get("modelLists") if isinstance(wire.get("modelLists"), dict) else {}
         text_models = _desktop_text_models(models.get("text") if isinstance(models.get("text"), list) else [])
-        default_model = _model_value(wire, "text", "")
+        default_model = _desktop_text_model(_model_value(wire, "text", ""))
+        if not default_model and text_models:
+            default_model = text_models[0]
         managed_by = _wire_managed_by(wire)
         if not default_model:
             raise WireConfigError("没有可用文本模型，请同步/购买/换模型")
@@ -445,19 +488,22 @@ class WireService:
     def _sync_opencode(self, wire: dict[str, Any]) -> None:
         base_url = _pick_text(wire.get("baseUrl")).rstrip("/")
         api_key = _pick_text(wire.get("apiKey"))
-        default_model = _model_value(wire, "text", "")
+        default_model = _desktop_text_model(_model_value(wire, "text", ""))
         model_lists = wire.get("modelLists") if isinstance(wire.get("modelLists"), dict) else {}
         text_models = _desktop_text_models(_list_values(model_lists.get("text")))
         if default_model and default_model not in text_models:
             text_models = [default_model, *text_models]
         text_models = [model for model in text_models if model]
-        if not text_models:
+        if not default_model and text_models:
+            default_model = text_models[0]
+        if not text_models and default_model:
             text_models = [default_model]
         if not default_model:
             raise WireConfigError("没有可用文本模型，请同步/购买/换模型")
         if not base_url or not api_key:
             raise WireConfigError("opencode 缺少中转站模型配置")
 
+        _clear_stale_agent_model_env_keys(self.paths)
         provider_id = "loom"
         config_dir = os.path.join(self.paths.data_dir, ".opencode")
         os.makedirs(config_dir, exist_ok=True)
@@ -507,7 +553,13 @@ class WireService:
         write_json(self.paths.image_config, current)
 
     def _sync_desktop(self, wire: dict[str, Any]) -> None:
-        model = _model_value(wire, "text", "")
+        model = _desktop_text_model(_model_value(wire, "text", ""))
+        if not model:
+            model_lists = wire.get("modelLists") if isinstance(wire.get("modelLists"), dict) else {}
+            text_models = _desktop_text_models(_list_values(model_lists.get("text")))
+            model = text_models[0] if text_models else ""
+        if not model:
+            raise WireConfigError("没有可用文本模型，请同步/购买/换模型")
         managed_by = _wire_managed_by(wire)
         provider = {
             "managedBy": managed_by,
@@ -675,10 +727,9 @@ def _classify_models(models: list[Any]) -> dict[str, list[str]]:
         model = _pick_text(raw.get("id") if isinstance(raw, dict) else raw)
         if not model:
             continue
-        lower = model.lower()
-        if any(marker in lower for marker in ("video", "veo", "sora", "seedance", "kling", "wan", "hailuo", "runway", "pika", "luma")):
+        if _looks_like_video_model(model):
             classified["video"].append(model)
-        elif any(marker in lower for marker in ("image", "dall-e", "gpt-image", "flux", "midjourney", "sd-", "imagen", "seedream")):
+        elif _looks_like_image_model(model):
             classified["image"].append(model)
         elif _looks_like_phone_model(model):
             continue
@@ -739,9 +790,23 @@ def _looks_like_phone_model(model_id: Any) -> bool:
     return bool(text) and text in PHONE_MODEL_IDS
 
 
+def _looks_like_image_model(model_id: Any) -> bool:
+    text = _pick_text(model_id).lower()
+    return bool(text) and any(marker in text for marker in IMAGE_MODEL_MARKERS)
+
+
+def _looks_like_video_model(model_id: Any) -> bool:
+    text = _pick_text(model_id).lower()
+    return bool(text) and any(marker in text for marker in VIDEO_MODEL_MARKERS)
+
+
+def _looks_like_non_text_model(model_id: Any) -> bool:
+    return _looks_like_phone_model(model_id) or _looks_like_image_model(model_id) or _looks_like_video_model(model_id)
+
+
 def _desktop_text_model(model_id: Any) -> str:
     text = _pick_text(model_id)
-    return "" if _looks_like_phone_model(text) else text
+    return "" if _looks_like_non_text_model(text) else text
 
 
 def _desktop_text_models(models: list[str]) -> list[str]:
@@ -908,6 +973,13 @@ def clear_agent_user_env_keys(paths: AppPaths) -> None:
             _delete_user_env_var(name)
 
 
+def _clear_stale_agent_model_env_keys(paths: AppPaths) -> None:
+    for name in AGENT_STALE_MODEL_ENV_KEYS:
+        os.environ.pop(name, None)
+        if _should_persist_user_env(paths):
+            _delete_user_env_var(name)
+
+
 def _persist_agent_env_key(paths: AppPaths, name: str, value: str) -> None:
     if name not in AGENT_ENV_KEYS or not value:
         return
@@ -974,12 +1046,19 @@ def _broadcast_user_env_change() -> None:
         pass
 
 
+def _anthropic_base_url(base_url: str) -> str:
+    text = _pick_text(base_url).rstrip("/")
+    if text.endswith("/v1"):
+        return text[:-3].rstrip("/")
+    return text
+
+
 def _claude_settings_text(base_url: str, provider: str, model: str) -> str:
     return json.dumps({
         "managedBy": "LOOM",
         "provider": provider or "LOOM",
         "env": {
-            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_BASE_URL": _anthropic_base_url(base_url),
             "ANTHROPIC_AUTH_TOKEN": "{env:LOOM_CLAUDE_API_KEY}",
             "ANTHROPIC_API_KEY": "{env:LOOM_CLAUDE_API_KEY}",
             "ANTHROPIC_MODEL": model,

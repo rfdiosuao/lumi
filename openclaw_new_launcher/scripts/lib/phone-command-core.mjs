@@ -1,8 +1,13 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   authHeaders,
   ensurePhoneConfig,
   fetchWithTimeout,
   normalizePhoneUrl,
+  PhoneBridgeError,
   signedFetch,
   signedJsonRequest,
 } from '../openclaw-phone-secure.mjs';
@@ -12,6 +17,11 @@ const SCREENSHOT_TEMPLATES = new Set(['screenshot', 'take-screenshot', 'take_scr
 const BACK_TEMPLATES = new Set(['back', 'press-back', 'press_back', 'system-back', 'system_back']);
 const HOME_TEMPLATES = new Set(['home', 'press-home', 'press_home', 'system-home', 'system_home']);
 const OPEN_SETTINGS_TEMPLATES = new Set(['open-settings', 'open_settings', 'settings', 'android-settings', 'android_settings']);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+const ACTION_LOCK_DIR = path.join(PROJECT_ROOT, 'data', '.openclaw', 'runtime', 'phone-action-locks');
+const ACTION_LOCK_STALE_MS = 90_000;
 
 export const QUEUE_KIND = Object.freeze({
   READ: 'read',
@@ -87,6 +97,13 @@ export function fixedFastPathPlan(config) {
 }
 
 export async function runPhoneCommand(config) {
+  if (commandQueueKind(config) === QUEUE_KIND.ACTION) {
+    return withDeviceMutationLock(config, () => runPhoneCommandUnlocked(config));
+  }
+  return runPhoneCommandUnlocked(config);
+}
+
+async function runPhoneCommandUnlocked(config) {
   const plan = fixedFastPathPlan(config);
   if (plan) {
     if (config.fastPathReadyStatus && typeof config.fastPathReadyStatus === 'object') {
@@ -108,14 +125,91 @@ export async function runPhoneCommand(config) {
 }
 
 export async function getPhoneMetrics(config) {
+  await probeDeviceStatus(config);
   const payload = await signedJsonRequest(config, 'GET', '/api/lumi/agent/metrics?_lumi=1', undefined, config.stepTimeoutSec * 1000);
   return { ok: true, metrics: payload?.data?.metrics || payload?.data || payload };
 }
 
 export async function syncPhoneEvents(config, onEvent) {
+  await probeDeviceStatus(config);
   const response = await signedFetch(config, 'GET', '/api/lumi/events', (config.maxSec + 5) * 1000);
-  if (!response.ok) throw new Error(`Phone event stream failed: HTTP ${response.status}`);
+  if (!response.ok) {
+    throw new PhoneBridgeError(
+      'phone_event_stream_failed',
+      `手机事件流连接失败：HTTP ${response.status}`,
+      { retryable: response.status >= 500 || response.status === 404, currentStep: 'events_sync', details: { status: response.status } },
+    );
+  }
   return readSseChunksWithDeadline(response, config, onEvent);
+}
+
+async function withDeviceMutationLock(config, fn) {
+  const key = deviceMutationLockKey(config);
+  const lockPath = path.join(ACTION_LOCK_DIR, `${key}.lock`);
+  const waitTimeoutMs = Math.max(10_000, Math.min(60_000, Number(config.stepTimeoutSec || 10) * 4_000));
+  await fs.mkdir(ACTION_LOCK_DIR, { recursive: true });
+  const startedAt = Date.now();
+  let handle = null;
+  while (!handle) {
+    try {
+      handle = await fs.open(lockPath, 'wx');
+      await handle.writeFile(JSON.stringify({
+        pid: process.pid,
+        deviceId: config.deviceId || '',
+        phoneUrl: normalizePhoneUrl(config.phoneUrl),
+        acquiredAt: new Date().toISOString(),
+      }));
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      await removeStaleMutationLock(lockPath);
+      if (Date.now() - startedAt > waitTimeoutMs) {
+        throw new PhoneBridgeError(
+          'phone_action_queue_timeout',
+          '同一台手机正在执行另一个写动作，请稍后重试。',
+          { retryable: true, currentStep: 'queue', details: { lockPath, waitTimeoutMs } },
+        );
+      }
+      await sleep(120);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    try {
+      await handle.close();
+    } catch {
+      // Closing the lock handle is best-effort.
+    }
+    try {
+      await fs.unlink(lockPath);
+    } catch {
+      // A stale lock cleanup may already have removed it.
+    }
+  }
+}
+
+async function removeStaleMutationLock(lockPath) {
+  try {
+    const stat = await fs.stat(lockPath);
+    if (Date.now() - stat.mtimeMs > ACTION_LOCK_STALE_MS) {
+      await fs.unlink(lockPath);
+    }
+  } catch {
+    // If the lock disappeared between checks, the next acquire loop can proceed.
+  }
+}
+
+function deviceMutationLockKey(config) {
+  const raw = [
+    config.deviceId || '',
+    normalizePhoneUrl(config.phoneUrl),
+    String(config.phoneToken || ''),
+  ].join('\n');
+  return crypto.createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 32);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function toolPolicy(mode) {
@@ -185,7 +279,28 @@ async function probeDeviceStatus(config) {
   if (!response.ok || payload?.success === false) {
     throw new Error(payload?.error || payload?.message || `device_status_failed: HTTP ${response.status}`);
   }
-  return payload?.data || payload;
+  const status = payload?.data || payload;
+  assertConfigServerReady(status);
+  return status;
+}
+
+function assertConfigServerReady(status) {
+  const value = status?.configServerRunning ?? status?.lanConfigEnabled ?? status?.lanServerRunning;
+  if (value === false) {
+    throw new PhoneBridgeError(
+      'phone_config_server_disabled',
+      'APKClaw 局域网服务未启动。请打开 APKClaw -> Settings -> LAN Config，并开启局域网配置。',
+      {
+        retryable: true,
+        currentStep: 'preflight',
+        details: {
+          configServerRunning: status?.configServerRunning,
+          lanConfigEnabled: status?.lanConfigEnabled,
+          lanServerRunning: status?.lanServerRunning,
+        },
+      },
+    );
+  }
 }
 
 async function assertReadyForAgent(config) {
@@ -193,6 +308,7 @@ async function assertReadyForAgent(config) {
   try {
     status = await probeDeviceStatus(config);
   } catch (error) {
+    if (error instanceof PhoneBridgeError || error?.errorCode) throw error;
     throw new Error(`device_offline: 无法连接手机端 APKClaw，请确认手机和电脑在同一网络，且 APKClaw 已启动。${error?.message || error}`);
   }
   let stop = earlyStopReason(status);
@@ -380,6 +496,7 @@ export async function probeFastPathReadyStatus(config) {
   try {
     status = await probeDeviceStatus(config);
   } catch (error) {
+    if (error instanceof PhoneBridgeError || error?.errorCode) throw error;
     throw new Error(`device_offline: ${error?.message || error}`);
   }
   assertKnownReadyForFastPath(status);
@@ -463,6 +580,7 @@ function fixedFastPathResult(config, plan, payload, wallMs) {
   const payloadSuccess = payload?.success !== false;
   const dataSuccess = data?.success !== false;
   const ok = payloadSuccess && dataSuccess;
+  const stalePossible = plan.kind === 'observe' || plan.kind === 'screenshot';
   const metrics = {
     ...(data?.metrics || payload?.metrics || {}),
     mode: data?.metrics?.mode || plan.mode,
@@ -492,6 +610,11 @@ function fixedFastPathResult(config, plan, payload, wallMs) {
     currentStep,
     events: data?.events,
     queue: { queueMs: 0, queueDepth: 0, cancelRequested: false },
+    stalePossible,
+    freshness: {
+      stalePossible,
+      reason: stalePossible ? '读屏/截图允许并发，结果可能与正在执行的写动作存在短暂差异。' : '',
+    },
     payload,
     data,
     error: final.error || undefined,
@@ -500,8 +623,10 @@ function fixedFastPathResult(config, plan, payload, wallMs) {
 
 function fixedFastPathError(config, plan, error, wallMs) {
   const message = error?.message || String(error || 'fast_path_failed');
+  const errorCode = error?.errorCode || error?.code || message.match(/^([a-z][a-z0-9_:-]{2,64}):/i)?.[1]?.replace(/[:-]+$/, '') || 'fast_path_failed';
   return {
     ok: false,
+    errorCode,
     fastPath: true,
     executionLayer: plan.executionLayer,
     templateName: plan.templateName || undefined,
@@ -520,8 +645,9 @@ function fixedFastPathError(config, plan, error, wallMs) {
     mode: plan.mode,
     currentStep: 'error',
     queue: { queueMs: 0, queueDepth: 0, cancelRequested: false },
+    stalePossible: plan.kind === 'observe' || plan.kind === 'screenshot',
     payload: null,
-    data: { error: message },
+    data: { error: message, errorCode },
     error: message,
   };
 }

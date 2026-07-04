@@ -222,7 +222,12 @@ def tool_definitions() -> list[Json]:
         _tool("loom_phone_read", "Fast phone screen read.", "read", {"prompt": _string_schema("Read prompt")}),
         _tool("loom_phone_quick_task", "Run a fast phone task.", "control", {"prompt": _string_schema("Task prompt"), "mode": {"type": "string", "enum": ["observe", "safe", "standard", "full", "deep"], "required": False}}),
         _tool("loom_phone_template_task", "Run a built-in phone template task.", "read", {"template": {"type": "string", "enum": ["read-screen", "screen-summary", "back", "home"], "required": False}}),
-        _tool("loom_phone_adb_doctor", "Repair common ADB or phone connection issues.", "admin", {}),
+        _tool("loom_phone_adb_doctor", "Repair common ADB or phone connection issues.", "admin", {
+            "serial": _string_schema("Optional adb device serial", required=False),
+            "wake": {"type": "boolean", "required": False},
+            "launch": {"type": "boolean", "required": False},
+            "restartServer": {"type": "boolean", "required": False},
+        }),
         _tool("loom_schedule_list", "Read scheduled tasks.", "read", {}),
         _tool("loom_schedule_add", "Add scheduled task.", "automation", {"name": _string_schema("Task name"), "command": _string_schema("Allowed LOOM CLI command"), "at": _string_schema("ISO time", required=False), "every": _string_schema("Repeat interval", required=False)}),
         _tool("loom_schedule_run", "Run scheduled task now.", "automation", {"id": _string_schema("Task ID")}),
@@ -473,7 +478,15 @@ def _tool_to_cli_args(name: str, args: Json) -> list[str]:
     if name == "loom_phone_template_task":
         return ["phone", "template-task", "--template", str(args.get("template") or "read-screen")]
     if name == "loom_phone_adb_doctor":
-        return ["phone", "adb-doctor"]
+        argv = ["phone", "adb-doctor"]
+        _append_optional(argv, args, "serial", "--serial")
+        if args.get("wake") is False:
+            argv.append("--no-wake")
+        if args.get("launch") is False:
+            argv.append("--no-launch")
+        if args.get("restartServer") is False:
+            argv.append("--no-restart-server")
+        return argv
     if name == "loom_schedule_list":
         return ["schedule", "list"]
     if name == "loom_schedule_add":

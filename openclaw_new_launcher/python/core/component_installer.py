@@ -56,6 +56,27 @@ RETRY_DELAYS_SECONDS = (0.0, 0.8, 1.6)
 CODEX_DESKTOP_PACKAGE_NAME = "OpenAI.Codex"
 CODEX_DESKTOP_APP_ID = "App"
 PYTHON_SOURCE_CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
+PHONE_MODEL_IDS = {"agnes-2.0-flash"}
+NON_TEXT_MODEL_MARKERS = (
+    "image",
+    "dall-e",
+    "gpt-image",
+    "flux",
+    "midjourney",
+    "sd-",
+    "imagen",
+    "seedream",
+    "video",
+    "veo",
+    "sora",
+    "seedance",
+    "kling",
+    "wan",
+    "hailuo",
+    "runway",
+    "pika",
+    "luma",
+)
 MODEL_ENV_SCRUB_COMPONENTS = {"codex-desktop", "claude-code", "opencode", "openclaw-companion"}
 AGENT_MODEL_ENV_KEYS = (
     "LOOM_CODEX_API_KEY",
@@ -1324,7 +1345,7 @@ def build_agent_launcher_environment(base_path: str | None, component_id: str | 
     elif component_id == "claude-code":
         wire = _agent_wire_from_root(root)
         api_key = _wire_api_key(wire)
-        base_url = _wire_base_url(wire)
+        base_url = _wire_anthropic_base_url(wire)
         model = _wire_text_model(wire)
         if api_key:
             env["LOOM_CLAUDE_API_KEY"] = api_key
@@ -1359,6 +1380,9 @@ def _require_opencode_default_model(base_path: str | None) -> str:
     if "/" not in model:
         raise ComponentInstallError("opencode 默认模型缺失，请先在模型账号页同步模型")
     provider_id = model.split("/", 1)[0]
+    model_id = model.split("/", 1)[1]
+    if _looks_like_non_text_model(model_id):
+        raise ComponentInstallError("opencode 默认模型不能使用手机/图像/视频模型，请重新同步文本模型")
     providers = config.get("provider") if isinstance(config, dict) else {}
     provider = providers.get(provider_id) if isinstance(providers, dict) else None
     if not isinstance(provider, dict):
@@ -1394,9 +1418,26 @@ def _wire_base_url(wire: dict) -> str:
     return value
 
 
+def _wire_anthropic_base_url(wire: dict) -> str:
+    value = _wire_base_url(wire)
+    if value.endswith("/v1"):
+        return value[:-3].rstrip("/")
+    return value
+
+
 def _wire_text_model(wire: dict) -> str:
     models = wire.get("models") if isinstance(wire.get("models"), dict) else {}
-    return str(models.get("text") or "").strip()
+    model = str(models.get("text") or "").strip()
+    return "" if _looks_like_non_text_model(model) else model
+
+
+def _looks_like_non_text_model(model_id: object) -> bool:
+    text = str(model_id or "").strip().lower()
+    if not text:
+        return False
+    if text in PHONE_MODEL_IDS:
+        return True
+    return any(marker in text for marker in NON_TEXT_MODEL_MARKERS)
 
 
 def _inject_openai_compatible_env(env: dict[str, str], wire: dict, *, key_name: str) -> None:

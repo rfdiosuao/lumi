@@ -1186,6 +1186,262 @@ class OpenClawProcessService:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
 
+    def phone_adb_doctor(
+        self,
+        *,
+        serial: str | None = None,
+        wake: bool = True,
+        launch: bool = True,
+        restart_server: bool = True,
+    ) -> dict:
+        """Repair the host-side ADB path without bypassing APKClaw permissions."""
+        adb_path = self._find_adb_path()
+        result = {
+            "schema": "loom.phone.adb_doctor.v1",
+            "ok": False,
+            "status": "unknown",
+            "adbPath": adb_path,
+            "selectedDevice": "",
+            "devices": [],
+            "actions": [],
+            "instructions": [],
+            "message": "",
+        }
+        if not adb_path:
+            result.update({
+                "status": "missing_adb",
+                "message": "未找到 ADB，无法通过 USB 调试唤醒或拉起手机端。",
+                "instructions": [
+                    "把 Android platform-tools 放到 LOOMFiles/platform-tools/adb.exe 或安装到系统 PATH。",
+                    "安装后重新运行 phone adb-doctor，再打开 APKClaw -> Settings -> LAN Config。",
+                ],
+            })
+            return result
+
+        devices = self._adb_devices(adb_path)
+        result["devices"] = devices
+        if not devices and restart_server:
+            result["actions"].append(self._run_adb(adb_path, ["kill-server"], timeout_sec=10, label="restart.kill_server"))
+            result["actions"].append(self._run_adb(adb_path, ["start-server"], timeout_sec=10, label="restart.start_server"))
+            devices = self._adb_devices(adb_path)
+            result["devices"] = devices
+
+        if not devices:
+            result.update({
+                "status": "no_device",
+                "message": "ADB 已找到，但没有检测到手机。",
+                "instructions": [
+                    "请用 USB 连接手机，开启开发者选项和 USB 调试。",
+                    "手机弹出 RSA 授权时点允许；然后打开 APKClaw -> Settings -> LAN Config。",
+                    "如果是多台手机，请确认每台手机都授权本电脑。",
+                ],
+            })
+            return result
+
+        requested_serial = (serial or "").strip()
+        if requested_serial and not any(str(device.get("serial") or "") == requested_serial for device in devices):
+            result.update({
+                "status": "device_not_found",
+                "message": f"没有找到指定手机：{requested_serial}。",
+                "instructions": [
+                    "请运行 adb devices -l 或 phone adb-doctor 不带 serial 查看当前设备列表。",
+                    "确认要修复的手机 serial 后再重试，避免误操作其他手机。",
+                ],
+            })
+            return result
+        if not requested_serial and len(devices) > 1:
+            result.update({
+                "status": "multiple_devices",
+                "message": "检测到多台手机，请先选择要修复的设备。",
+                "instructions": [
+                    "运行 phone adb-doctor --serial <设备 serial>，避免误唤醒或误拉起其他手机。",
+                    "设备 serial 可从当前返回的 devices 列表，或 adb devices -l 中查看。",
+                ],
+            })
+            return result
+
+        selected = self._select_adb_device(devices, serial)
+        result["selectedDevice"] = selected.get("serial", "")
+        state = str(selected.get("state") or "").lower()
+        if state == "unauthorized":
+            result.update({
+                "status": "unauthorized",
+                "message": "手机已连接，但还没有授权本电脑的 USB 调试。",
+                "instructions": [
+                    "请解锁手机，在 USB 调试授权弹窗里选择允许。",
+                    "如果没看到弹窗，拔插 USB 或在开发者选项里撤销 USB 调试授权后重试。",
+                ],
+            })
+            return result
+        if state == "offline":
+            if restart_server:
+                serial_arg = ["-s", selected["serial"]]
+                result["actions"].append(self._run_adb(adb_path, [*serial_arg, "reconnect"], timeout_sec=20, label="device.reconnect"))
+                devices = self._adb_devices(adb_path)
+                result["devices"] = devices
+                selected = self._select_adb_device(devices, selected["serial"])
+                result["selectedDevice"] = selected.get("serial", "")
+                state = str(selected.get("state") or "").lower()
+            if state != "device":
+                result.update({
+                    "status": "offline",
+                    "message": "手机处于 offline 状态，ADB 暂时无法控制。",
+                    "instructions": [
+                        "请拔插 USB，重新授权 USB 调试，必要时重启手机端 APKClaw。",
+                        "恢复后打开 APKClaw -> Settings -> LAN Config，再重新检测连接。",
+                    ],
+                })
+                return result
+        if state != "device":
+            result.update({
+                "status": "bad_state",
+                "message": f"手机 ADB 状态异常：{state or 'unknown'}。",
+                "instructions": [
+                    "请确认手机已解锁、USB 调试已开启，并允许本电脑调试。",
+                    "打开 APKClaw -> Settings -> LAN Config 后再试。",
+                ],
+            })
+            return result
+
+        serial_arg = ["-s", selected["serial"]]
+        if wake:
+            result["actions"].append(self._run_adb(adb_path, [*serial_arg, "shell", "input", "keyevent", "KEYCODE_WAKEUP"], timeout_sec=10, label="device.wake"))
+            result["actions"].append(self._run_adb(adb_path, [*serial_arg, "shell", "wm", "dismiss-keyguard"], timeout_sec=10, label="device.dismiss_keyguard"))
+            result["actions"].append(self._run_adb(adb_path, [*serial_arg, "shell", "input", "keyevent", "KEYCODE_HOME"], timeout_sec=10, label="device.home"))
+        launched_package = ""
+        if launch:
+            for package_name in self._apkclaw_package_candidates():
+                action = self._run_adb(
+                    adb_path,
+                    [*serial_arg, "shell", "monkey", "-p", package_name, "-c", "android.intent.category.LAUNCHER", "1"],
+                    timeout_sec=15,
+                    label=f"apkclaw.launch:{package_name}",
+                )
+                result["actions"].append(action)
+                combined = f"{action.get('stdout', '')}\n{action.get('stderr', '')}".lower()
+                if action.get("ok") and "no activities found" not in combined and "monkey aborted" not in combined:
+                    launched_package = package_name
+                    break
+
+        result.update({
+            "ok": True,
+            "status": "ready",
+            "launchedPackage": launched_package,
+            "message": (
+                f"ADB 已连接并尝试拉起 APKClaw（{launched_package}）。"
+                if launched_package else
+                "ADB 已连接并已唤醒手机；未确认 APKClaw 已自动拉起，请在手机端手动打开一次。"
+            ),
+            "instructions": [
+                "接下来运行 phone status 或 phone screenshot 验证 LAN Config 是否可用。",
+                "如果仍连不上，请打开 APKClaw -> Settings -> LAN Config，并确认手机与电脑在同一网络。",
+            ],
+        })
+        return result
+
+    def _find_adb_path(self) -> str:
+        executable_names = ("adb.exe", "adb") if os.name == "nt" else ("adb", "adb.exe")
+        directories = [
+            os.path.join(self.paths.base_path, "platform-tools"),
+            os.path.join(self.paths.base_path, "LOOMFiles", "platform-tools"),
+            os.path.join(self.paths.base_path, "_up_", "platform-tools"),
+            os.path.join(self.paths.base_path, "LOOMFiles", "_up_", "platform-tools"),
+            os.path.join(self.paths.base_path, "redist", "platform-tools"),
+            os.path.join(self.paths.base_path, "SystemData", ".core", "platform-tools"),
+        ]
+        for directory in directories:
+            for name in executable_names:
+                candidate = os.path.join(directory, name)
+                if os.path.exists(candidate):
+                    return candidate
+        return shutil.which("adb.exe" if os.name == "nt" else "adb") or shutil.which("adb") or ""
+
+    def _adb_devices(self, adb_path: str) -> list[dict]:
+        action = self._run_adb(adb_path, ["devices", "-l"], timeout_sec=15, label="devices")
+        devices: list[dict] = []
+        for line in str(action.get("stdout") or "").splitlines():
+            line = line.strip()
+            if not line or line.lower().startswith("list of devices"):
+                continue
+            parts = line.split(None, 2)
+            if len(parts) < 2:
+                continue
+            devices.append({
+                "serial": parts[0],
+                "state": parts[1],
+                "detail": parts[2] if len(parts) > 2 else "",
+            })
+        return devices
+
+    def _select_adb_device(self, devices: list[dict], serial: str | None) -> dict:
+        serial = (serial or "").strip()
+        if serial:
+            for device in devices:
+                if str(device.get("serial") or "") == serial:
+                    return device
+        for device in devices:
+            if str(device.get("state") or "").lower() == "device":
+                return device
+        return devices[0] if devices else {}
+
+    def _run_adb(self, adb_path: str, args: list[str], *, timeout_sec: int, label: str) -> dict:
+        command = [adb_path, *args]
+        started = time.perf_counter()
+        try:
+            completed = self.command_runner(command, timeout_sec)
+            stdout = self._limit_text(getattr(completed, "stdout", "") or "")
+            stderr = self._limit_text(getattr(completed, "stderr", "") or "")
+            code = int(getattr(completed, "returncode", 1))
+            return {
+                "label": label,
+                "command": self._public_command(command),
+                "ok": code == 0,
+                "code": code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "durationMs": int((time.perf_counter() - started) * 1000),
+            }
+        except subprocess.TimeoutExpired as error:
+            return {
+                "label": label,
+                "command": self._public_command(command),
+                "ok": False,
+                "code": "timeout",
+                "stdout": self._limit_text(getattr(error, "stdout", "") or ""),
+                "stderr": self._limit_text(getattr(error, "stderr", "") or "ADB command timed out"),
+                "durationMs": int((time.perf_counter() - started) * 1000),
+            }
+        except Exception as error:
+            return {
+                "label": label,
+                "command": self._public_command(command),
+                "ok": False,
+                "code": "error",
+                "stdout": "",
+                "stderr": self._limit_text(str(error)),
+                "durationMs": int((time.perf_counter() - started) * 1000),
+            }
+
+    @staticmethod
+    def _public_command(command: list[str]) -> list[str]:
+        return [os.path.basename(command[0]) if command else "", *command[1:]]
+
+    @staticmethod
+    def _limit_text(value: object, limit: int = 1200) -> str:
+        text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value or "")
+        return text if len(text) <= limit else text[:limit] + "..."
+
+    @staticmethod
+    def _apkclaw_package_candidates() -> tuple[str, ...]:
+        return (
+            "com.apk.claw.android",
+            "com.openclaw.agentphone",
+            "ai.openclaw.agentphone",
+            "com.lumi.apkclaw",
+            "com.lumi.openclaw",
+            "com.hermes.agentphone",
+        )
+
     def _install_public_prerequisites_action(self, checks: list[dict]) -> dict:
         package_rules = (
             (("git", "git_bash"), "Git", "Git.Git"),

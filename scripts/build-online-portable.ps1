@@ -182,6 +182,18 @@ function Copy-OnlineTree {
     }
 }
 
+function Remove-OnlinePackageNoise {
+    param([string]$PackageDir)
+
+    # Some Python dependencies ship editor/agent helper docs under ".agents".
+    # They are not runtime code and make release payload scans look like LOOM
+    # bundled third-party agents, so strip them from the online package.
+    Get-ChildItem -LiteralPath $PackageDir -Recurse -Directory -Force -Filter ".agents" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Remove-SafePath $_.FullName
+        }
+}
+
 function Write-CachedDistributionManifest {
     param(
         [string]$PackageDir,
@@ -269,6 +281,7 @@ Invoke-Step "Create online portable directory" {
     Remove-SafePath $hashPath
     New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
     Copy-OnlineTree -SourceDir $sourceDir -TargetDir $packageDir
+    Remove-OnlinePackageNoise -PackageDir $packageDir
     Update-LauncherRuntimePackageName -PackageDir $packageDir -Name $PackageName
     Write-CachedDistributionManifest -PackageDir $packageDir -ManifestJson $distributionManifestJson
     Write-OnlineReadme -PackageDir $packageDir

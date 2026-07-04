@@ -240,7 +240,7 @@ class NewApiAccountManagerTests(unittest.TestCase):
 
             self.assertEqual(session["memberToken"], "fake-generic-token-not-real")
             self.assertEqual(session["lease"]["tokenSource"], "existing_fallback")
-            self.assertEqual(session["phoneAgent"]["model"], "agnes-2.0-flash")
+            self.assertEqual(session["phoneAgent"]["model"], "qwen3.7-plus")
 
     def test_email_code_send_uses_newapi_verification_endpoint_without_returning_code_or_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
