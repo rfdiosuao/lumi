@@ -936,6 +936,47 @@ class PhoneRouteSnapshotTests(unittest.TestCase):
             self.assertIn("--max-rounds", stdout["argv"])
             self.assertIn("9", stdout["argv"])
 
+    def test_phone_task_streams_runtime_output_to_matrix_events_before_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scripts_dir = os.path.join(temp_dir, "scripts")
+            os.makedirs(scripts_dir, exist_ok=True)
+            with open(os.path.join(scripts_dir, "openclaw-phone-agent.mjs"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "import json, time\n"
+                    "print('agent round 1: 打开小红书', flush=True)\n"
+                    "time.sleep(0.7)\n"
+                    "print(json.dumps({'data': {'agentReport': {'headline': 'done: published', 'currentStep': 'collect'}}}, ensure_ascii=False), flush=True)\n"
+                    "time.sleep(0.1)\n"
+                )
+
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            storage = {
+                os.path.join(temp_dir, "phone-agents.json"): {
+                    "selectedDeviceId": "phone-a",
+                    "devices": [{"id": "phone-a", "name": "Studio Phone", "group": "Lab"}],
+                }
+            }
+            ctx = _test_context(temp_dir, job_mgr, logs, storage)
+            register_phone_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            submitted = client.post(
+                "/api/phone/task",
+                json={"prompt": "发布测试内容", "mode": "safe", "profile": "fast"},
+            )
+
+            self.assertEqual(submitted.status_code, 200)
+            try:
+                event = _wait_for_matrix_event(temp_dir, "agent round 1", timeout=0.45)
+            finally:
+                _wait_for_job(client, submitted.json()["jobId"], timeout=5.0)
+            self.assertEqual(event["type"], "phone.events.phone.task.stdout")
+            self.assertEqual(event["deviceId"], "phone-a")
+            self.assertEqual(event["source"], "phone.task.stdout")
+
     def test_phone_task_route_maps_fast_standard_deep_profiles_to_budgets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             scripts_dir = os.path.join(temp_dir, "scripts")
@@ -989,6 +1030,89 @@ class PhoneRouteSnapshotTests(unittest.TestCase):
                     self.assertEqual(argv[argv.index("--max-rounds") + 1], max_rounds)
                     self.assertIn("--poll-ms", argv)
                     self.assertEqual(argv[argv.index("--poll-ms") + 1], poll_ms)
+
+    def test_phone_task_route_honors_explicit_safe_fast_budget_for_complex_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scripts_dir = os.path.join(temp_dir, "scripts")
+            os.makedirs(scripts_dir, exist_ok=True)
+            with open(os.path.join(scripts_dir, "openclaw-phone-agent.mjs"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "import json, sys\n"
+                    "print(json.dumps({'argv': sys.argv[1:]}, ensure_ascii=False))\n"
+                )
+
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_phone_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            submitted = client.post(
+                "/api/phone/task",
+                json={
+                    "prompt": "complete a complex multi-step phone flow",
+                    "mode": "safe",
+                    "profile": "fast",
+                    "timeoutSec": 300,
+                    "maxWaitSec": 320,
+                    "maxRounds": 40,
+                    "pollMs": 700,
+                },
+            )
+
+            self.assertEqual(submitted.status_code, 200)
+            job = _wait_for_job(client, submitted.json()["jobId"])
+            self.assertEqual(job["status"], "succeeded")
+            argv = json.loads(job["result"]["stdout"])["argv"]
+            self.assertEqual(argv[argv.index("--timeout-sec") + 1], "300")
+            self.assertEqual(argv[argv.index("--max-wait-sec") + 1], "320")
+            self.assertEqual(argv[argv.index("--max-rounds") + 1], "40")
+            self.assertEqual(argv[argv.index("--poll-ms") + 1], "700")
+            budget = job["result"]["execution"]["budget"]
+            self.assertEqual(budget["timeoutSec"], 300)
+            self.assertEqual(budget["maxWaitSec"], 320)
+            self.assertEqual(budget["maxRounds"], 40)
+            self.assertEqual(budget["pollMs"], 700)
+
+    def test_phone_task_route_allows_safe_mode_explicit_eighty_round_publish_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scripts_dir = os.path.join(temp_dir, "scripts")
+            os.makedirs(scripts_dir, exist_ok=True)
+            with open(os.path.join(scripts_dir, "openclaw-phone-agent.mjs"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "import json, sys\n"
+                    "print(json.dumps({'argv': sys.argv[1:]}, ensure_ascii=False))\n"
+                )
+
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_phone_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            submitted = client.post(
+                "/api/phone/task",
+                json={
+                    "prompt": "publish a multi-image note with prepared media",
+                    "mode": "safe",
+                    "profile": "fast",
+                    "timeoutSec": 600,
+                    "maxWaitSec": 615,
+                    "maxRounds": 80,
+                    "pollMs": 900,
+                },
+            )
+
+            self.assertEqual(submitted.status_code, 200)
+            job = _wait_for_job(client, submitted.json()["jobId"])
+            self.assertEqual(job["status"], "succeeded")
+            argv = json.loads(job["result"]["stdout"])["argv"]
+            self.assertEqual(argv[argv.index("--max-rounds") + 1], "80")
+            self.assertEqual(job["result"]["execution"]["budget"]["maxRounds"], 80)
 
     def test_phone_task_route_observe_mode_uses_direct_read_path_without_agent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1625,6 +1749,43 @@ class PhoneRouteSnapshotTests(unittest.TestCase):
             self.assertEqual(selectors[0]["actionBody"]["action"], "click_description")
             self.assertEqual(selectors[0]["actionBody"]["contentDescription"], "Search")
 
+    def test_phone_read_route_preserves_ref_selectors_for_action_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scripts_dir = os.path.join(temp_dir, "scripts")
+            os.makedirs(scripts_dir, exist_ok=True)
+            with open(os.path.join(scripts_dir, "openclaw-phone-agent.mjs"), "w", encoding="utf-8") as handle:
+                handle.write("raise SystemExit('agent path should not be used')\n")
+            with open(os.path.join(scripts_dir, "openclaw-phone-vision.mjs"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "import json\n"
+                    "print(json.dumps({"
+                    "'screenHash': 'hash-ref-selectors',"
+                    "'selectors': ["
+                    "{'ref': 'ref_87cc51d8e03b9a25', 'nodeId': 'node-1', 'label': 'Display', "
+                    "'actionBody': {'action': 'click_text', 'ref': 'ref_87cc51d8e03b9a25', 'text': 'Display'}}"
+                    "]"
+                    "}, ensure_ascii=False))\n"
+                )
+
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_phone_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            submitted = client.post("/api/phone/read", json={"prompt": "read selectors"})
+            self.assertEqual(submitted.status_code, 200)
+            job = _wait_for_job(client, submitted.json()["jobId"])
+
+            self.assertEqual(job["status"], "succeeded")
+            selectors = job["result"]["selectors"]
+            self.assertEqual(selectors[0]["ref"], "ref_87cc51d8e03b9a25")
+            self.assertEqual(selectors[0]["actionBody"]["action"], "click_ref")
+            self.assertEqual(selectors[0]["actionBody"]["ref"], "ref_87cc51d8e03b9a25")
+            self.assertEqual(selectors[0]["actionBody"]["targetLabel"], "Display")
+
     def test_phone_task_can_use_cached_read_selector_index_for_action_fast(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             scripts_dir = os.path.join(temp_dir, "scripts")
@@ -1672,6 +1833,50 @@ class PhoneRouteSnapshotTests(unittest.TestCase):
             body = json.loads(argv[argv.index("--action-body") + 1])
             self.assertEqual(body["action"], "click_description")
             self.assertEqual(body["contentDescription"], "Search")
+
+    def test_phone_task_cached_selector_index_preserves_click_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scripts_dir = os.path.join(temp_dir, "scripts")
+            os.makedirs(scripts_dir, exist_ok=True)
+            with open(os.path.join(scripts_dir, "openclaw-phone-agent.mjs"), "w", encoding="utf-8") as handle:
+                handle.write("raise SystemExit('cached selector should not use agent')\n")
+            with open(os.path.join(scripts_dir, "openclaw-phone-vision.mjs"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "import json, sys\n"
+                    "if sys.argv[1] == 'read':\n"
+                    "    print(json.dumps({"
+                    "'screenHash': 'hash-ref-selectors',"
+                    "'selectors': ["
+                    "{'ref': 'ref_87cc51d8e03b9a25', 'nodeId': 'node-1', 'label': 'Display', "
+                    "'actionBody': {'action': 'click_text', 'ref': 'ref_87cc51d8e03b9a25', 'text': 'Display'}}"
+                    "]"
+                    "}, ensure_ascii=False))\n"
+                    "else:\n"
+                    "    print(json.dumps({'argv': sys.argv[1:]}, ensure_ascii=False))\n"
+                )
+
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_phone_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            read = client.post("/api/phone/read", json={"prompt": "read selectors"})
+            self.assertEqual(read.status_code, 200)
+            self.assertEqual(_wait_for_job(client, read.json()["jobId"])["status"], "succeeded")
+
+            submitted = client.post("/api/phone/task", json={"mode": "safe", "profile": "fast", "selectorIndex": 0})
+
+            self.assertEqual(submitted.status_code, 200)
+            job = _wait_for_job(client, submitted.json()["jobId"])
+            self.assertEqual(job["status"], "succeeded")
+            argv = json.loads(job["result"]["stdout"])["argv"]
+            body = json.loads(argv[argv.index("--action-body") + 1])
+            self.assertEqual(body["action"], "click_ref")
+            self.assertEqual(body["ref"], "ref_87cc51d8e03b9a25")
+            self.assertEqual(body["targetLabel"], "Display")
 
     def test_phone_task_cached_selector_index_does_not_require_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2452,6 +2657,23 @@ def _wait_for_job(client: TestClient, job_id: str, timeout: float = 2.0) -> dict
                 return job
         time.sleep(0.02)
     raise AssertionError(f"job did not finish: {job_id}")
+
+
+def _wait_for_matrix_event(base_path: str, needle: str, timeout: float = 1.0) -> dict:
+    path = os.path.join(base_path, "matrix-events.jsonl")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if needle in str(event.get("message") or ""):
+                        return event
+        time.sleep(0.02)
+    raise AssertionError(f"matrix event containing {needle!r} was not written")
 
 
 if __name__ == "__main__":

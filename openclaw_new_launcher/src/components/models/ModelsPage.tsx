@@ -5,6 +5,7 @@ import { loomErrorText } from '../../services/loomErrors';
 import type { AccountSnapshot, WireSnapshot } from '../../services/loomContracts';
 import { useAppStore } from '../../stores/appStore';
 import { accountCacheUsable, loadCachedAccount, saveCachedAccount } from '../../services/startupCache';
+import { APP_DISPLAY_NAME } from '../../version';
 
 type SourceMode = 'off' | 'managed' | 'custom';
 
@@ -293,7 +294,7 @@ export const ModelsPage: React.FC = () => {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface">
-      <BusyOverlay active={loading || busy} title={busyOverlayTitle} detail="LOOM 正在读取或写入模型配置。" />
+      <BusyOverlay active={loading || busy} title={busyOverlayTitle} detail={`${APP_DISPLAY_NAME} 正在读取或写入模型配置。`} />
       <header className="shrink-0 border-b border-border/70 bg-surface px-8 py-7">
         <div className="flex items-end justify-between gap-6">
           <div>

@@ -1,4 +1,5 @@
 import React from 'react';
+import { APP_DISPLAY_NAME } from '../../version';
 
 const CAPABILITIES = [
   {
@@ -23,7 +24,7 @@ const CAPABILITIES = [
     title: '主题配置',
     desc: '换肤和高级外观配置先锁定，避免演示版风格发散。',
     status: '暂未开放',
-    nextStep: '当前统一使用麓鸣白标风格，主题配置后续再开放。',
+    nextStep: `当前统一使用${APP_DISPLAY_NAME}白标风格，主题配置后续再开放。`,
   },
 ];
 

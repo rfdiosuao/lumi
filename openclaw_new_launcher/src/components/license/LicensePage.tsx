@@ -10,6 +10,7 @@ import {
 } from '../../services/api';
 import { accountCacheUsable, loadCachedAccount, saveCachedAccount } from '../../services/startupCache';
 import { useAppStore } from '../../stores/appStore';
+import { APP_DISPLAY_NAME } from '../../version';
 
 const DEFAULT_BASE_URL = 'https://api.heang.top';
 const DEFAULT_ACCOUNT_CENTER_URL = `${DEFAULT_BASE_URL}/wallet`;
@@ -19,30 +20,30 @@ type AuthMode = 'email' | 'password' | 'register';
 const SUBSCRIPTION_PLANS = [
   {
     name: '入门版',
-    quota: '18,000 积分',
-    bonus: '每日赠送 500 积分',
-    price: '以中转站为准',
+    quota: '基础额度 $8',
+    bonus: 'Bonus 每天刷新 $0.5',
+    price: '$5.07 / 月',
     tone: 'border-border',
   },
   {
     name: '进阶版',
-    quota: '44,000 积分',
-    bonus: '每日赠送 1,200 积分',
-    price: '以中转站为准',
+    quota: '基础额度 $18',
+    bonus: 'Bonus 每天刷新 $1.2',
+    price: '$10.15 / 月',
     tone: 'border-accent/45',
   },
   {
     name: '高级版',
-    quota: '315,000 积分',
-    bonus: '每日赠送 8,000 积分',
-    price: '以中转站为准',
+    quota: '基础额度 $125',
+    bonus: 'Bonus 每天刷新 $8',
+    price: '$50.74 / 月',
     tone: 'border-[#C9A24A]/55',
   },
   {
     name: '专业版',
-    quota: '950,000 积分',
-    bonus: '每日赠送 25,000 积分',
-    price: '以中转站为准',
+    quota: '基础额度 $300',
+    bonus: 'Bonus 每天刷新 $25',
+    price: '$101.47 / 月',
     tone: 'border-status-danger/45',
   },
 ];
@@ -434,7 +435,7 @@ export const LicensePage: React.FC = () => {
         <BusyOverlay
           active={busy}
           title={busyTitle}
-          detail="LOOM 正在连接中转站。"
+          detail={`${APP_DISPLAY_NAME} 正在连接中转站。`}
         />
 
         <header className="shrink-0 border-b border-border px-8 py-7">
@@ -549,7 +550,7 @@ export const LicensePage: React.FC = () => {
               <div className="flex items-center justify-between border-b border-border px-5 py-4">
                 <div>
                   <h2 className="text-lg font-black text-text">账户与余额</h2>
-                  <p className="mt-1 text-xs leading-5 text-text-muted">余额、消耗和套餐由中转站后端同步，购买与支付在浏览器完成。</p>
+                  <p className="mt-1 text-xs leading-5 text-text-muted">充值、消耗记录与 API 密钥由中转站同步；购买与支付在浏览器完成。</p>
                 </div>
                 <button
                   type="button"
@@ -561,10 +562,11 @@ export const LicensePage: React.FC = () => {
                 </button>
               </div>
               <div className="space-y-6 px-6 py-6">
-                <div className="grid gap-4 md:grid-cols-4">
+                <div className="grid gap-4 md:grid-cols-5">
                   <MetricTile label="可用余额" value={displayValue(subscription?.balance, usageValue(account, ['quota', 'remainQuota', 'remainingQuota']))} accent />
                   <MetricTile label="累计消耗" value={displayValue(subscription?.usage?.usedQuota, usageValue(account, ['usedQuota', 'used', 'quotaUsed']))} />
                   <MetricTile label="请求次数" value={displayValue(subscription?.usage?.requestCount, usageValue(account, ['requestCount', 'requests']))} />
+                  <MetricTile label="我的邀请码" value={displayValue(subscription?.inviteCode || subscription?.invitationCode || subscription?.referralCode, usageValue(account, ['inviteCode', 'invitationCode', 'referralCode'], '登录后查看'))} />
                   <MetricTile label="当前套餐" value={displayValue(subscription?.plan, account?.plan || '暂无')} />
                 </div>
 
@@ -572,7 +574,7 @@ export const LicensePage: React.FC = () => {
                   <div className="mb-3 flex items-end justify-between gap-3">
                     <div>
                       <div className="text-sm font-black text-text">套餐方案</div>
-                      <div className="mt-1 text-xs text-text-muted">客户端只展示摘要，最终价格和权益以中转站为准。</div>
+                      <div className="mt-1 text-xs text-text-muted">开通 VIP 会员，按周期自动重置额度，并解锁更高用量与模型权限。</div>
                     </div>
                     <button
                       type="button"
@@ -597,7 +599,7 @@ export const LicensePage: React.FC = () => {
                         </div>
                         <div className="mt-4 text-2xl font-black text-text">{plan.price}</div>
                         <div className="mt-4 space-y-2 text-xs font-bold leading-5 text-text-muted">
-                          <div>基础额度：{plan.quota}</div>
+                          <div>{plan.quota}</div>
                           <div>{plan.bonus}</div>
                           <div>解锁更高用量与模型权限</div>
                         </div>
@@ -607,7 +609,7 @@ export const LicensePage: React.FC = () => {
                           disabled={!subscriptionUrl}
                           className="mt-5 h-10 w-full rounded-[10px] bg-accent text-xs font-black text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-55"
                         >
-                          去开通
+                          微信开通 VIP
                         </button>
                       </div>
                     ))}
@@ -638,7 +640,7 @@ export const LicensePage: React.FC = () => {
       <BusyOverlay
         active={busy}
         title={busyTitle}
-        detail="LOOM 正在连接中转站。"
+        detail={`${APP_DISPLAY_NAME} 正在连接中转站。`}
       />
 
       <div className="absolute inset-0 opacity-80">
@@ -678,12 +680,15 @@ export const LicensePage: React.FC = () => {
           <div className="mb-7 flex items-start justify-between gap-4">
             <div className="flex min-w-0 gap-4">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[12px] border border-[#31554B] bg-[#0B2F2A]">
-                <img src="/logo.png" alt="LOOM" className="h-full w-full object-contain" />
+                <img src="/logo.png" alt={APP_DISPLAY_NAME} className="h-full w-full object-contain" />
               </div>
               <div className="min-w-0">
-                <h1 className="text-[24px] font-black leading-tight">麓鸣</h1>
+                <h1 className="text-[24px] font-black leading-tight">{APP_DISPLAY_NAME}</h1>
                 <p className="mt-2 text-sm leading-6 text-[#AAA59A]">
                   登录后同步模型、余额与智能体配置。
+                </p>
+                <p className="mt-3 inline-flex rounded-full border border-[#1E7A63]/45 bg-[#0B6B57]/16 px-3 py-1 text-xs font-black text-[#BFF7E7]">
+                  新用户注册即送 10 元体验额度
                 </p>
               </div>
             </div>
@@ -823,7 +828,7 @@ export const LicensePage: React.FC = () => {
                     disabled={busy}
                     className="h-11 w-full rounded-[9px] bg-[#0B6B57] text-sm font-black text-[#F5FFF9] shadow-[0_16px_30px_rgba(11,107,87,0.26)] transition hover:bg-[#0E7B64] disabled:cursor-not-allowed disabled:opacity-55"
                   >
-                    注册并登录
+                    注册并登录，领取 10 元
                   </button>
                 </>
               )}

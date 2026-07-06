@@ -26,13 +26,13 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 from core.paths import AppPaths
 from loom_cli import PERMISSION_LEVELS, append_audit_record, dispatch
 
 
-Json = dict[str, Any]
+Json = Dict[str, Any]
 DEFAULT_PERMISSION = os.environ.get("LOOM_MCP_PERMISSION", "read").strip().lower() or "read"
 
 

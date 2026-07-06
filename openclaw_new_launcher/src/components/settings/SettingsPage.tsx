@@ -1,12 +1,11 @@
 import React from 'react';
 import { Button, Select, showConfirm, showToast } from '../common';
-import { LumingWordmarkImage } from '../brand/LoomBrand';
 import { useTheme } from '../../hooks/useTheme';
 import { useAppStore } from '../../stores/appStore';
 import { parseErrorText, updateApi } from '../../services/api';
 import type { BuiltinThemeMode } from '../../theme/default';
 import type { AppLanguage } from '../../i18n/language';
-import { APP_VERSION } from '../../version';
+import { APP_DISPLAY_NAME, APP_DISPLAY_SUBTITLE, APP_VERSION } from '../../version';
 
 type SettingsTab = 'appearance' | 'updates' | 'data' | 'about';
 type UpdateBusy = 'check' | 'install' | null;
@@ -149,11 +148,11 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
     },
     about: {
       appTitle: '应用',
-      appDesc: 'LOOM / 麓鸣演示稳定版。',
+      appDesc: `${APP_DISPLAY_NAME} 演示稳定版。`,
       name: '名称：',
       version: '版本：',
       positioning: '定位：',
-      positioningValue: '智能体安装与手机控制启动器',
+      positioningValue: APP_DISPLAY_SUBTITLE,
       capabilitiesTitle: '开放能力',
       capabilitiesDesc: '第一版演示只保留安装器、手机控制、模型账号和诊断。',
       capabilities: ['安装器', '手机控制', '模型账号', '诊断'],
@@ -200,7 +199,7 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
       failedCheck: 'Update check failed',
       failedInstall: 'Update failed',
       confirmTitle: 'Confirm Update',
-      confirmMessage: 'LOOM will download and replace agent runtime components. Save running work before continuing.',
+      confirmMessage: `${APP_DISPLAY_NAME} will download and replace agent runtime components. Save running work before continuing.`,
       confirmText: 'Update Now',
       current: 'Current Runtime',
       latest: 'Latest Runtime',
@@ -224,11 +223,11 @@ const SETTINGS_COPY: Record<AppLanguage, SettingsCopy> = {
     },
     about: {
       appTitle: 'App',
-      appDesc: 'LOOM demo-stable launcher.',
+      appDesc: `${APP_DISPLAY_NAME} demo-stable launcher.`,
       name: 'Name:',
       version: 'Version:',
       positioning: 'Role:',
-      positioningValue: 'Multi-agent installer and phone-control launcher',
+      positioningValue: 'AI matrix customer acquisition workbench',
       capabilitiesTitle: 'Enabled Areas',
       capabilitiesDesc: 'The first demo keeps installer, phone control, model account, and diagnostics only.',
       capabilities: ['Installer', 'Phone', 'Models', 'Diagnostics'],
@@ -357,7 +356,10 @@ export const SettingsPage: React.FC = () => {
             <div className="text-[11px] font-bold tracking-[0.42em] text-accent">{copy.eyebrow}</div>
             <h1 className="mt-2 text-[36px] font-black leading-tight text-text">{copy.title}</h1>
           </div>
-          <LumingWordmarkImage className="h-[46px] w-[128px]" />
+          <div className="max-w-[360px] text-right">
+            <div className="truncate text-[22px] font-black leading-tight text-text">{APP_DISPLAY_NAME}</div>
+            <div className="mt-1 truncate text-xs font-bold text-text-muted">{APP_DISPLAY_SUBTITLE}</div>
+          </div>
         </header>
 
         <div className="flex border-b border-border">
@@ -472,7 +474,7 @@ export const SettingsPage: React.FC = () => {
             <>
               <SettingRow title={copy.about.appTitle} desc={copy.about.appDesc}>
                 <div className="space-y-2 text-sm text-text-muted">
-                  <div><span className="font-black text-text">{copy.about.name}</span>LOOM / 麓鸣</div>
+                  <div><span className="font-black text-text">{copy.about.name}</span>{APP_DISPLAY_NAME}</div>
                   <div><span className="font-black text-text">{copy.about.version}</span>{APP_VERSION}</div>
                   <div><span className="font-black text-text">{copy.about.positioning}</span>{copy.about.positioningValue}</div>
                 </div>

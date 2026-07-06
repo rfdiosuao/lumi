@@ -37,7 +37,6 @@ class AgentAccessUiContractTests(unittest.TestCase):
         with open(agent_page_path, "r", encoding="utf-8") as handle:
             agent_page = handle.read()
 
-        self.assertTrue("Agent 接入" in registry or "开发者接入" in registry)
         self.assertRegex(registry, r"key:\s*'agentAccess'[\s\S]+?requiresLicense:\s*true")
         self.assertRegex(registry, r"key:\s*'agentAccess'[\s\S]+?visible:\s*HIDDEN")
         self.assertIn("agentAccess", pages)
@@ -50,6 +49,8 @@ class AgentAccessUiContractTests(unittest.TestCase):
 
         self.assertIn(".mcp.json", page)
         self.assertIn("loom_mcp.py", page)
+        self.assertIn("LOOM_CLI", page)
+        self.assertIn("LOOM_CLI_DIR", page)
         self.assertLess(page.count("<p"), 4)
 
     def test_agent_access_page_exposes_cross_platform_skill_bootstrap(self) -> None:
@@ -65,9 +66,8 @@ class AgentAccessUiContractTests(unittest.TestCase):
         self.assertIn("LOOM_COMMAND_BRAIN_WORKFLOWS_URLS", page)
         self.assertIn("/skills/loom-command-brain/SKILL.md", page)
         self.assertIn("/skills/loom-command-brain/references/WORKFLOWS.md", page)
-        self.assertIn("Skill 位置", page)
         self.assertIn("CODEX_HOME", page)
-        self.assertIn("LOOM_HOME", page)
+        self.assertIn("LOOM_CLI", page)
         self.assertIn("%USERPROFILE%\\\\.codex", page)
         self.assertIn("$HOME/.codex", page)
         self.assertIn("/Applications/LOOM.app/Contents/Resources", page)
@@ -87,7 +87,6 @@ class AgentAccessUiContractTests(unittest.TestCase):
     def test_agent_access_page_exposes_one_shot_bootstrap_prompt(self) -> None:
         page = self._page()
 
-        self.assertIn("一条提示词接入", page)
         self.assertIn("buildOneShotAgentPrompt", page)
         self.assertIn("BEGIN_SKILL_URLS", page)
         self.assertIn("END_SKILL_URLS", page)
@@ -99,9 +98,6 @@ class AgentAccessUiContractTests(unittest.TestCase):
         self.assertIn("END_WORKFLOWS_MD", page)
         self.assertIn("BEGIN_MCP_JSON", page)
         self.assertIn("END_MCP_JSON", page)
-        self.assertIn("自动下载 Skill", page)
-        self.assertIn("提示词正文不会展示在页面上", page)
-        self.assertIn("高级配置", page)
         self.assertIn("data-agent-one-shot-copy", page)
 
     def test_agent_access_prompt_mentions_phone_cli_surface(self) -> None:
@@ -117,21 +113,32 @@ class AgentAccessUiContractTests(unittest.TestCase):
             self.assertIn("phone:game", source)
             self.assertIn("phone:publish", source)
             self.assertIn("loom:phone:video", source)
-            self.assertIn("Android screen-capture consent prompt", source)
+            self.assertIn("events", source)
+            self.assertIn("click_ref", source)
+            self.assertTrue(
+                "Android screen-capture consent prompt" in source
+                or "Android MediaProjection consent prompt" in source
+            )
 
     def test_agent_access_skill_text_has_no_mojibake_or_local_dev_paths(self) -> None:
         sources = [self._page(), self._public_skill(), self._public_workflows()]
+        mojibake_markers = [
+            "".join(chr(code) for code in codes)
+            for codes in (
+                (37902, 29808, 58931),
+                (38328, 12517, 22717),
+                (22994, 28057, 59336),
+                (23092, 28355, 25643),
+                (28729, 21578, 24387),
+                (23138, 36346, 31220),
+                (38329, 24658, 20785),
+                (38331, 12834, 21904, 37736, 63),
+            )
+        ]
         forbidden = [
-            "D:\\Axiangmu\\AUSTART",
-            "C:\\Users\\Administrator",
-            "瀹夎",
-            "鍥剧",
-            "榛樿",
-            "浜哄",
-            "宸插",
-            "澶嶅",
-            "鎺ュ",
-            "鐢熸垚",
+            r"D:\Axiangmu\AUSTART",
+            r"C:\Users\Administrator",
+            *mojibake_markers,
         ]
 
         for source in sources:

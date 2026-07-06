@@ -10,6 +10,7 @@ import {
   type DiagnosticRepairResult,
   type DiagnosticStatus,
 } from '../../services/api';
+import { APP_DISPLAY_NAME } from '../../version';
 
 const toneMap: Record<DiagnosticStatus, {
   label: string;
@@ -130,7 +131,7 @@ export const DiagnosticsPage: React.FC = () => {
         setActions([]);
         showToast('Bridge 未启动，已切换到外层诊断', 'error');
       } catch (fallbackError: any) {
-        const message = parseErrorText(fallbackError) || parseErrorText(error) || '诊断服务不可用，请使用 LOOM 桌面应用重新打开。';
+        const message = parseErrorText(fallbackError) || parseErrorText(error) || `诊断服务不可用，请使用 ${APP_DISPLAY_NAME} 桌面应用重新打开。`;
         showToast(`诊断失败: ${message}`, 'error');
       }
     } finally {
@@ -204,7 +205,7 @@ export const DiagnosticsPage: React.FC = () => {
     }
     const checks = [...(report.checks || [])].sort((a, b) => statusPriority(a.status) - statusPriority(b.status));
     const lines = [
-      'LOOM 环境诊断摘要',
+      `${APP_DISPLAY_NAME} 环境诊断摘要`,
       `状态: ${report.summary?.status || 'unknown'} | 正常 ${report.summary?.ok ?? 0} / 警告 ${report.summary?.warnings ?? 0} / 阻塞 ${report.summary?.failed ?? 0}`,
       `安装目录: ${report.basePath || '-'}`,
       `服务 PID: ${report.servicePid || '未运行'}`,
@@ -246,7 +247,7 @@ export const DiagnosticsPage: React.FC = () => {
       <BusyOverlay
         active={loading || repairing || exporting}
         title={busyOverlayTitle}
-        detail="LOOM 正在检查本机运行环境，请稍候。"
+        detail={`${APP_DISPLAY_NAME} 正在检查本机运行环境，请稍候。`}
       />
       <div className="flex h-[76px] shrink-0 items-center justify-between border-b border-border bg-surface px-8">
         <div>

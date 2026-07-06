@@ -28,18 +28,19 @@ import hashlib
 import os
 import re
 import shlex
+import subprocess
 import time
 import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Dict
 
 from core.paths import AppPaths
 
 
-Json = dict[str, Any]
+Json = Dict[str, Any]
 
 PERMISSION_LEVELS = {
     "read": 0,
@@ -225,9 +226,12 @@ def _dispatch_command(args: list[str], ctx: CliContext) -> Json:
     if command == "status":
         _require_permission(ctx, "read")
         return _status(ctx)
+    if command == "doctor":
+        _require_permission(ctx, "read")
+        return _doctor(ctx)
     if command in {"commands", "schema"}:
         _require_permission(ctx, "read")
-        return _command_catalog()
+        return _command_catalog(ctx.paths)
     if command == "models":
         _require_permission(ctx, "read")
         return _models(ctx)
@@ -268,6 +272,7 @@ def _help_payload() -> Json:
     return {
         "commands": [
             "status",
+            "doctor",
             "commands|schema",
             "models",
             "account current|send-code|login-code|register|login|bind-ticket|sync|subscription|select-models|logout",
@@ -288,13 +293,15 @@ def _help_payload() -> Json:
         ],
         "commandCount": catalog["commandCount"],
         "catalog": "Run `commands --json` for the machine-readable CLI catalog.",
+        "doctor": "Run `doctor --json` for concrete CLI/npm/Python/phone environment paths.",
         "usage": catalog["usage"],
         "globalOptions": catalog["globalOptions"],
         "permissions": list(PERMISSION_LEVELS.keys()),
     }
 
 
-def _command_catalog() -> Json:
+def _command_catalog(paths: AppPaths | None = None) -> Json:
+    paths = paths or AppPaths.discover()
     domains = [
         {
             "domain": "core",
@@ -304,6 +311,13 @@ def _command_catalog() -> Json:
                 {"name": "commands", "permission": "read", "example": "commands --json"},
                 {"name": "models", "permission": "read", "example": "models --json"},
                 {"name": "logs tail", "permission": "read", "example": "logs tail --limit 50 --json"},
+            ],
+        },
+        {
+            "domain": "doctor",
+            "summary": "Concrete environment discovery for packaged LOOM installs.",
+            "commands": [
+                {"name": "doctor", "permission": "read", "example": "doctor --json"},
             ],
         },
         {
@@ -417,6 +431,7 @@ def _command_catalog() -> Json:
         ],
         "permissions": PERMISSION_LEVELS,
         "commandCount": command_count,
+        "runtime": _runtime_paths(paths),
         "codexCommandBrain": _codex_command_brain_contract(),
         "domains": domains,
     }
@@ -459,6 +474,61 @@ def _codex_command_brain_contract() -> Json:
     }
 
 
+HELPER_SCRIPTS = {
+    "phone:agent": "openclaw-phone-agent.mjs",
+    "phone:vision": "openclaw-phone-vision.mjs",
+    "phone:video": "openclaw-phone-video.mjs",
+    "phone:image": "openclaw-image-phone.mjs",
+    "phone:image:edit": "openclaw-image-phone.mjs",
+    "phone:fleet": "openclaw-phone-fleet.mjs",
+    "phone:game": "openclaw-phone-game.mjs",
+    "phone:publish": "openclaw-publish-phone.mjs",
+    "phone:relay": "openclaw-publish-relay.mjs",
+    "phone:relay:check": "openclaw-publish-relay-check.mjs",
+    "phone:relay:smoke": "openclaw-publish-relay-smoke.mjs",
+}
+
+
+def _runtime_paths(paths: AppPaths) -> Json:
+    package_json = os.path.join(paths.npm_root, "package.json")
+    package_data = _read_json_if_exists(package_json)
+    package_scripts = package_data.get("scripts") if isinstance(package_data.get("scripts"), dict) else {}
+    helpers: Json = {}
+    for script_name, file_name in HELPER_SCRIPTS.items():
+        primary_path = os.path.join(paths.scripts_dir, file_name)
+        fallback_paths = [
+            os.path.join(root, file_name)
+            for root in paths.script_roots
+            if os.path.normcase(root) != os.path.normcase(paths.scripts_dir)
+        ]
+        fallback = next((item for item in fallback_paths if os.path.exists(item)), "")
+        helpers[script_name] = {
+            "script": file_name,
+            "packageScript": str(package_scripts.get(script_name) or package_scripts.get(script_name.replace("phone:", "loom:phone:")) or ""),
+            "path": primary_path,
+            "exists": os.path.exists(primary_path),
+            "fallbackPath": fallback,
+            "fallbackExists": bool(fallback),
+        }
+    return {
+        "schema": "loom.runtime_paths.v1",
+        "basePath": paths.base_path,
+        "payloadRoots": list(paths.payload_roots),
+        "npmRoot": paths.npm_root,
+        "packageJson": package_json,
+        "scriptsRoot": paths.scripts_dir,
+        "pythonDir": paths.python_dir,
+        "pythonRuntimeDir": paths.python_runtime_dir,
+        "pythonExe": paths.python_exe,
+        "cliPath": os.path.join(paths.python_dir, "loom_cli.py"),
+        "mcpPath": os.path.join(paths.python_dir, "loom_mcp.py"),
+        "nodeDir": paths.node_dir,
+        "nodeExe": paths.node_exe,
+        "openclawMjs": paths.openclaw_mjs,
+        "helpers": helpers,
+    }
+
+
 def _status(ctx: CliContext) -> Json:
     return {
         "launcher": "LOOM",
@@ -468,6 +538,70 @@ def _status(ctx: CliContext) -> Json:
         "permission": ctx.permission,
         "time": _now_iso(),
     }
+
+
+def _doctor(ctx: CliContext) -> Json:
+    runtime = _runtime_paths(ctx.paths)
+    issues = []
+    for name, helper in runtime["helpers"].items():
+        command = str(helper.get("packageScript") or "")
+        if command and not helper.get("exists"):
+            issues.append({
+                "code": "missing_helper_script",
+                "severity": "error",
+                "helper": name,
+                "path": helper.get("path"),
+                "fallbackPath": helper.get("fallbackPath") or "",
+            })
+    python_version = _process_version([runtime["pythonExe"], "--version"])
+    node_version = _process_version([runtime["nodeExe"], "--version"])
+    return {
+        "schema": "loom.doctor.v1",
+        "time": _now_iso(),
+        "paths": runtime,
+        "python": {
+            "executable": runtime["pythonExe"],
+            "version": python_version,
+            "minimum": "3.9",
+            "bundledRuntimeExists": _bundled_python_exists(runtime),
+            "currentExecutable": sys.executable,
+            "currentVersion": ".".join(str(item) for item in sys.version_info[:3]),
+        },
+        "node": {
+            "executable": runtime["nodeExe"],
+            "version": node_version,
+            "exists": os.path.exists(runtime["nodeExe"]),
+        },
+        "scripts": runtime["helpers"],
+        "phone": {
+            "bridgeConfigured": bool(ctx.bridge_url),
+            "bridgeUrl": _redact_url(ctx.bridge_url),
+            "liveStatus": "not_checked",
+            "screenRecordingPermission": "system_prompt_may_require_first_manual_approval",
+            "adbDoctor": "phone adb-doctor --json --permission admin",
+        },
+        "issues": issues,
+        "ok": not any(item["severity"] == "error" for item in issues),
+    }
+
+
+def _bundled_python_exists(runtime: Json) -> bool:
+    runtime_dir = str(runtime.get("pythonRuntimeDir") or "")
+    if not runtime_dir:
+        return False
+    names = ("python.exe", "python") if os.name == "nt" else ("bin/python3", "bin/python", "python3", "python")
+    return any(os.path.exists(os.path.join(runtime_dir, name)) for name in names)
+
+
+def _process_version(argv: list[str]) -> str:
+    exe = argv[0] if argv else ""
+    if not exe or not os.path.exists(exe):
+        return ""
+    try:
+        completed = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (completed.stdout or completed.stderr).strip().splitlines()[0] if (completed.stdout or completed.stderr).strip() else ""
 
 
 def _bridge_session_path() -> str:
@@ -907,7 +1041,7 @@ def _phone(args: list[str], ctx: CliContext) -> Json:
         _require_permission(ctx, "control")
         prompt = _option(args, "--prompt") or ""
         mode = (_option(args, "--mode") or "safe").lower()
-        body = _phone_task_body(prompt, mode)
+        body = _phone_task_body(prompt, mode, args)
         _check_outreach_safety(prompt)
         return _bridge_call(ctx, "POST", "/api/phone/task", body)
     if action == "template-task":
@@ -1104,7 +1238,7 @@ def _bridge_call(ctx: CliContext, method: str, endpoint: str, body: Json) -> Jso
     return {"method": method, "endpoint": endpoint, "result": _redact_json(result)}
 
 
-def _phone_task_body(prompt: str, mode: str) -> Json:
+def _phone_task_body(prompt: str, mode: str, args: list[str] | None = None) -> Json:
     body: Json = {
         "prompt": prompt,
         "mode": "safe",
@@ -1132,7 +1266,39 @@ def _phone_task_body(prompt: str, mode: str) -> Json:
         body["maxRounds"] = 12
     else:
         raise CliError("invalid_phone_mode", "手机任务模式只支持 observe、safe、standard、full、deep。")
+    _apply_phone_task_runtime_options(body, args or [])
     return body
+
+
+def _apply_phone_task_runtime_options(body: Json, args: list[str]) -> None:
+    profile = (
+        _option(args, "--profile")
+        or _option(args, "--performance-profile")
+        or _option(args, "--task-profile")
+    ).lower()
+    profile_aliases = {
+        "quick": "fast",
+        "demo": "fast",
+        "normal": "standard",
+        "default": "standard",
+        "stable": "standard",
+        "slow": "deep",
+        "complex": "deep",
+    }
+    profile = profile_aliases.get(profile, profile)
+    if profile:
+        if profile not in {"fast", "standard", "deep"}:
+            raise CliError("invalid_phone_profile", "Phone profile must be fast, standard, or deep.")
+        body["profile"] = profile
+    for option, key, minimum, maximum in (
+        ("--timeout-sec", "timeoutSec", 30, 1200),
+        ("--max-wait-sec", "maxWaitSec", 45, 1260),
+        ("--max-rounds", "maxRounds", 1, 120),
+        ("--poll-ms", "pollMs", 500, 1200),
+    ):
+        value = _optional_int_option(args, option, minimum=minimum, maximum=maximum)
+        if value is not None:
+            body[key] = value
 
 
 def _matrix_dispatch_body(args: list[str]) -> Json:
@@ -1436,6 +1602,17 @@ def _int_option(args: list[str], name: str, default: int, *, minimum: int, maxim
     return max(minimum, min(maximum, value))
 
 
+def _optional_int_option(args: list[str], name: str, *, minimum: int, maximum: int) -> int | None:
+    raw = _option(args, name)
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise CliError("invalid_option", f"{name} must be an integer.") from exc
+    return max(minimum, min(maximum, value))
+
+
 def _positional(args: list[str], offset: int) -> str:
     words = [item for item in args if not item.startswith("-")]
     return words[offset] if len(words) > offset else ""
@@ -1449,6 +1626,26 @@ def _require_value(argv: list[str], index: int, name: str) -> str:
 
 def _url_component(value: str) -> str:
     return urllib.parse.quote(value.strip(), safe="")
+
+
+def _redact_url(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(text)
+    except ValueError:
+        return _redact(text)
+    netloc = parts.netloc
+    if "@" in netloc:
+        userinfo, host = netloc.rsplit("@", 1)
+        netloc = ("***:***@" if ":" in userinfo else "***@") + host
+    query_pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    redacted_query = urllib.parse.urlencode([
+        (key, "***" if any(mark in key.lower() for mark in ("token", "secret", "key", "password", "credential")) else _redact(value))
+        for key, value in query_pairs
+    ])
+    return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, redacted_query, parts.fragment))
 
 
 def _extract_bridge_error(text: str) -> str:

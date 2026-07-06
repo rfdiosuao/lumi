@@ -1,4 +1,5 @@
 import React from 'react';
+import { APP_DISPLAY_NAME } from '../../version';
 
 const LOGO_SRC = '/loom-motion/logo.svg';
 const LUMING_WORDMARK_DARK_SRC = '/loom-motion/luming-wordmark.png';
@@ -14,7 +15,7 @@ export const LoomLogoMark: React.FC<{ className?: string }> = ({ className = '' 
   </span>
 );
 
-export const LoomWordmark: React.FC<{ className?: string; title?: string }> = ({ className = '', title = 'LOOM' }) => (
+export const LoomWordmark: React.FC<{ className?: string; title?: string }> = ({ className = '', title = APP_DISPLAY_NAME }) => (
   <svg
     className={`loom-wordmark ${className}`}
     viewBox="0 0 154 42"
@@ -54,7 +55,7 @@ export const LumingWordmarkImage: React.FC<{
   return (
     <img
       src={src}
-      alt="麓鸣 LOOM"
+      alt={APP_DISPLAY_NAME}
       className={`luming-wordmark select-none object-contain ${className}`}
       draggable={false}
     />
@@ -62,19 +63,25 @@ export const LumingWordmarkImage: React.FC<{
 };
 
 export const LoomTitleLockup: React.FC<{
+  title?: string;
   subtitle?: string;
   className?: string;
   wordmarkTone?: 'dark' | 'light' | 'gold';
-}> = ({ subtitle, className = '', wordmarkTone = 'dark' }) => (
-  <div className={`flex min-w-0 items-center gap-2.5 ${className}`}>
-    <LoomLogoMark className="h-7 w-7 shadow-[0_8px_22px_rgba(3,30,38,0.22)]" />
-    <div className="min-w-0">
-      <LumingWordmarkImage tone={wordmarkTone} className="h-[31px] w-[86px]" />
-      {subtitle ? (
-        <div className={`-mt-1 truncate text-[10px] font-semibold ${wordmarkTone === 'dark' ? 'text-text-subtle' : 'text-white/60'}`}>
-          {subtitle}
-        </div>
-      ) : null}
+}> = ({ title = APP_DISPLAY_NAME, subtitle, className = '', wordmarkTone = 'dark' }) => {
+  const titleClass = wordmarkTone === 'dark' ? 'text-text' : 'text-white';
+  const subtitleClass = wordmarkTone === 'dark' ? 'text-text-subtle' : 'text-white/60';
+
+  return (
+    <div className={`flex min-w-0 items-center gap-2.5 ${className}`}>
+      <LoomLogoMark className="h-7 w-7 shadow-[0_8px_22px_rgba(3,30,38,0.22)]" />
+      <div className="min-w-0">
+        <div className={`truncate text-[15px] font-black leading-tight ${titleClass}`}>{title}</div>
+        {subtitle ? (
+          <div className={`mt-0.5 truncate text-[10px] font-semibold ${subtitleClass}`}>
+            {subtitle}
+          </div>
+        ) : null}
+      </div>
     </div>
-  </div>
-);
+  );
+};

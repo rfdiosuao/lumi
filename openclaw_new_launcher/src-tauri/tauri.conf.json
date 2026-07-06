@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "LOOM",
+  "productName": "麓鸣AI矩阵获客工作台",
   "mainBinaryName": "LOOM",
-  "version": "2.1.44",
+  "version": "2.1.45",
   "identifier": "top.heang.loom",
   "build": {
     "frontendDist": "../dist",
@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "LOOM - 麓鸣智能体安装与手机控制启动器",
+        "title": "麓鸣AI矩阵获客工作台",
         "width": 1200,
         "height": 800,
         "minWidth": 960,

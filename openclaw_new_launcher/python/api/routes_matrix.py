@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import re
-import subprocess
 import time
 
 from fastapi import Request
@@ -19,6 +18,7 @@ from api.routes_phone import (
     _phone_max_wait_for_layer,
     _phone_step_timeout_sec,
     _phone_task_tuning,
+    _run_phone_process_with_matrix_stream,
     _sanitize_cli_output,
     _script_path,
 )
@@ -290,25 +290,38 @@ def _matrix_device_tasks(task: dict) -> list[dict]:
 
 def _run_matrix_device_task(ctx, matrix: MatrixControlPlane, body: dict, device_task: dict) -> dict:
     device_task_id = str(device_task.get("deviceTaskId") or "")
+    device_id = str(device_task.get("deviceId") or "")
     started = time.monotonic()
     try:
         matrix.mark_step(device_task_id, str(device_task.get("currentStep") or "step_prepare"), status="running", message="准备单机执行")
         command = _matrix_phone_command(ctx, body, device_task)
         matrix.append_task_event("step", device_task_id, f"{command['layer']} 路径已选择")
-        completed = subprocess.run(
+        completed = _run_phone_process_with_matrix_stream(
+            ctx,
             [command["node"], command["script"], *command["args"]],
-            cwd=ctx.paths.base_path,
-            env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=command["timeoutSec"],
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            kind="phone.task",
+            layer=command["layer"],
+            timeout_sec=command["timeoutSec"],
+            device_id=device_id,
         )
-        stdout = _redact_matrix_output(_sanitize_cli_output(ctx, completed.stdout or "", kind="phone.task"))
-        stderr = _redact_matrix_output(_sanitize_cli_output(ctx, completed.stderr or "", kind="phone.task"))
-        ok = completed.returncode == 0
+        stdout = _redact_matrix_output(_sanitize_cli_output(ctx, completed.get("stdout") or "", kind="phone.task"))
+        stderr = _redact_matrix_output(_sanitize_cli_output(ctx, completed.get("stderr") or "", kind="phone.task"))
+        if completed.get("timedOut"):
+            error = "手机任务执行超时，请检查手机连接、锁屏状态和 APKClaw 运行状态。"
+            duration_ms = int((time.monotonic() - started) * 1000)
+            matrix.record_result(device_task_id, ok=False, duration_ms=duration_ms, failure_reason=error)
+            return {
+                "success": False,
+                "deviceTaskId": device_task_id,
+                "deviceId": device_task.get("deviceId"),
+                "executionLayer": command["layer"],
+                "script": os.path.basename(command["script"]),
+                "durationMs": duration_ms,
+                "error": error,
+                "stdoutPreview": stdout[:800],
+                "stderrPreview": stderr[:800],
+            }
+        ok = int(completed.get("returncode") if completed.get("returncode") is not None else 1) == 0
         error = "" if ok else _phone_cli_failure_message(stdout, stderr)
         duration_ms = int((time.monotonic() - started) * 1000)
         matrix.record_result(device_task_id, ok=ok, duration_ms=duration_ms, failure_reason=error)
@@ -318,21 +331,6 @@ def _run_matrix_device_task(ctx, matrix: MatrixControlPlane, body: dict, device_
             "deviceId": device_task.get("deviceId"),
             "executionLayer": command["layer"],
             "script": os.path.basename(command["script"]),
-            "durationMs": duration_ms,
-            "error": error,
-            "stdoutPreview": stdout[:800],
-            "stderrPreview": stderr[:800],
-        }
-    except subprocess.TimeoutExpired as exc:
-        stdout = _redact_matrix_output(_sanitize_cli_output(ctx, exc.stdout if isinstance(exc.stdout, str) else "", kind="phone.task"))
-        stderr = _redact_matrix_output(_sanitize_cli_output(ctx, exc.stderr if isinstance(exc.stderr, str) else "", kind="phone.task"))
-        error = "手机任务执行超时，请检查手机连接、锁屏状态和 APKClaw 运行状态。"
-        duration_ms = int((time.monotonic() - started) * 1000)
-        matrix.record_result(device_task_id, ok=False, duration_ms=duration_ms, failure_reason=error)
-        return {
-            "success": False,
-            "deviceTaskId": device_task_id,
-            "deviceId": device_task.get("deviceId"),
             "durationMs": duration_ms,
             "error": error,
             "stdoutPreview": stdout[:800],
@@ -361,9 +359,23 @@ def _matrix_phone_command(ctx, body: dict, device_task: dict) -> dict:
     prompt = str(body.get("prompt") or "")
     template = str(device_task.get("template") or body.get("template") or "")
     direct_action = str(device_task.get("directAction") or body.get("action") or "")
-    timeout_sec, max_wait_sec, max_rounds, poll_ms = _phone_task_tuning(mode, profile, body)
+    (
+        timeout_sec,
+        max_wait_sec,
+        max_rounds,
+        poll_ms,
+        explicit_max_wait,
+        _explicit_max_rounds,
+    ) = _phone_task_tuning(mode, profile, body)
     step_timeout_sec = _phone_step_timeout_sec(layer, profile)
-    max_wait_sec = _phone_max_wait_for_layer(layer, profile, max_wait_sec, max_rounds, step_timeout_sec)
+    max_wait_sec = _phone_max_wait_for_layer(
+        layer,
+        profile,
+        max_wait_sec,
+        max_rounds,
+        step_timeout_sec,
+        explicit_max_wait=explicit_max_wait,
+    )
     device_args = ["--device-id", str(device_task.get("deviceId") or "")] if device_task.get("deviceId") else []
     execution = _phone_execution_contract(
         layer=layer,

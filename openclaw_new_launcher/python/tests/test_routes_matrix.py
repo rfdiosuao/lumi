@@ -90,6 +90,41 @@ class MatrixRouteContractTests(unittest.TestCase):
             self.assertEqual(ledger["tool"], "bridge:matrix.dispatch")
             self.assertEqual(ledger["actionTraceId"], trace["traceId"])
 
+    def test_matrix_dispatch_streams_device_script_output_before_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _write_script(
+                temp_dir,
+                "openclaw-phone-agent.mjs",
+                body=(
+                    "import json, time\n"
+                    "print('agent round 1: matrix live log', flush=True)\n"
+                    "time.sleep(0.7)\n"
+                    "print(json.dumps({'ok': True}, ensure_ascii=False), flush=True)\n"
+                    "time.sleep(0.1)\n"
+                ),
+            )
+            _app, client = _client(temp_dir)
+            client.post("/api/matrix/device/register", json={"deviceId": "phone-a", "group": "demo", "online": True})
+
+            submitted = client.post(
+                "/api/matrix/dispatch",
+                json={
+                    "prompt": "执行一个需要 Agent 的真实手机任务",
+                    "mode": "safe",
+                    "profile": "fast",
+                    "target": {"deviceIds": ["phone-a"]},
+                },
+            )
+
+            self.assertEqual(submitted.status_code, 202)
+            try:
+                event = _wait_for_matrix_event(temp_dir, "matrix live log", timeout=0.45)
+            finally:
+                _wait_for_job(client, submitted.json()["jobId"], timeout=5.0)
+            self.assertEqual(event["type"], "phone.events.phone.task.stdout")
+            self.assertEqual(event["deviceId"], "phone-a")
+            self.assertEqual(event["source"], "phone.task.stdout")
+
     def test_matrix_dispatch_safety_gate_returns_product_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             _write_script(temp_dir, "openclaw-phone-vision.mjs")
@@ -153,15 +188,15 @@ class MatrixRouteContractTests(unittest.TestCase):
         self.assertTrue(retry_payload["retry"]["task"]["campaignId"].startswith("campaign_"))
 
 
-def _write_script(base_path: str, name: str, *, return_code: int = 0) -> None:
+def _write_script(base_path: str, name: str, *, return_code: int = 0, body: str = "") -> None:
     scripts_dir = os.path.join(base_path, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
     with open(os.path.join(scripts_dir, name), "w", encoding="utf-8") as handle:
-        handle.write(
+        handle.write(body or (
             "import json, sys\n"
             "print(json.dumps({'argv': sys.argv[1:], 'ok': True}, ensure_ascii=False))\n"
             f"raise SystemExit({return_code})\n"
-        )
+        ))
 
 
 def _client(base_path: str) -> tuple[FastAPI, TestClient]:
@@ -208,6 +243,23 @@ def _wait_for_job(client: TestClient, job_id: str, timeout: float = 2.0) -> dict
                 return job
         time.sleep(0.02)
     raise AssertionError(f"job did not finish: {job_id}")
+
+
+def _wait_for_matrix_event(base_path: str, needle: str, timeout: float = 1.0) -> dict:
+    path = os.path.join(base_path, "matrix-events.jsonl")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if needle in str(event.get("message") or ""):
+                        return event
+        time.sleep(0.02)
+    raise AssertionError(f"matrix event containing {needle!r} was not written")
 
 
 if __name__ == "__main__":

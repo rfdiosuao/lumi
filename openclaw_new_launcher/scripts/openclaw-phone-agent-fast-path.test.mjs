@@ -35,6 +35,12 @@ test('open-settings template run uses action_fast instead of async Agent task', 
           currentStep: 'complete',
           summary: 'Settings',
           currentPackage: 'com.android.settings',
+          screenHash: 'hash-after-open-settings',
+          beforeHash: 'hash-before-open-settings',
+          afterHash: 'hash-after-open-settings',
+          changed: true,
+          actionMs: 11,
+          verifyMs: 17,
           metrics: { mode: 'action_fast', totalMs: 24, rounds: 0 },
           events: [{ type: 'action_fast_completed', success: true }],
         },
@@ -78,6 +84,13 @@ test('open-settings template run uses action_fast instead of async Agent task', 
     assert.equal(payload.ok, true);
     assert.equal(payload.mode, 'action_fast');
     assert.equal(payload.metrics.rounds, 0);
+    assert.equal(payload.screenHash, 'hash-after-open-settings');
+    assert.equal(payload.beforeHash, 'hash-before-open-settings');
+    assert.equal(payload.afterHash, 'hash-after-open-settings');
+    assert.equal(payload.changed, true);
+    assert.equal(payload.actionMs, 11);
+    assert.equal(payload.verifyMs, 17);
+    assert.equal(payload.currentPackage, 'com.android.settings');
     assert.equal(actionBody.action, 'open_app');
     assert.equal(actionBody.packageName, 'com.android.settings');
     assert.equal(actionBody.verifyForeground, true);
@@ -324,6 +337,118 @@ test('vision action supports PowerShell-safe action body file', async () => {
   } finally {
     await close(server);
     await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('wechat-reply command calls signed safe auto reply endpoint', async () => {
+  let requestBody = null;
+  const server = http.createServer(async (request, response) => {
+    const body = await readBody(request);
+    if (request.method === 'POST' && request.url === '/api/lumi/security/pair') {
+      const parsed = JSON.parse(body || '{}');
+      return sendJson(response, {
+        success: true,
+        data: { launcherId: parsed.launcherId, launcherSecret: 'wechat-secret' },
+      });
+    }
+    if (request.method === 'POST' && request.url === '/api/lumi/wechat/auto_reply') {
+      requestBody = JSON.parse(body || '{}');
+      return sendJson(response, {
+        success: true,
+        data: {
+          mode: 'wechat_auto_reply',
+          currentStep: 'drafted',
+          contact: 'Alice',
+          latestMessage: 'hello',
+          replyText: requestBody.replyText,
+          autoSend: requestBody.autoSend,
+          sent: false,
+        },
+      });
+    }
+    return sendJson(response, { success: false, error: `unexpected ${request.method} ${request.url}` }, 404);
+  });
+
+  await listen(server);
+  try {
+    const port = server.address().port;
+    const result = await runCli([
+      'wechat-reply',
+      '--phone-url',
+      `http://127.0.0.1:${port}`,
+      '--phone-token',
+      'test-token',
+      '--reply',
+      '你好，我稍后回复你',
+      '--json',
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.mode, 'wechat_auto_reply');
+    assert.equal(payload.currentStep, 'drafted');
+    assert.equal(requestBody.replyText, '你好，我稍后回复你');
+    assert.equal(requestBody.autoSend, false);
+  } finally {
+    await close(server);
+  }
+});
+
+test('task events command polls task-specific Lumi events endpoint', async () => {
+  const seen = [];
+  const server = http.createServer(async (request, response) => {
+    seen.push(`${request.method} ${request.url}`);
+    await readBody(request);
+
+    if (request.method === 'GET' && request.url === '/api/device/status') {
+      return sendJson(response, { success: true, data: readyStatus({ llmConfigured: true }) });
+    }
+    if (request.method === 'POST' && request.url === '/api/lumi/security/pair') {
+      return sendJson(response, {
+        success: true,
+        data: { launcherId: 'test-launcher', launcherSecret: 'test-secret' },
+      });
+    }
+    if (request.method === 'GET' && request.url === '/api/lumi/agent/tasks/task-123/events') {
+      return sendJson(response, {
+        success: true,
+        data: {
+          taskId: 'task-123',
+          status: 'running',
+          cancelRequested: false,
+          events: [{ type: 'tool_call', round: 1, message: 'Open App' }],
+        },
+      });
+    }
+
+    return sendJson(response, { success: false, error: `unexpected ${request.method} ${request.url}` }, 404);
+  });
+
+  await listen(server);
+  try {
+    const port = server.address().port;
+    const result = await runCli([
+      'events',
+      '--phone-url',
+      `http://127.0.0.1:${port}`,
+      '--phone-token',
+      'test-token',
+      '--task-id',
+      'task-123',
+      '--daemon',
+      'off',
+      '--json',
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.taskId, 'task-123');
+    assert.equal(payload.data.events[0].type, 'tool_call');
+    assert.equal(seen.includes('GET /api/lumi/agent/tasks/task-123/events'), true);
+  } finally {
+    await close(server);
   }
 });
 

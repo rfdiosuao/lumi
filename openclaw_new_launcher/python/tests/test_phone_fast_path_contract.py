@@ -72,6 +72,43 @@ class PhoneFastPathContractTests(unittest.TestCase):
                 self.assertEqual(body["profile"], expected_profile)
                 self.assertEqual(body["maxRounds"], expected_rounds)
 
+    def test_cli_quick_task_passes_explicit_runtime_budget(self) -> None:
+        from loom_cli import dispatch
+
+        code, payload = dispatch(
+            [
+                "phone",
+                "quick-task",
+                "--prompt",
+                "complete a complex multi-step phone flow",
+                "--mode",
+                "safe",
+                "--profile",
+                "standard",
+                "--timeout-sec",
+                "300",
+                "--max-wait-sec",
+                "320",
+                "--max-rounds",
+                "40",
+                "--poll-ms",
+                "700",
+                "--permission",
+                "control",
+                "--json",
+                "--dry-run",
+            ]
+        )
+
+        self.assertEqual(code, 0)
+        body = payload["data"]["body"]
+        self.assertEqual(body["mode"], "safe")
+        self.assertEqual(body["profile"], "standard")
+        self.assertEqual(body["timeoutSec"], 300)
+        self.assertEqual(body["maxWaitSec"], 320)
+        self.assertEqual(body["maxRounds"], 40)
+        self.assertEqual(body["pollMs"], 700)
+
     def test_deep_profile_is_only_used_when_explicitly_requested(self) -> None:
         from loom_cli import dispatch
 

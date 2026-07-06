@@ -1,5 +1,6 @@
 import React from 'react';
 import { LoomLogoMark } from '../brand/LoomBrand';
+import { APP_DISPLAY_NAME } from '../../version';
 import { showConfirm } from '../common';
 import { useTheme } from '../../hooks/useTheme';
 import { DEFAULT_NAV_ITEMS, normalizeNavItems } from '../../theme/default';
@@ -257,7 +258,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               void (async () => {
                 const ok = await showConfirm({
                   title: '停止运行环境',
-                  message: '正在运行的任务可能中断，确定要停止 LOOM 本地运行环境吗？',
+                  message: `正在运行的任务可能中断，确定要停止 ${APP_DISPLAY_NAME} 本地运行环境吗？`,
                   confirmText: '停止',
                   tone: 'danger',
                 });

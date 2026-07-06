@@ -1,5 +1,6 @@
 import type { NavItem, ThemeConfig } from '../types/theme';
 import { DEFAULT_FEATURE_NAV_ITEMS, normalizeFeatureNavItems } from '../features/registry';
+import { APP_DISPLAY_NAME, APP_DISPLAY_SUBTITLE } from '../version';
 
 type ThemeColors = ThemeConfig['colors'];
 
@@ -22,7 +23,7 @@ const BASE_FONTS: ThemeConfig['fonts'] = {
 export const DEFAULT_NAV_ITEMS: NavItem[] = DEFAULT_FEATURE_NAV_ITEMS;
 
 export const LIGHT_THEME: ThemeConfig = {
-  name: 'LOOM Light',
+  name: `${APP_DISPLAY_NAME} Light`,
   colors: {
     app_bg: '#F4EFE5',
     sidebar_bg: '#071B24',
@@ -51,15 +52,15 @@ export const LIGHT_THEME: ThemeConfig = {
   },
   fonts: BASE_FONTS,
   brand: {
-    name: 'LOOM',
-    subtitle: '麓鸣智能体安装与手机控制启动器',
+    name: APP_DISPLAY_NAME,
+    subtitle: APP_DISPLAY_SUBTITLE,
     app_user_model_id: 'LOOM.Agent',
-    terminal_header: 'LOOM 运行时',
+    terminal_header: `${APP_DISPLAY_NAME} 运行时`,
     logoUrl: '',
   },
   navItems: DEFAULT_NAV_ITEMS,
   window: {
-    title: 'LOOM - 麓鸣智能体安装与手机控制启动器',
+    title: APP_DISPLAY_NAME,
     width: 1200,
     height: 800,
   },
@@ -67,7 +68,7 @@ export const LIGHT_THEME: ThemeConfig = {
 
 export const DARK_THEME: ThemeConfig = {
   ...LIGHT_THEME,
-  name: 'LOOM Dark',
+  name: `${APP_DISPLAY_NAME} Dark`,
   colors: {
     app_bg: '#061017',
     sidebar_bg: '#05141A',

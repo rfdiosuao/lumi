@@ -45,11 +45,89 @@ class AppPaths:
             return os.path.join(sys._MEIPASS, filename)
         return os.path.join(self.base_path, filename)
 
-    def find_node_dir(self) -> str:
+    @property
+    def payload_roots(self) -> tuple[str, ...]:
         candidates = [
-            os.path.join(self.base_path, "SystemData", ".core", "node"),
-            os.path.join(self.base_path, "node"),
+            self.base_path,
+            os.path.join(self.base_path, "LOOMFiles"),
+            os.path.join(self.base_path, "OpenClawFiles"),
         ]
+        if os.path.basename(self.base_path) in ("LOOMFiles", "OpenClawFiles"):
+            parent = os.path.dirname(self.base_path)
+            candidates.extend([parent, os.path.join(parent, "LOOMFiles"), os.path.join(parent, "OpenClawFiles")])
+        seen: set[str] = set()
+        roots: list[str] = []
+        for path in candidates:
+            normalized = os.path.normpath(path)
+            key = os.path.normcase(normalized)
+            if key in seen:
+                continue
+            seen.add(key)
+            roots.append(normalized)
+        return tuple(roots)
+
+    @property
+    def npm_root(self) -> str:
+        for root in self.payload_roots:
+            if os.path.isfile(os.path.join(root, "package.json")):
+                return root
+        return self.payload_roots[0]
+
+    @property
+    def scripts_dir(self) -> str:
+        for scripts in self.script_roots:
+            if os.path.isdir(scripts):
+                return scripts
+        return os.path.join(self.npm_root, "scripts")
+
+    @property
+    def script_roots(self) -> tuple[str, ...]:
+        candidates = [os.path.join(root, "scripts") for root in self.payload_roots]
+        candidates.extend([
+            os.path.join(self.base_path, "_up_", "scripts"),
+            os.path.join(self.npm_root, "_up_", "scripts"),
+        ])
+        seen: set[str] = set()
+        roots: list[str] = []
+        for path in candidates:
+            normalized = os.path.normpath(path)
+            key = os.path.normcase(normalized)
+            if key in seen:
+                continue
+            seen.add(key)
+            roots.append(normalized)
+        return tuple(roots)
+
+    @property
+    def python_dir(self) -> str:
+        for root in self.payload_roots:
+            for rel in (os.path.join("_up_", "python"), "python"):
+                candidate = os.path.join(root, rel)
+                if os.path.isfile(os.path.join(candidate, "loom_cli.py")):
+                    return candidate
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    @property
+    def python_runtime_dir(self) -> str:
+        for root in self.payload_roots:
+            for rel in (os.path.join("_up_", "python-runtime"), "python-runtime"):
+                candidate = os.path.join(root, rel)
+                if os.path.isdir(candidate):
+                    return candidate
+        return os.path.join(self.npm_root, "_up_", "python-runtime")
+
+    @property
+    def python_exe(self) -> str:
+        names = ("python.exe", "python") if os.name == "nt" else ("bin/python3", "bin/python", "python3", "python")
+        for name in names:
+            path = os.path.join(self.python_runtime_dir, name)
+            if os.path.exists(path):
+                return path
+        return sys.executable
+
+    def find_node_dir(self) -> str:
+        candidates = [os.path.join(root, "node") for root in self.payload_roots]
+        candidates.insert(0, os.path.join(self.base_path, "SystemData", ".core", "node"))
         for path in candidates:
             if any(os.path.exists(os.path.join(path, name)) for name in self.node_binary_names()):
                 return path
@@ -219,10 +297,8 @@ class AppPaths:
 
     @property
     def openclaw_mjs(self) -> str:
-        candidates = [
-            os.path.join(self.base_path, "node_modules", "openclaw", "openclaw.mjs"),
-            os.path.join(self.base_path, "SystemData", ".core", "node_modules", "openclaw", "openclaw.mjs"),
-        ]
+        candidates = [os.path.join(root, "node_modules", "openclaw", "openclaw.mjs") for root in self.payload_roots]
+        candidates.insert(0, os.path.join(self.base_path, "SystemData", ".core", "node_modules", "openclaw", "openclaw.mjs"))
         for path in candidates:
             if os.path.exists(path):
                 return path
@@ -236,7 +312,7 @@ class AppPaths:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         path_entries = [
             self.node_dir,
-            os.path.join(self.base_path, "node_modules", ".bin"),
+            os.path.join(self.npm_root, "node_modules", ".bin"),
             os.path.join(self.base_path, "SystemData", ".core", "node_modules", ".bin"),
         ]
         existing_path = env.get("Path") or env.get("PATH") or ""

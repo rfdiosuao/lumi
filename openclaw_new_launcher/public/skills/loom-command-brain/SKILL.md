@@ -1,6 +1,6 @@
 ---
 name: loom-command-brain
-description: "Use when Codex, Claude Code, or another agent needs to operate LOOM/Luming through CLI or MCP: inspect capabilities, configure models, dispatch or monitor phone workers, read screenshots/logs, run phone templates, capture phone video, use phone vision/media/publish helpers, recover ADB/phone connection issues, or turn repeated phone work into reusable templates."
+description: "Use when Codex, Claude Code, or another agent needs to operate 麓鸣AI矩阵获客工作台 (LOOM/Luming) through CLI or MCP: inspect capabilities, configure models, dispatch or monitor phone workers, read screenshots/logs, run phone templates, capture phone video, use phone vision/media/publish helpers, recover ADB/phone connection issues, or turn repeated phone work into reusable templates."
 ---
 
 # LOOM Command Brain
@@ -21,25 +21,27 @@ Never assume one developer machine path.
    - Windows fallbacks: %LOCALAPPDATA%\LOOM, %ProgramFiles%\LOOM, D:\LOOM, C:\LOOM.
    - macOS fallbacks: /Applications/LOOM.app/Contents/Resources, ~/Applications/LOOM.app/Contents/Resources, ~/Library/Application Support/LOOM.
    - Linux fallbacks: /opt/loom, ~/.local/share/LOOM.
-3. Resolve LOOM package root:
-   - Prefer the directory that contains package.json and python/loom_cli.py.
-   - If CLI and npm helper roots differ, ask loom_cli.py commands --json for the concrete helper path.
+3. Resolve LOOM npm root:
+   - Do not require package.json and python/loom_cli.py to live together.
+   - Packaged Windows installs may use _up_/python for CLI and LOOMFiles for npm/package.json.
+   - Run loom_cli.py doctor --json first and use data.paths.npmRoot, data.paths.scriptsRoot, data.paths.pythonExe, and data.scripts.
 
 ## First Move
 
-Run the capability catalog before taking action:
+Run doctor, then the capability catalog before taking action:
 
-python -B "<LOOM_HOME>/python/loom_cli.py" commands --json
+python -B "<LOOM_CLI>" doctor --json
+python -B "<LOOM_CLI>" commands --json
 
 Prefer MCP tools when available. Prefer CLI when you need deterministic JSON, dry-runs, or local subprocess verification. Every CLI command must include --json; use --dry-run before destructive or unfamiliar actions.
 
 ## Capability Map
 
-- System: status, commands, models
+- System: status, doctor, commands, models
 - Account/model wire: account current, account sync, wire current, wire custom, wire verify, wire rollback
 - Agents: agents list, agents start, agents model-status, agents model-apply, agents model-rollback
 - Single phone via loom_cli.py: phone status, phone screenshot, phone read, phone events-start, phone events-status, phone events-stop, phone template-task, phone quick-task
-- Phone npm helpers from LOOM package root: phone:agent, phone:vision, phone:video, phone:image, phone:image:edit, phone:fleet, phone:game, phone:publish, phone:relay, phone:relay:check, phone:relay:smoke, phone:demo:shopping, phone:demo:read, phone:demo:game
+- Phone npm helpers from doctor.data.paths.npmRoot: phone:agent, phone:vision, phone:video, phone:image, phone:image:edit, phone:fleet, phone:game, phone:publish, phone:relay, phone:relay:check, phone:relay:smoke, phone:demo:shopping, phone:demo:read, phone:demo:game
 - LOOM phone npm aliases: loom:phone, loom:phone:fleet, loom:phone:vision, loom:phone:video, loom:phone:publish
 - Phone recovery: phone adb-doctor with --permission admin
 - Matrix: matrix status, matrix dispatch, matrix watch, matrix retry, matrix cancel
@@ -54,8 +56,8 @@ Prefer MCP tools when available. Prefer CLI when you need deterministic JSON, dr
 4. For multi-phone work, dispatch once, then supervise by events. Codex should do macro-control, not micromanage every tap.
 5. For outbound messages, comments, private messages, publishing, batch reach-out, account changes, or paid actions, require explicit user confirmation.
 6. Never print or store raw API keys, tokens, passwords, launcher secrets, or phone tokens.
-7. For npm run phone:* commands, work from LOOM package root, always add --json, and prefer saved launcher phone config. Pass --phone-url / --phone-token only for explicit debugging.
-8. Phone screen recording requires clear user intent and may show an Android screen-capture consent prompt for every phone:video start.
+7. For npm run phone:* commands, work from doctor.data.paths.npmRoot, always add --json, and prefer saved launcher phone config. Pass --phone-url / --phone-token only for explicit debugging.
+8. Phone screen recording requires clear user intent and may show an Android MediaProjection consent prompt. doctor reports this as a system prompt; do not claim it can always be bypassed.
 9. Generated HTML, Markdown, scripts, and config files must be UTF-8. HTML files must include <!doctype html>, <html lang="zh-CN">, <meta charset="UTF-8">, and a viewport meta tag.
 10. If Computer Use, Node REPL, Browser, Chrome, or desktop automation tools are unavailable, do not stop the task. Continue through LOOM CLI/MCP, local file edits, direct phone/matrix commands, phone npm helpers, and concise manual handoff only for login, captcha, payment, 2FA, or OS permission prompts.
 
@@ -76,29 +78,30 @@ Use this fallback order:
 
 There are two phone command layers:
 
-- python -B "<LOOM_HOME>/python/loom_cli.py" ... --json: LOOM control-plane commands, best for status, Matrix, templates, logs, and ADB recovery.
-- npm run phone:* -- ... --json from LOOM package root: bundled OpenClaw helpers, best for APKClaw Agent, low-level vision, recording, image upload/generation, multi-device fan-out, game/canvas fallback, and publish relay work.
+- python -B "<LOOM_CLI>" ... --json: LOOM control-plane commands, best for status, Matrix, templates, logs, and ADB recovery.
+- npm run phone:* -- ... --json from doctor.data.paths.npmRoot: bundled OpenClaw helpers, best for APKClaw Agent, low-level vision, recording, image upload/generation, multi-device fan-out, game/canvas fallback, and publish relay work.
 
 Use the capability catalog first, then choose the narrowest layer.
 
 | Need | Preferred command |
 | --- | --- |
-| Current phone health | python -B "<LOOM_HOME>/python/loom_cli.py" phone status --json |
-| One screenshot | python -B "<LOOM_HOME>/python/loom_cli.py" phone screenshot --json |
-| Read current screen | python -B "<LOOM_HOME>/python/loom_cli.py" phone read --prompt "Read the current screen." --json |
+| Environment self-check | python -B "<LOOM_CLI>" doctor --json |
+| Current phone health | python -B "<LOOM_CLI>" phone status --json |
+| One screenshot | python -B "<LOOM_CLI>" phone screenshot --json |
+| Read current screen | python -B "<LOOM_CLI>" phone read --prompt "Read the current screen." --json |
 | Run a bounded task | npm run phone:agent -- run --prompt "..." --mode safe --json |
-| Submit/watch/cancel async Agent work | npm run phone:agent -- submit/status/cancel --json |
+| Submit/watch/cancel async Agent work | npm run phone:agent -- submit/status/events/cancel --json |
 | Runtime speed/queue metrics | npm run phone:agent -- metrics --json |
 | Signed phone event stream | npm run phone:agent -- events-sync --json or loom_cli.py phone events-start/status/stop --json |
 | Fast screen tree or profile read | npm run phone:vision -- read --json |
 | Vision frame with grid | npm run phone:vision -- frame --out ./data/phone-frames/frame.jpg --json |
-| Explicit guarded visual action | npm run phone:vision -- action --force-action --action-body-file ./action.json --json |
+| Explicit guarded visual action | npm run phone:vision -- action --force-action --action-body-file ./action.json --json; prefer observe_fast selector ref with click_ref, then click_text/click_node, all through action_fast |
 | Start/stop/download phone recording | npm run phone:video -- start/stop/download --json |
 | Generate or upload image to phone | npm run phone:image -- --prompt "..." --json or npm run phone:image -- --image ./file.png --json |
 | Edit image and upload | npm run phone:image:edit -- --reference-image ./input.png --prompt "..." --json |
 | Run one task on several APKClaw devices | npm run phone:fleet -- run --target all --prompt "..." --mode observe --concurrency 2 --json |
 | Game/canvas visual loop | npm run phone:game -- run --goal "..." --json |
-| Direct or reverse platform publish | npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --json |
+| Direct or reverse platform publish | npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --max-rounds 80 --json |
 | Publish relay server/check/smoke | npm run phone:relay -- ..., npm run phone:relay:check -- ..., npm run phone:relay:smoke -- ... |
 | Demo wrappers | npm run phone:demo:shopping -- --query "..." --json; npm run phone:demo:read -- --json; npm run phone:demo:game -- --goal "..." --json |
 | LOOM aliases | npm run loom:phone -- ...; npm run loom:phone:vision -- ...; npm run loom:phone:video -- ...; npm run loom:phone:fleet -- ...; npm run loom:phone:publish -- ... |
@@ -107,7 +110,7 @@ Common npm helper options: --device-id, --phone-url, --phone-token, --json. Keep
 
 ## Decision Tree
 
-Need to know what LOOM can do: run commands --json, then read data.codexCommandBrain.
+Need to know what LOOM can do: run doctor --json first for concrete paths, then commands --json and read data.codexCommandBrain.
 
 Need to configure models: use models, wire current, account current, then agents model-status. Apply only when the user wants LOOM-managed config.
 

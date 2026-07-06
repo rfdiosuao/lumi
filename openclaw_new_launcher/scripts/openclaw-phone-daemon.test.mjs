@@ -239,6 +239,19 @@ test('daemon client routes metrics and events-sync through authenticated daemon 
       response.end(JSON.stringify({ success: true, data: { launcherId: body.launcherId, launcherSecret: 'daemon-events-secret' } }));
       return;
     }
+    if (request.url === '/api/device/status') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        success: true,
+        data: {
+          configServerRunning: true,
+          accessibilityEnabled: true,
+          agentInitialized: true,
+          modelConfigured: true,
+        },
+      }));
+      return;
+    }
     if (request.url === '/api/lumi/agent/metrics?_lumi=1') {
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ success: true, data: { metrics: { taskCount: 2, queueDepth: 1 } } }));
@@ -318,6 +331,19 @@ test('daemon serializes same-device events-sync streams', async () => {
       const body = await readJson(request);
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ success: true, data: { launcherId: body.launcherId, launcherSecret: 'daemon-event-queue-secret' } }));
+      return;
+    }
+    if (request.url === '/api/device/status') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        success: true,
+        data: {
+          configServerRunning: true,
+          accessibilityEnabled: true,
+          agentInitialized: true,
+          modelConfigured: true,
+        },
+      }));
       return;
     }
     if (request.url === '/api/lumi/events') {
@@ -1381,7 +1407,7 @@ test('daemon client aborts a stalled daemon request', async () => {
       });
 
       assert.equal(result.usedDaemon, true);
-      assert.match(result.error.message, /aborted|timeout|AbortError/i);
+      assert.match(result.error.message, /aborted|timeout|AbortError|超时/i);
       assert.ok(Date.now() - started < 15_000);
     } finally {
       await new Promise((resolve) => server.close(resolve));

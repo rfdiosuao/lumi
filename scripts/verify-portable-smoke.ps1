@@ -49,6 +49,24 @@ function Assert-Missing {
     }
 }
 
+function Assert-PackageScriptsResolve {
+    param([string]$PayloadRoot)
+
+    $packageJsonPath = Assert-File -Root $PayloadRoot -RelativePath "package.json"
+    $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $packageJson.scripts) {
+        throw "package.json scripts are missing"
+    }
+
+    foreach ($property in $packageJson.scripts.PSObject.Properties) {
+        $command = [string]$property.Value
+        foreach ($match in [regex]::Matches($command, "node\s+scripts[\\/][^\s]+\.mjs")) {
+            $relative = ($match.Value -replace "^node\s+", "") -replace "/", "\"
+            Assert-File -Root $PayloadRoot -RelativePath $relative | Out-Null
+        }
+    }
+}
+
 function Invoke-Checked {
     param(
         [string]$Label,
@@ -78,16 +96,17 @@ Invoke-Checked "Required file layout" {
     Assert-File -Root $payloadRoot -RelativePath "_up_\python\uvicorn\__init__.py" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "scripts\openclaw-phone-agent.mjs" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "scripts\openclaw-context.mjs" | Out-Null
+    Assert-File -Root $payloadRoot -RelativePath "scripts\openclaw-publish-phone.mjs" | Out-Null
+    Assert-File -Root $payloadRoot -RelativePath "scripts\openclaw-publish-relay.mjs" | Out-Null
+    Assert-File -Root $payloadRoot -RelativePath "scripts\openclaw-publish-relay-check.mjs" | Out-Null
+    Assert-File -Root $payloadRoot -RelativePath "scripts\openclaw-publish-relay-smoke.mjs" | Out-Null
+    Assert-PackageScriptsResolve -PayloadRoot $payloadRoot
     Assert-File -Root $payloadRoot -RelativePath "data\.openclaw\workspace\AGENTS.md" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "data\.openclaw\workspace\SOUL.md" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "data\.openclaw\workspace\TOOLS.md" | Out-Null
     Assert-File -Root $payloadRoot -RelativePath "data\.openclaw\workspace\CAPABILITIES.md" | Out-Null
     foreach ($legacy in @(
         "scripts\bot-plugin-helper.mjs",
-        "scripts\openclaw-publish-phone.mjs",
-        "scripts\openclaw-publish-relay.mjs",
-        "scripts\openclaw-publish-relay-check.mjs",
-        "scripts\openclaw-publish-relay-smoke.mjs",
         "scripts\package-mac-complete.mjs",
         "scripts\package-mac-online.mjs"
     )) {
@@ -152,7 +171,11 @@ Invoke-Checked "Bundled Node CLI syntax" {
         "scripts\openclaw-phone-vision.mjs",
         "scripts\openclaw-phone-game.mjs",
         "scripts\openclaw-phone-video.mjs",
-        "scripts\openclaw-image-phone.mjs"
+        "scripts\openclaw-image-phone.mjs",
+        "scripts\openclaw-publish-phone.mjs",
+        "scripts\openclaw-publish-relay.mjs",
+        "scripts\openclaw-publish-relay-check.mjs",
+        "scripts\openclaw-publish-relay-smoke.mjs"
     )) {
         $scriptPath = Assert-File -Root $payloadRoot -RelativePath $script
         & $nodeExe --check $scriptPath

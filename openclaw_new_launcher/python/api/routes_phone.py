@@ -30,6 +30,16 @@ _PHONE_TEMPLATE_STEP_TIMEOUT_SEC = 12
 _PHONE_AGENT_STEP_TIMEOUT_SEC = 15
 _PHONE_SCREENSHOT_CACHE_TTL_MS = 1200
 _PHONE_READ_CACHE_TTL_SEC = 30
+_PHONE_REF_PREFERRED_ACTIONS = {
+    "click_text",
+    "tap_text",
+    "click_node",
+    "tap_node",
+    "click_element",
+    "tap_element",
+    "click_description",
+    "tap_description",
+}
 _PHONE_READ_CACHE_LOCK = threading.Lock()
 _PHONE_READ_CACHE: dict[str, dict] = {}
 _PHONE_SCREENSHOT_CACHE_LOCK = threading.Lock()
@@ -40,6 +50,11 @@ _PHONE_TASK_ROUND_CAPS = {
     "observe": 4,
     "safe": 12,
     "full": 30,
+}
+_PHONE_TASK_EXPLICIT_ROUND_CAPS = {
+    "observe": 4,
+    "safe": 120,
+    "full": 120,
 }
 _PHONE_TASK_PROFILE_DEFAULTS = {
     "fast": {
@@ -382,13 +397,48 @@ def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> 
     return max(minimum, min(maximum, parsed))
 
 
-def _phone_task_tuning(mode: str, profile: str, body: dict) -> tuple[int, int, int, int]:
+def _body_has_value(body: dict, *names: str) -> bool:
+    return any(body.get(name) not in (None, "") for name in names)
+
+
+def _body_first_value(body: dict, *names: str) -> object:
+    for name in names:
+        value = body.get(name)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _phone_task_tuning(mode: str, profile: str, body: dict) -> tuple[int, int, int, int, bool, bool]:
     timeout_default, max_wait_default, rounds_default, poll_default = _PHONE_TASK_PROFILE_DEFAULTS[profile][mode]
-    timeout_sec = _bounded_int(body.get("timeoutSec"), default=timeout_default, minimum=30, maximum=1200)
-    max_wait_sec = _bounded_int(body.get("maxWaitSec"), default=max_wait_default, minimum=45, maximum=1260)
-    max_rounds = _bounded_int(body.get("maxRounds"), default=rounds_default, minimum=1, maximum=_PHONE_TASK_ROUND_CAPS[mode])
-    poll_ms = _bounded_int(body.get("pollMs"), default=poll_default, minimum=500, maximum=1200)
-    return timeout_sec, max_wait_sec, max_rounds, poll_ms
+    explicit_max_wait = _body_has_value(body, "maxWaitSec", "max_wait_sec")
+    explicit_max_rounds = _body_has_value(body, "maxRounds", "max_rounds")
+    round_cap = _PHONE_TASK_EXPLICIT_ROUND_CAPS[mode] if explicit_max_rounds else _PHONE_TASK_ROUND_CAPS[mode]
+    timeout_sec = _bounded_int(
+        _body_first_value(body, "timeoutSec", "timeout_sec"),
+        default=timeout_default,
+        minimum=30,
+        maximum=1200,
+    )
+    max_wait_sec = _bounded_int(
+        _body_first_value(body, "maxWaitSec", "max_wait_sec"),
+        default=max_wait_default,
+        minimum=45,
+        maximum=1260,
+    )
+    max_rounds = _bounded_int(
+        _body_first_value(body, "maxRounds", "max_rounds"),
+        default=rounds_default,
+        minimum=1,
+        maximum=round_cap,
+    )
+    poll_ms = _bounded_int(
+        _body_first_value(body, "pollMs", "poll_ms"),
+        default=poll_default,
+        minimum=500,
+        maximum=1200,
+    )
+    return timeout_sec, max_wait_sec, max_rounds, poll_ms, explicit_max_wait, explicit_max_rounds
 
 
 def _phone_direct_action(value: object, prompt: str = "") -> str:
@@ -457,7 +507,7 @@ def _phone_cached_selector_action_body(ctx, body: dict) -> dict:
         selector = selectors[selector_index]
     if not isinstance(selector, dict):
         raise ValueError("cached selector is invalid; read screen again")
-    action_body = _phone_compact_action_body(selector.get("actionBody") if isinstance(selector.get("actionBody"), dict) else selector)
+    action_body = _phone_compact_action_body(selector.get("actionBody") if isinstance(selector.get("actionBody"), dict) else selector, selector)
     if not action_body:
         raise ValueError("cached selector has no actionBody; read screen again")
     _phone_apply_action_body_overrides(action_body, body)
@@ -500,6 +550,8 @@ def _phone_prompt_for_action_body(action_body: dict) -> str:
         action_body.get("text")
         or action_body.get("contentDescription")
         or action_body.get("resourceId")
+        or action_body.get("targetLabel")
+        or action_body.get("ref")
         or action_body.get("nodeId"),
         120,
     )
@@ -513,6 +565,10 @@ def _phone_action_body_name(value: object) -> str:
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", text)
     text = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
     aliases = {
+        "click_selector": "click_ref",
+        "selector_click": "click_ref",
+        "ref_click": "click_ref",
+        "tap_ref": "click_ref",
         "wait_element": "wait_element",
         "wait_for_element": "wait_element",
         "wait_until_element": "wait_element",
@@ -564,12 +620,20 @@ def _phone_step_timeout_sec(layer: str, profile: str) -> int:
     return _PHONE_AGENT_STEP_TIMEOUT_SEC
 
 
-def _phone_max_wait_for_layer(layer: str, profile: str, max_wait_sec: int, max_rounds: int, step_timeout_sec: int) -> int:
+def _phone_max_wait_for_layer(
+    layer: str,
+    profile: str,
+    max_wait_sec: int,
+    max_rounds: int,
+    step_timeout_sec: int,
+    *,
+    explicit_max_wait: bool = False,
+) -> int:
     if layer == "direct":
         return min(max_wait_sec, step_timeout_sec + 6)
     if layer == "template":
         return min(max_wait_sec, 25)
-    if profile == "fast":
+    if profile == "fast" and not explicit_max_wait:
         return min(max_wait_sec, max(30, min(75, max_rounds * 5 + step_timeout_sec)))
     return max_wait_sec
 
@@ -1156,7 +1220,30 @@ def _apply_phone_event_to_matrix(ctx, event: dict, device: dict | None = None) -
     try:
         from core.phone_matrix import MatrixControlPlane
 
-        MatrixControlPlane(ctx.paths).register_device(patch)
+        matrix = MatrixControlPlane(ctx.paths)
+        matrix.register_device(patch)
+        event_name = _clip(event.get("event") or event.get("type") or "runtime", 80) or "runtime"
+        message = _clip(
+            patch.get("headline")
+            or patch.get("currentStep")
+            or patch.get("currentScreenSummary")
+            or f"phone event {event_name}",
+            320,
+        )
+        matrix.append_runtime_event(
+            f"phone.events.{event_name}",
+            _clip(patch.get("deviceId"), 100),
+            message,
+            source=f"phone.events.{event_name}",
+            details={
+                "streamStatus": patch.get("streamStatus"),
+                "streamLatencyMs": patch.get("streamLatencyMs"),
+                "currentPackage": patch.get("currentPackage"),
+                "foregroundApp": patch.get("foregroundApp"),
+                "runningTaskCount": patch.get("runningTaskCount"),
+                "busy": patch.get("busy"),
+            },
+        )
     except Exception:
         return
 
@@ -1401,34 +1488,69 @@ def _phone_compact_selectors_from_payload(payload: dict, data: dict) -> list[dic
     for item in source[:40]:
         if not isinstance(item, dict):
             continue
-        action_body = _phone_compact_action_body(item.get("actionBody") if isinstance(item.get("actionBody"), dict) else item)
+        action_body = _phone_compact_action_body(item.get("actionBody") if isinstance(item.get("actionBody"), dict) else item, item)
         if not action_body:
             continue
+        selector = {
+            "nodeId": _clip(item.get("nodeId") or item.get("node_id") or item.get("id"), 80),
+            "label": _clip(
+                item.get("label")
+                or item.get("text")
+                or item.get("description")
+                or item.get("contentDescription")
+                or item.get("resourceId"),
+                120,
+            ),
+            "actionBody": action_body,
+        }
+        ref = _clip(item.get("ref") or item.get("selectorRef") or item.get("selector_ref") or action_body.get("ref"), 100)
+        if ref:
+            selector["ref"] = ref
         selectors.append(
-            {
-                "nodeId": _clip(item.get("nodeId") or item.get("node_id") or item.get("id"), 80),
-                "label": _clip(
-                    item.get("label")
-                    or item.get("text")
-                    or item.get("description")
-                    or item.get("contentDescription")
-                    or item.get("resourceId"),
-                    120,
-                ),
-                "actionBody": action_body,
-            }
+            selector
         )
     return selectors
 
 
-def _phone_compact_action_body(value: object) -> dict:
+def _phone_compact_action_body(value: object, source: object | None = None) -> dict:
     if not isinstance(value, dict):
         return {}
-    action = _phone_action_body_name(value.get("action") or value.get("type") or value.get("name"))
+    source_dict = source if isinstance(source, dict) else {}
+    action = _phone_action_body_name(
+        value.get("action")
+        or value.get("type")
+        or value.get("name")
+        or source_dict.get("action")
+        or source_dict.get("type")
+        or source_dict.get("name")
+    )
     if not action:
         return {}
+    ref = _clip(
+        value.get("ref")
+        or value.get("selectorRef")
+        or value.get("selector_ref")
+        or source_dict.get("ref")
+        or source_dict.get("selectorRef")
+        or source_dict.get("selector_ref"),
+        100,
+    )
+    if ref and action in _PHONE_REF_PREFERRED_ACTIONS:
+        action = "click_ref"
     body: dict[str, object] = {"action": action}
-    text = _clip(value.get("text") or value.get("targetText") or value.get("target_text") or value.get("label"), 160)
+    if ref:
+        body["ref"] = ref
+    text = _clip(
+        value.get("text")
+        or value.get("targetText")
+        or value.get("target_text")
+        or value.get("label")
+        or source_dict.get("text")
+        or source_dict.get("targetText")
+        or source_dict.get("target_text")
+        or source_dict.get("label"),
+        160,
+    )
     if text:
         body["text"] = text
     content_description = _clip(
@@ -1436,23 +1558,52 @@ def _phone_compact_action_body(value: object) -> dict:
         or value.get("content_description")
         or value.get("description")
         or value.get("targetDescription")
+        or source_dict.get("contentDescription")
+        or source_dict.get("content_description")
+        or source_dict.get("description")
+        or source_dict.get("targetDescription")
+        or source_dict.get("target_description")
         or value.get("target_description"),
         160,
     )
     if content_description:
         body["contentDescription"] = content_description
-    resource_id = _clip(value.get("resourceId") or value.get("resource_id") or value.get("viewId") or value.get("view_id"), 200)
+    target_label = _clip(
+        value.get("targetLabel")
+        or value.get("target_label")
+        or source_dict.get("targetLabel")
+        or source_dict.get("target_label")
+        or value.get("label")
+        or source_dict.get("label")
+        or text
+        or content_description,
+        160,
+    )
+    if target_label:
+        body["targetLabel"] = target_label
+    resource_id = _clip(
+        value.get("resourceId")
+        or value.get("resource_id")
+        or value.get("viewId")
+        or value.get("view_id")
+        or source_dict.get("resourceId")
+        or source_dict.get("resource_id")
+        or source_dict.get("viewId")
+        or source_dict.get("view_id"),
+        200,
+    )
     if resource_id:
         body["resourceId"] = resource_id
-    node_id = _clip(value.get("nodeId") or value.get("node_id") or value.get("id"), 100)
+    node_id = _clip(value.get("nodeId") or value.get("node_id") or value.get("id") or source_dict.get("nodeId") or source_dict.get("node_id") or source_dict.get("id"), 100)
     if node_id:
         body["nodeId"] = node_id
-    direction = _clip(value.get("direction"), 24)
+    direction = _clip(value.get("direction") or source_dict.get("direction"), 24)
     if direction:
         body["direction"] = direction
     for key in ("timeoutMs", "durationMs"):
-        if isinstance(value.get(key), int):
-            body[key] = value[key]
+        raw = value.get(key, source_dict.get(key))
+        if isinstance(raw, int):
+            body[key] = raw
     return body
 
 
@@ -2044,6 +2195,139 @@ def _redact_inline_image_payloads(text: str) -> str:
     return re.sub(r'"base64"\s*:\s*"[^"]+"', '"base64":"[image omitted]"', text, flags=re.I)
 
 
+def _phone_matrix_runtime_device_id(ctx, explicit_device_id: str = "") -> str:
+    if str(explicit_device_id or "").strip():
+        return _normalize_device_id(explicit_device_id)
+    selected = _selected_phone_matrix_device(ctx)
+    return _normalize_device_id(
+        selected.get("id")
+        or selected.get("deviceId")
+        or selected.get("name")
+        or "phone-1"
+    )
+
+
+def _append_phone_matrix_runtime_log(
+    ctx,
+    *,
+    kind: str,
+    layer: str,
+    stream: str,
+    line: str,
+    device_id: str = "",
+) -> None:
+    message = _clip(line, 320)
+    if not message:
+        return
+    try:
+        from core.phone_matrix import MatrixControlPlane
+
+        event_kind = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(kind or "phone.task")).strip(".-_") or "phone.task"
+        stream_name = "stderr" if stream == "stderr" else "stdout"
+        MatrixControlPlane(ctx.paths).append_runtime_event(
+            f"phone.events.{event_kind}.{stream_name}",
+            _phone_matrix_runtime_device_id(ctx, device_id),
+            message,
+            source=f"{event_kind}.{stream_name}",
+            details={
+                "executionLayer": _clip(layer, 40),
+                "stream": stream_name,
+            },
+        )
+    except Exception:
+        return
+
+
+def _run_phone_process_with_matrix_stream(
+    ctx,
+    command: list[str],
+    *,
+    kind: str,
+    layer: str,
+    timeout_sec: int,
+    device_id: str = "",
+    on_heartbeat=None,
+) -> dict:
+    process = subprocess.Popen(
+        command,
+        cwd=ctx.paths.base_path,
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    output_lock = threading.Lock()
+
+    def read_stream(stream_name: str, stream, parts: list[str]) -> None:
+        try:
+            for raw in stream:
+                with output_lock:
+                    parts.append(raw)
+                safe_line = _sanitize_cli_output(ctx, str(raw or "").rstrip("\r\n"), kind=kind)
+                if safe_line:
+                    _append_phone_matrix_runtime_log(
+                        ctx,
+                        kind=kind,
+                        layer=layer,
+                        stream=stream_name,
+                        line=safe_line,
+                        device_id=device_id,
+                    )
+        except Exception:
+            return
+
+    threads = [
+        threading.Thread(target=read_stream, args=("stdout", process.stdout, stdout_parts), daemon=True),
+        threading.Thread(target=read_stream, args=("stderr", process.stderr, stderr_parts), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    started_at = time.monotonic()
+    timed_out = False
+    while process.poll() is None:
+        elapsed = time.monotonic() - started_at
+        if callable(on_heartbeat):
+            try:
+                on_heartbeat(elapsed)
+            except Exception:
+                pass
+        if elapsed >= timeout_sec:
+            timed_out = True
+            process.kill()
+            break
+        time.sleep(0.1)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait(timeout=2)
+    for thread in threads:
+        thread.join(timeout=1)
+    for stream in (process.stdout, process.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:
+            pass
+    with output_lock:
+        stdout = "".join(stdout_parts)
+        stderr = "".join(stderr_parts)
+    return {
+        "returncode": int(process.returncode if process.returncode is not None else 1),
+        "stdout": stdout,
+        "stderr": stderr,
+        "timedOut": timed_out,
+    }
+
+
 def _submit_phone_job(
     ctx,
     *,
@@ -2089,47 +2373,6 @@ def _submit_phone_job(
     fallback_execution = dict(fallback_execution or {})
     fallback_timeout_sec = max(5, min(int(fallback_timeout_sec or timeout_sec), 1800))
 
-    def target(job_id: str) -> dict:
-        ctx.get_job_mgr().progress(job_id, "正在执行手机任务", "neutral", phase=kind, commandId=kind)
-        try:
-            completed = subprocess.run(
-                [node_exe, script_path, *args],
-                cwd=ctx.paths.base_path,
-                env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_sec,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except subprocess.TimeoutExpired as exc:
-            stdout = _sanitize_cli_output(ctx, exc.stdout if isinstance(exc.stdout, str) else "", kind=kind)
-            stderr = _sanitize_cli_output(ctx, exc.stderr if isinstance(exc.stderr, str) else "", kind=kind)
-            return {
-                "success": False,
-                "code": "timeout",
-                "error": "手机任务执行超时，请检查手机连接状态",
-                "stdout": stdout,
-                "stderr": stderr,
-            }
-        stdout = _sanitize_cli_output(ctx, completed.stdout or "", kind=kind)
-        stderr = _sanitize_cli_output(ctx, completed.stderr or "", kind=kind)
-        if completed.returncode != 0:
-            return _with_phone_execution({
-                "success": False,
-                "code": completed.returncode,
-                "error": _phone_cli_failure_message(stdout, stderr),
-                "stdout": stdout,
-                "stderr": stderr,
-            }, execution)
-        return _with_phone_execution({
-            "success": True,
-            "code": completed.returncode,
-            "stdout": stdout,
-            "stderr": stderr,
-        }, execution)
-
     def target_with_progress(job_id: str) -> dict:
         ctx.get_job_mgr().progress(
             job_id,
@@ -2165,25 +2408,17 @@ def _submit_phone_job(
                 execution=fallback_execution,
             )
             fallback_started_at = time.monotonic()
-            try:
-                fallback_process = subprocess.Popen(
-                    [node_exe, fallback_script_path, *fallback_args],
-                    cwd=ctx.paths.base_path,
-                    env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.DEVNULL,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                fallback_stdout_raw, fallback_stderr_raw = fallback_process.communicate(timeout=fallback_timeout_sec)
-            except subprocess.TimeoutExpired:
-                fallback_process.kill()
-                fallback_stdout_raw, fallback_stderr_raw = fallback_process.communicate(timeout=2)
-                stdout = _sanitize_cli_output(ctx, fallback_stdout_raw or "", kind=kind)
-                stderr = _sanitize_cli_output(ctx, fallback_stderr_raw or "", kind=kind)
+            fallback_completed = _run_phone_process_with_matrix_stream(
+                ctx,
+                [node_exe, fallback_script_path, *fallback_args],
+                kind=kind,
+                layer="agent",
+                timeout_sec=fallback_timeout_sec,
+                device_id=_phone_matrix_runtime_device_id(ctx),
+            )
+            if fallback_completed.get("timedOut"):
+                stdout = _sanitize_cli_output(ctx, fallback_completed.get("stdout") or "", kind=kind)
+                stderr = _sanitize_cli_output(ctx, fallback_completed.get("stderr") or "", kind=kind)
                 result = _phone_failure_result(
                     kind,
                     code="fallback_timeout",
@@ -2196,9 +2431,9 @@ def _submit_phone_job(
                 result["fallback"] = fallback_info
                 return result
 
-            fallback_returncode = int(fallback_process.returncode if fallback_process.returncode is not None else 1)
-            stdout = _sanitize_cli_output(ctx, fallback_stdout_raw or "", kind=kind)
-            stderr = _sanitize_cli_output(ctx, fallback_stderr_raw or "", kind=kind)
+            fallback_returncode = int(fallback_completed.get("returncode") if fallback_completed.get("returncode") is not None else 1)
+            stdout = _sanitize_cli_output(ctx, fallback_completed.get("stdout") or "", kind=kind)
+            stderr = _sanitize_cli_output(ctx, fallback_completed.get("stderr") or "", kind=kind)
             if fallback_returncode != 0:
                 result = _phone_failure_result(
                     kind,
@@ -2241,69 +2476,61 @@ def _submit_phone_job(
                 _phone_promote_metrics_fields(result_payload, metrics)
             return _with_phone_execution(result_payload, fallback_execution)
 
-        process = subprocess.Popen(
-            [node_exe, script_path, *args],
-            cwd=ctx.paths.base_path,
-            env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
         heartbeat = 0
-        while True:
-            try:
-                stdout_raw, stderr_raw = process.communicate(timeout=0.5)
-                break
-            except subprocess.TimeoutExpired:
-                elapsed = time.monotonic() - started_at
-                if elapsed >= timeout_sec:
-                    process.kill()
-                    stdout_raw, stderr_raw = process.communicate(timeout=2)
-                    stdout = _sanitize_cli_output(ctx, stdout_raw or "", kind=kind)
-                    stderr = _sanitize_cli_output(ctx, stderr_raw or "", kind=kind)
-                    result = {
-                        "success": False,
-                        "code": "timeout",
-                        "error": "手机任务执行超时，请检查手机连接状态",
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "executionLayer": layer,
-                        "execution": execution,
-                    }
-                    result = _phone_failure_result(
-                        kind,
-                        code="timeout",
-                        reason=str(result.get("error") or "phone task timed out"),
-                        stdout=stdout,
-                        stderr=stderr,
-                        execution=execution,
-                        started_at=started_at,
-                    )
-                    result = run_agent_fallback(result)
-                    _record_phone_task_evidence(ctx, kind, evidence_body, result, started_at)
-                    return result
-                next_heartbeat = int(elapsed)
-                if next_heartbeat > heartbeat:
-                    heartbeat = next_heartbeat
-                    ctx.get_job_mgr().progress(
-                        job_id,
-                        "手机任务执行中",
-                        "neutral",
-                        phase=f"{kind}.{layer}.running",
-                        commandId=kind,
-                        executionLayer=layer,
-                        currentStep="execute",
-                        elapsedMs=int(elapsed * 1000),
-                        stepTimeoutSec=step_timeout_sec,
-                        execution=execution,
-                    )
-        returncode = int(process.returncode if process.returncode is not None else 1)
-        stdout = _sanitize_cli_output(ctx, stdout_raw or "", kind=kind)
-        stderr = _sanitize_cli_output(ctx, stderr_raw or "", kind=kind)
+
+        def heartbeat_progress(elapsed: float) -> None:
+            nonlocal heartbeat
+            next_heartbeat = int(elapsed)
+            if next_heartbeat <= heartbeat:
+                return
+            heartbeat = next_heartbeat
+            ctx.get_job_mgr().progress(
+                job_id,
+                "手机任务执行中",
+                "neutral",
+                phase=f"{kind}.{layer}.running",
+                commandId=kind,
+                executionLayer=layer,
+                currentStep="execute",
+                elapsedMs=int(elapsed * 1000),
+                stepTimeoutSec=step_timeout_sec,
+                execution=execution,
+            )
+
+        completed = _run_phone_process_with_matrix_stream(
+            ctx,
+            [node_exe, script_path, *args],
+            kind=kind,
+            layer=layer,
+            timeout_sec=timeout_sec,
+            device_id=_phone_matrix_runtime_device_id(ctx),
+            on_heartbeat=heartbeat_progress,
+        )
+        stdout = _sanitize_cli_output(ctx, completed.get("stdout") or "", kind=kind)
+        stderr = _sanitize_cli_output(ctx, completed.get("stderr") or "", kind=kind)
+        if completed.get("timedOut"):
+            result = {
+                "success": False,
+                "code": "timeout",
+                "error": "手机任务执行超时，请检查手机连接状态",
+                "stdout": stdout,
+                "stderr": stderr,
+                "executionLayer": layer,
+                "execution": execution,
+            }
+            result = _phone_failure_result(
+                kind,
+                code="timeout",
+                reason=str(result.get("error") or "phone task timed out"),
+                stdout=stdout,
+                stderr=stderr,
+                execution=execution,
+                started_at=started_at,
+            )
+            result = run_agent_fallback(result)
+            _record_phone_task_evidence(ctx, kind, evidence_body, result, started_at)
+            return result
+        returncode = int(completed.get("returncode") if completed.get("returncode") is not None else 1)
         if returncode != 0:
             result = _phone_failure_result(
                 kind,
@@ -2933,7 +3160,14 @@ def register_phone_routes(app, ctx) -> None:
                 or body.get("performanceProfile")
                 or body.get("taskProfile")
             )
-            timeout_sec, max_wait_sec, max_rounds, poll_ms = _phone_task_tuning(mode, profile, body)
+            (
+                timeout_sec,
+                max_wait_sec,
+                max_rounds,
+                poll_ms,
+                explicit_max_wait,
+                _explicit_max_rounds,
+            ) = _phone_task_tuning(mode, profile, body)
             explicit_action_body = _phone_explicit_action_body(ctx, body)
             if mode == "observe" and explicit_action_body:
                 raise ValueError("observe 模式不允许执行 actionBody")
@@ -2961,6 +3195,7 @@ def register_phone_routes(app, ctx) -> None:
                 max_wait_sec,
                 max_rounds,
                 step_timeout_sec,
+                explicit_max_wait=explicit_max_wait,
             )
         except ValueError as exc:
             return ctx.fastapi_json({"error": str(exc)}, 400)

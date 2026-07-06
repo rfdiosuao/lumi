@@ -192,6 +192,15 @@ function Remove-OnlinePackageNoise {
         ForEach-Object {
             Remove-SafePath $_.FullName
         }
+
+    $openClawAgentsDir = Join-Path $PackageDir "$PrimaryPayloadDirName\data\.openclaw\agents"
+    if (Test-Path -LiteralPath $openClawAgentsDir -PathType Container) {
+        $agentFiles = @(Get-ChildItem -LiteralPath $openClawAgentsDir -Recurse -File -Force -ErrorAction SilentlyContinue)
+        if ($agentFiles.Count -gt 0) {
+            throw "Online package must not bundle agent payload files: $openClawAgentsDir"
+        }
+        Remove-SafePath $openClawAgentsDir
+    }
 }
 
 function Write-CachedDistributionManifest {

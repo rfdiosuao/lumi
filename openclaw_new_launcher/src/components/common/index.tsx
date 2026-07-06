@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
+import { APP_DISPLAY_NAME } from '../../version';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'danger' | 'success' | 'quiet' | 'default';
@@ -285,7 +286,7 @@ export const BusyOverlay: React.FC<{
 }> = ({
   active,
   title = '正在处理',
-  detail = '请稍候，LOOM 正在完成当前操作。',
+  detail = `请稍候，${APP_DISPLAY_NAME} 正在完成当前操作。`,
   mode = 'blocking',
 }) => {
   if (!active) return null;

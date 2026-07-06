@@ -16,6 +16,7 @@ import {
   type PhoneTaskProfile,
 } from '../../services/api';
 import { BusyOverlay, Button, Input, TextArea, showConfirm, showToast } from '../common';
+import { APP_DISPLAY_NAME } from '../../version';
 
 type CliResult = {
   success?: boolean;
@@ -873,7 +874,7 @@ export const PhoneDemoPage: React.FC = () => {
       <BusyOverlay
         active={Boolean(busy)}
         title={busyOverlayTitle}
-        detail={phoneExecutionStage || 'LOOM 正在等待手机返回结果。'}
+        detail={phoneExecutionStage || `${APP_DISPLAY_NAME} 正在等待手机返回结果。`}
       />
       {phoneAppModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#071916]/70 p-6 backdrop-blur-sm">
@@ -886,7 +887,7 @@ export const PhoneDemoPage: React.FC = () => {
             <div className="flex items-start justify-between gap-5 border-b border-[#0b4a3e]/12 px-7 py-6">
               <div>
                 <h2 id="phone-app-download-title" className="text-2xl font-black text-[#071916]">下载手机端 App</h2>
-                <p className="mt-2 text-sm font-bold text-[#58645f]">手机扫码安装手机端 App 后，再回到麓鸣保存 IP 和令牌。</p>
+                <p className="mt-2 text-sm font-bold text-[#58645f]">手机扫码安装手机端 App 后，再回到{APP_DISPLAY_NAME}保存 IP 和令牌。</p>
               </div>
               <button
                 type="button"
@@ -919,7 +920,7 @@ export const PhoneDemoPage: React.FC = () => {
                   <ol className="mt-3 space-y-2 text-sm leading-6 text-[#43524c]">
                     <li>1. 手机扫码或复制链接，在手机浏览器下载手机端 App。</li>
                     <li>2. 安装后打开手机端 App，按提示开启无障碍和悬浮窗权限。</li>
-                    <li>3. 回到麓鸣填写手机 IP 与连接令牌，再点保存并检测。</li>
+                    <li>3. 回到{APP_DISPLAY_NAME}填写手机 IP 与连接令牌，再点保存并检测。</li>
                   </ol>
                 </div>
               </div>

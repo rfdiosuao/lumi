@@ -14,12 +14,12 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict
 
 from core.paths import AppPaths
 
 
-Json = dict[str, Any]
+Json = Dict[str, Any]
 DEFAULT_PHONE_MODEL = "qwen3.7-plus"
 
 SENSITIVE_KEYS = {
@@ -280,6 +280,33 @@ class MatrixControlPlane:
         if campaign_id:
             events = [event for event in events if event.get("campaignId") == campaign_id]
         return {"schema": "loom.matrix.events.v1", "events": _redact_json(events[-max(1, min(limit, 500)):])}
+
+    def append_runtime_event(
+        self,
+        event_type: str,
+        device_id: str,
+        message: str,
+        *,
+        source: str = "runtime",
+        details: Json | None = None,
+    ) -> Json:
+        safe_type = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(event_type or "runtime").strip()).strip(".-_")[:80] or "runtime"
+        event = {
+            "schema": "loom.matrix.event.v1",
+            "eventId": f"evt_{uuid.uuid4().hex[:12]}",
+            "timestamp": _now_iso(),
+            "type": safe_type,
+            "campaignId": "",
+            "missionId": "",
+            "deviceTaskId": "",
+            "deviceId": _device_id(device_id) if str(device_id or "").strip() else "",
+            "source": _clip(source, 80) or "runtime",
+            "message": _clip(message, 320),
+        }
+        if isinstance(details, dict) and details:
+            event["details"] = _redact_json(details)
+        self._append_jsonl(self.events_path, event)
+        return _redact_json(event)
 
     def append_task_event(self, event_type: str, device_task_id: str, message: str) -> Json:
         found = self._find_device_task(device_task_id)

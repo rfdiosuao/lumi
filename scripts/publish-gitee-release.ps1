@@ -5,17 +5,51 @@ param(
     [string]$Name = "",
     [string]$Body = "",
     [string[]]$Assets = @(),
-    [string]$Token = $env:GITEE_ACCESS_TOKEN
+    [string]$Token = $env:GITEE_ACCESS_TOKEN,
+    [string]$TokenFile = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-DefaultGiteeTokenFile {
+    $appData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+    if ([string]::IsNullOrWhiteSpace($appData)) {
+        $appData = $env:APPDATA
+    }
+    if ([string]::IsNullOrWhiteSpace($appData)) {
+        return ""
+    }
+    return Join-Path $appData "LOOM\secrets\gitee-token.dpapi"
+}
+
+function Read-GiteeTokenFromFile {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return ""
+    }
+    $encrypted = (Get-Content -LiteralPath $Path -Raw -Encoding ASCII).Trim()
+    if ([string]::IsNullOrWhiteSpace($encrypted)) {
+        return ""
+    }
+    $secure = ConvertTo-SecureString -String $encrypted
+    $credential = [System.Net.NetworkCredential]::new("", $secure)
+    return $credential.Password
+}
 
 if ([string]::IsNullOrWhiteSpace($Token)) {
     $Token = $env:GITEE_TOKEN
 }
 
 if ([string]::IsNullOrWhiteSpace($Token)) {
-    throw "Missing Gitee token. Set GITEE_ACCESS_TOKEN or GITEE_TOKEN first."
+    if ([string]::IsNullOrWhiteSpace($TokenFile)) {
+        $TokenFile = Get-DefaultGiteeTokenFile
+    }
+    $Token = Read-GiteeTokenFromFile -Path $TokenFile
+}
+
+if ([string]::IsNullOrWhiteSpace($Token)) {
+    throw "Missing Gitee token. Set GITEE_ACCESS_TOKEN/GITEE_TOKEN or run scripts\set-gitee-token.ps1 first."
 }
 
 if ([string]::IsNullOrWhiteSpace($TagName)) {
@@ -68,7 +102,59 @@ function Get-ReleaseByTag {
         }
         return $result
     } catch {
+    }
+    try {
+        $items = @(Invoke-GiteeApi -Method "GET" -Path "/repos/$Owner/$Repo/releases?page=1&per_page=100")
+        return $items | Where-Object { $_.tag_name -eq $Tag } | Select-Object -First 1
+    } catch {
         return $null
+    }
+}
+
+function Invoke-GiteeFormPost {
+    param(
+        [string]$Url,
+        [hashtable]$Fields
+    )
+
+    $responsePath = Join-Path $env:TEMP ("gitee-api-" + [guid]::NewGuid().ToString("N") + ".json")
+    $curlArgs = @(
+        "-sS",
+        "-o", $responsePath,
+        "-w", "%{http_code}",
+        "-X", "POST"
+    )
+    foreach ($key in $Fields.Keys) {
+        $curlArgs += "-F"
+        $curlArgs += "$key=$($Fields[$key])"
+    }
+    $curlArgs += $Url
+
+    try {
+        $status = & curl.exe @curlArgs
+        $content = if (Test-Path -LiteralPath $responsePath) {
+            Get-Content -LiteralPath $responsePath -Raw -Encoding UTF8
+        } else {
+            ""
+        }
+        if ($LASTEXITCODE -ne 0 -or $status -notmatch "^2") {
+            throw "Gitee form POST failed with HTTP ${status}: $($content.Substring(0, [Math]::Min(300, $content.Length)))"
+        }
+        return $content | ConvertFrom-Json
+    } finally {
+        if (Test-Path -LiteralPath $responsePath) {
+            Remove-Item -LiteralPath $responsePath -Force
+        }
+    }
+}
+
+function New-GiteeRelease {
+    return Invoke-GiteeApi -Method "POST" -Path "/repos/$Owner/$Repo/releases" -Body @{
+        tag_name = $TagName
+        name = $Name
+        body = $Body
+        target_commitish = "master"
+        prerelease = "false"
     }
 }
 
@@ -123,13 +209,7 @@ if ($release) {
     Write-Host "Using existing Gitee release: $TagName"
 } else {
     Write-Host "Creating Gitee release: $TagName"
-    $release = Invoke-GiteeApi -Method "POST" -Path "/repos/$Owner/$Repo/releases" -Body @{
-        tag_name = $TagName
-        name = $Name
-        body = $Body
-        target_commitish = "master"
-        prerelease = "false"
-    }
+    $release = New-GiteeRelease
 }
 
 foreach ($asset in $Assets) {

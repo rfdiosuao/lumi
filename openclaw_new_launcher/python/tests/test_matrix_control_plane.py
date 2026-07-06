@@ -24,7 +24,7 @@ class MatrixControlPlaneTests(unittest.TestCase):
         self.assertIn("PHONE_AGENT_QR_SRC", source)
         self.assertIn("data-matrix-phone-app-download", source)
         self.assertIn("phone-agent-apk-qr.svg", source)
-        self.assertIn("下载手机端 App", source)
+        self.assertIn("手机端 App", source)
 
     def test_matrix_workbench_uses_event_source_for_live_updates(self) -> None:
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -53,7 +53,57 @@ class MatrixControlPlaneTests(unittest.TestCase):
         self.assertIn("profileLabel(item)", source)
         for label in ["只读", "受控", "完整控制", "快速", "标准", "深度"]:
             self.assertIn(label, source)
-        self.assertIn("max-w-[1180px]", source)
+        self.assertIn("max-w-[1060px]", source)
+
+    def test_matrix_workbench_has_recording_optimized_live_feed(self) -> None:
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        page_path = os.path.join(repo_root, "src", "components", "matrix", "MatrixWorkbenchPage.tsx")
+        css_path = os.path.join(repo_root, "src", "styles", "index.css")
+        with open(page_path, "r", encoding="utf-8") as handle:
+            source = handle.read()
+        with open(css_path, "r", encoding="utf-8") as handle:
+            css = handle.read()
+
+        self.assertIn("MATRIX_STUDIO_EVENT_LIMIT", source)
+        self.assertIn('data-matrix-studio-mode="recording"', source)
+        self.assertIn("compactMatrixLogText", source)
+        self.assertIn("derivedDeviceEvents", source)
+        self.assertIn("matrix-live-feed-row", source)
+        self.assertNotIn("min-h-[680px]", source)
+        self.assertNotIn("max-w-[1180px]", source)
+        self.assertIn("@keyframes matrix-feed-enter", css)
+        self.assertIn(".matrix-live-feed-row", css)
+
+    def test_phone_runtime_events_are_written_to_matrix_ledger(self) -> None:
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        routes_path = os.path.join(repo_root, "python", "api", "routes_phone.py")
+        with open(routes_path, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("append_runtime_event", source)
+        self.assertIn("phone.events.", source)
+
+    def test_runtime_event_ledger_entry_is_redacted_and_watchable(self) -> None:
+        from core.paths import AppPaths
+        from core.phone_matrix import MatrixControlPlane
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            matrix = MatrixControlPlane(AppPaths(base_path=temp_dir))
+            event = matrix.append_runtime_event(
+                "phone.snapshot",
+                "phone-a",
+                "observed https://example.com/path/to/raw/job?id=123 with Bearer secret-token",
+                source="phone.events.snapshot",
+                details={"token": "secret-token", "durationMs": 42},
+            )
+            events = matrix.watch()["events"]
+
+        serialized = json.dumps({"event": event, "events": events}, ensure_ascii=False)
+        self.assertEqual(events[-1]["type"], "phone.snapshot")
+        self.assertEqual(events[-1]["deviceId"], "phone-a")
+        self.assertEqual(events[-1]["source"], "phone.events.snapshot")
+        self.assertEqual(events[-1]["details"]["durationMs"], 42)
+        self.assertNotIn("secret-token", serialized)
 
     def test_device_registry_redacts_tokens_and_tracks_runtime_fields(self) -> None:
         from core.paths import AppPaths

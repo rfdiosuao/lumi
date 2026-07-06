@@ -139,7 +139,6 @@ $forbiddenPatterns = @(
     "(?i)(^|/)LOOMFiles/agents/sightflow-desktop(/|$)",
     "(?i)(^|/)LOOMFiles/agents/sightflow-desktop-agent(/|$)",
     "(?i)(^|/)LOOMFiles/scripts/bot-plugin-helper\.mjs$",
-    "(?i)(^|/)LOOMFiles/scripts/openclaw-publish-(phone|relay|relay-check|relay-smoke)\.mjs$",
     "(?i)(^|/)LOOMFiles/scripts/package-mac-(complete|online)\.mjs$",
     "(?i)(^|/)LOOMFiles/_up_/python-runtime/(Doc|Lib/test)(/|$)",
     "(?i)(^|/)__pycache__(/|$)",

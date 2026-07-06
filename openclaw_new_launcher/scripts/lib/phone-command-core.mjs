@@ -609,6 +609,7 @@ function fixedFastPathResult(config, plan, payload, wallMs) {
     mode: metrics.mode,
     currentStep,
     events: data?.events,
+    ...fastPathPublicFields(data),
     queue: { queueMs: 0, queueDepth: 0, cancelRequested: false },
     stalePossible,
     freshness: {
@@ -619,6 +620,14 @@ function fixedFastPathResult(config, plan, payload, wallMs) {
     data,
     error: final.error || undefined,
   };
+}
+
+function fastPathPublicFields(data) {
+  const fields = {};
+  for (const key of ['action', 'screenHash', 'summary', 'currentPackage', 'beforeHash', 'afterHash', 'changed', 'actionMs', 'verifyMs']) {
+    if (data?.[key] !== undefined) fields[key] = data[key];
+  }
+  return fields;
 }
 
 function fixedFastPathError(config, plan, error, wallMs) {

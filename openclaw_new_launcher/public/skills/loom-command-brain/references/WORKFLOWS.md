@@ -2,38 +2,39 @@
 
 ## Common CLI Prefix
 
-python -B "<LOOM_HOME>/python/loom_cli.py"
+python -B "<LOOM_CLI>"
 
 Always add --json. Use --dry-run before unfamiliar control/admin commands.
 
-For bundled phone helpers, run from the LOOM package root:
+For bundled phone helpers, run from doctor.data.paths.npmRoot:
 
-cd "<LOOM_HOME>"
+cd "<doctor.data.paths.npmRoot>"
 
 Always add --json. Prefer saved launcher phone config; use --phone-url / --phone-token only for explicit debugging and never print raw tokens.
 
 ## Phone Helper Catalog
 
-- Agent runtime: npm run phone:agent -- run/submit/status/cancel/metrics/events-sync --json
-- Vision: npm run phone:vision -- status/frame/read/action --json
+- Agent runtime: npm run phone:agent -- run/submit/status/events/cancel/metrics/events-sync --json
+- Vision: npm run phone:vision -- status/frame/read/action --json; when observe_fast returns a selector ref, prefer actionBody {"action":"click_ref","ref":"...","targetLabel":"..."} through action_fast
 - Recording: npm run phone:video -- status/start/stop/list/download --json
 - Image transfer/generation: npm run phone:image -- --prompt "..." --json or npm run phone:image -- --image ./file.png --json
 - Image editing: npm run phone:image:edit -- --reference-image ./input.png --prompt "..." --json
 - Multi-device helper: npm run phone:fleet -- list/status/run --json
 - Game/canvas fallback: npm run phone:game -- run --goal "..." --json
-- Publishing helper: npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --json
+- Publishing helper: npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --max-rounds 80 --json
 - Publish relay: npm run phone:relay -- ..., npm run phone:relay:check -- ..., npm run phone:relay:smoke -- ...
 - Demos: npm run phone:demo:shopping -- --query "..." --json; npm run phone:demo:read -- --json; npm run phone:demo:game -- --goal "..." --json
 - LOOM aliases: npm run loom:phone -- ...; npm run loom:phone:vision -- ...; npm run loom:phone:video -- ...; npm run loom:phone:fleet -- ...; npm run loom:phone:publish -- ...
 
 ## Matrix Dispatch Recipe
 
-1. commands --json
-2. matrix status --json
-3. matrix dispatch --prompt "<task>" --device "<deviceId>" --json --permission control
-4. matrix watch --campaign "<campaignId>" --json
-5. logs ledger --limit 20 --json
-6. experience report --json
+1. doctor --json
+2. commands --json
+3. matrix status --json
+4. matrix dispatch --prompt "<task>" --device "<deviceId>" --json --permission control
+5. matrix watch --campaign "<campaignId>" --json
+6. logs ledger --limit 20 --json
+7. experience report --json
 
 If an action involves publishing, private messaging, comments, batch reach-out, or account-affecting work, require user confirmation before dispatch.
 
@@ -74,7 +75,7 @@ Use media helpers before publishing so APKClaw receives files through the signed
 
 1. Generate/upload image: npm run phone:image -- --prompt "..." --json or npm run phone:image -- --image ./file.png --json
 2. Edit/upload image: npm run phone:image:edit -- --reference-image ./input.png --prompt "..." --json
-3. Publish direct: npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --image ./a.png --json
+3. Publish direct: npm run phone:publish -- --platform xiaohongshu --title "..." --body "..." --image ./a.png --max-rounds 80 --json
 4. Publish reverse packet: npm run phone:publish -- --transport reverse --platform douyin --packet-out ./publish-packet.json --json
 5. Publishing, comments, private messages, batch reach-out, account changes, and paid actions require explicit user confirmation.
 

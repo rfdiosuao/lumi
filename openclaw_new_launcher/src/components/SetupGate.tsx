@@ -1,5 +1,7 @@
 ﻿import React from 'react';
 
+import { APP_DISPLAY_NAME } from '../version';
+
 // First-run download overlay. Listens for the `dist://*` events the Rust
 // bootstrap emits while it downloads + verifies the runtime layers. Renders
 // nothing unless a download is actually happening (fresh online install), so
@@ -89,7 +91,7 @@ export function SetupGate() {
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {!done && !error ? <span className="loom-activity-ring" style={{ color: '#0B4A3E' }} /> : null}
-          <div style={{ fontSize: 17, fontWeight: 900 }}>{done ? '组件已就绪' : error ? '组件安装受阻' : '正在准备 LOOM'}</div>
+          <div style={{ fontSize: 17, fontWeight: 900 }}>{done ? '组件已就绪' : error ? '组件安装受阻' : `正在准备 ${APP_DISPLAY_NAME}`}</div>
         </div>
         <div style={{ marginTop: 6, fontSize: 13, color: '#6b6357' }}>
           首次启动需要补齐运行组件，完成后会自动进入启动器。
@@ -100,7 +102,7 @@ export function SetupGate() {
             <br />请检查网络后重启启动器，或改用全量离线包。
           </div>
         ) : done ? (
-          <div style={{ marginTop: 18, fontSize: 14, color: '#0B8C6E', fontWeight: 800 }}>正在进入 LOOM...</div>
+          <div style={{ marginTop: 18, fontSize: 14, color: '#0B8C6E', fontWeight: 800 }}>正在进入 {APP_DISPLAY_NAME}...</div>
         ) : prog ? (
           <>
             <div style={{ marginTop: 18, fontSize: 13, fontWeight: 700 }}>

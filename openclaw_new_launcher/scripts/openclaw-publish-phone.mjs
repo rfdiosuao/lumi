@@ -15,6 +15,7 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_TIMEOUT_SEC = 600;
 const DEFAULT_MAX_WAIT_SEC = DEFAULT_TIMEOUT_SEC + 15;
+const DEFAULT_MAX_ROUNDS = 60;
 const DEFAULT_POLL_MS = 1800;
 const DEFAULT_RELAY_WAIT_SEC = 300;
 const DEFAULT_RELAY_POLL_MS = 2000;
@@ -81,6 +82,7 @@ Options:
   --packet-out <path>                             Write reverse packet to file
   --timeout-sec <n>                               APKClaw-side timeout. Default: 600
   --max-wait-sec <n>                              CLI wait window for direct mode. Default: 615
+  --max-rounds <n>                                APKClaw Agent round budget. Default: ${DEFAULT_MAX_ROUNDS}
   --poll-ms <n>                                   Poll interval. Default: 1800
   --json                                          Print machine-readable JSON
   -h, --help                                      Show help
@@ -111,6 +113,7 @@ function parseArgs(argv) {
     packetOut: '',
     timeoutSec: DEFAULT_TIMEOUT_SEC,
     maxWaitSec: DEFAULT_MAX_WAIT_SEC,
+    maxRounds: DEFAULT_MAX_ROUNDS,
     pollMs: DEFAULT_POLL_MS,
     json: false,
     help: false,
@@ -202,6 +205,9 @@ function parseArgs(argv) {
       case '--max-wait-sec':
         args.maxWaitSec = nextInt();
         break;
+      case '--max-rounds':
+        args.maxRounds = nextInt();
+        break;
       case '--poll-ms':
         args.pollMs = nextInt();
         break;
@@ -225,6 +231,7 @@ function parseArgs(argv) {
   args.transport = args.transport === 'reverse' ? 'reverse' : 'direct';
   args.timeoutSec = Math.max(30, args.timeoutSec);
   args.maxWaitSec = Math.max(30, args.maxWaitSec);
+  args.maxRounds = Math.max(1, Math.min(120, args.maxRounds));
   args.pollMs = Math.max(500, args.pollMs);
   args.relayWaitSec = Math.max(5, args.relayWaitSec);
   args.relayPollMs = Math.max(500, args.relayPollMs);
@@ -400,7 +407,7 @@ function taskBody(config, prompt) {
     tool_policy: 'safe_action',
     template_params: {},
     timeout_sec: config.timeoutSec,
-    max_rounds: 60,
+    max_rounds: config.maxRounds,
   };
 }
 

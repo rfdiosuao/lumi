@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -41,7 +42,99 @@ class LoomCliContractTests(unittest.TestCase):
         self.assertIn("account", domains)
         self.assertIn("media", domains)
         self.assertIn("matrix", domains)
+        self.assertIn("doctor", domains)
+        command_names = [command["name"] for domain in catalog["domains"] for command in domain["commands"]]
+        self.assertEqual(len(command_names), len(set(command_names)))
+        self.assertEqual(catalog["commandCount"], len(command_names))
         self.assertIn("--dry-run", json.dumps(catalog, ensure_ascii=False))
+
+    def test_commands_catalog_exposes_runtime_paths_for_packaged_layouts(self) -> None:
+        from loom_cli import dispatch
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.makedirs(os.path.join(temp_dir, "LOOMFiles", "scripts"), exist_ok=True)
+            os.makedirs(os.path.join(temp_dir, "_up_", "python"), exist_ok=True)
+            for rel, text in (
+                (os.path.join("LOOMFiles", "package.json"), '{"scripts":{"phone:publish":"node scripts/openclaw-publish-phone.mjs"}}'),
+                (os.path.join("LOOMFiles", "scripts", "openclaw-publish-phone.mjs"), "// publish"),
+            ):
+                with open(os.path.join(temp_dir, rel), "w", encoding="utf-8") as handle:
+                    handle.write(text)
+
+            code, payload = dispatch(["commands", "--json"], base_path=temp_dir)
+
+        self.assertEqual(code, 0)
+        runtime = payload["data"]["runtime"]
+        self.assertEqual(runtime["schema"], "loom.runtime_paths.v1")
+        self.assertTrue(runtime["npmRoot"].endswith("LOOMFiles"))
+        self.assertTrue(runtime["scriptsRoot"].endswith(os.path.join("LOOMFiles", "scripts")))
+        self.assertTrue(runtime["helpers"]["phone:publish"]["exists"])
+
+    def test_doctor_reports_paths_python_and_script_health_without_guessing(self) -> None:
+        from loom_cli import dispatch
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.makedirs(os.path.join(temp_dir, "LOOMFiles", "scripts"), exist_ok=True)
+            os.makedirs(os.path.join(temp_dir, "_up_", "scripts"), exist_ok=True)
+            os.makedirs(os.path.join(temp_dir, "LOOMFiles", "_up_", "python-runtime"), exist_ok=True)
+            with open(os.path.join(temp_dir, "LOOMFiles", "package.json"), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "scripts": {
+                        "phone:publish": "node scripts/openclaw-publish-phone.mjs",
+                        "phone:video": "node scripts/openclaw-phone-video.mjs",
+                    }
+                }, handle)
+            with open(os.path.join(temp_dir, "LOOMFiles", "scripts", "openclaw-publish-phone.mjs"), "w", encoding="utf-8") as handle:
+                handle.write("// publish")
+            with open(os.path.join(temp_dir, "_up_", "scripts", "openclaw-phone-video.mjs"), "w", encoding="utf-8") as handle:
+                handle.write("// video fallback")
+
+            code, payload = dispatch(["doctor", "--json"], base_path=temp_dir)
+
+        self.assertEqual(code, 0)
+        data = payload["data"]
+        self.assertEqual(data["schema"], "loom.doctor.v1")
+        self.assertTrue(data["paths"]["npmRoot"].endswith("LOOMFiles"))
+        self.assertTrue(data["scripts"]["phone:publish"]["exists"])
+        self.assertFalse(data["scripts"]["phone:video"]["exists"])
+        self.assertTrue(data["scripts"]["phone:video"]["fallbackExists"])
+        self.assertIn(os.path.join("_up_", "scripts", "openclaw-phone-video.mjs"), data["scripts"]["phone:video"]["fallbackPath"])
+        self.assertEqual(data["issues"][0]["helper"], "phone:video")
+        self.assertIn("executable", data["python"])
+        self.assertFalse(data["python"]["bundledRuntimeExists"])
+        self.assertIn("bridgeConfigured", data["phone"])
+
+    def test_doctor_redacts_secret_like_bridge_url_parts(self) -> None:
+        from loom_cli import dispatch
+
+        code, payload = dispatch([
+            "doctor",
+            "--json",
+            "--bridge-url",
+            "http://user:secret-password@127.0.0.1:18888?token=secret-token&api_key=secret-key&plain=ok",
+        ])
+
+        serialized = json.dumps(payload, ensure_ascii=False)
+        self.assertEqual(code, 0)
+        self.assertNotIn("secret-token", serialized)
+        self.assertNotIn("secret-key", serialized)
+        self.assertNotIn("secret-password", serialized)
+        self.assertIn("plain=ok", payload["data"]["phone"]["bridgeUrl"])
+
+    def test_python_runtime_aliases_are_compatible_with_python_38(self) -> None:
+        runtime_files = [
+            os.path.join(PYTHON_DIR, "loom_cli.py"),
+            os.path.join(PYTHON_DIR, "loom_mcp.py"),
+            os.path.join(PYTHON_DIR, "core", "phone_matrix.py"),
+            os.path.join(PYTHON_DIR, "core", "reliability.py"),
+        ]
+
+        for path in runtime_files:
+            with self.subTest(path=path):
+                with open(path, "r", encoding="utf-8") as handle:
+                    source = handle.read()
+                ast.parse(source, filename=path, feature_version=(3, 8))
+                self.assertNotRegex(source, r"^\s*\w+\s*=\s*(dict|list|tuple|set)\[", path)
 
     def test_commands_catalog_teaches_codex_command_brain_workflow(self) -> None:
         from loom_cli import dispatch

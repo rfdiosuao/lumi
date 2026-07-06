@@ -51,8 +51,10 @@ OpenClaw phone Agent CLI
 Usage:
   npm run phone:agent -- run --prompt "读取当前手机屏幕并返回摘要"
   npm run phone:agent -- status --task-id <id>
+  npm run phone:agent -- events --task-id <id>
   npm run phone:agent -- cancel --task-id <id>
   npm run phone:agent -- metrics --json
+  npm run phone:agent -- wechat-reply --reply "你好，我稍后回复你" --json
   npm run phone:agent -- history --limit 20
 
 Commands:
@@ -60,9 +62,11 @@ Commands:
   run                         Submit one bounded async APKClaw Agent task and wait for the result
   submit                      Submit an async APKClaw Agent task and print the task id
   status                      Read one async task status
+  events                      Read lightweight events for one async task
   cancel                      Cancel one async task
   metrics                     Read APKClaw phone runtime speed/queue metrics
   events-sync                 Keep a signed SSE connection to APKClaw and print phone events
+  wechat-reply                Draft or send a reply in the current WeChat chat screen
   history                     Print recent launcher-side phone Agent task history
 
 Run options:
@@ -80,6 +84,11 @@ Run options:
   --daemon <auto|off|require>   Default: auto. Reuse local phone-agent daemon when possible.
   --step-timeout-sec <n>        Small timeout for each submit/status HTTP step. Default: 12
   --limit <n>                  History rows to print. Default: 20
+  --reply <text>               Reply text for wechat-reply
+  --contact <name>             Optional contact override for whitelist matching
+  --whitelist <a,b>            Contacts allowed for --auto-send
+  --auto-send                  Actually tap WeChat Send after drafting; requires whitelist
+  --allow-group-chat           Allow group chat auto-send when the group is whitelisted
   --json                       Print machine-readable JSON
 
 Debug-only options:
@@ -109,6 +118,11 @@ function parseArgs(argv) {
     deviceId: '',
     phoneUrl: '',
     phoneToken: '',
+    replyText: '',
+    contact: '',
+    whitelist: [],
+    autoSend: false,
+    allowGroupChat: false,
     json: false,
     help: false,
   };
@@ -185,6 +199,23 @@ function parseArgs(argv) {
       case '--phone-token':
         args.phoneToken = next();
         break;
+      case '--reply':
+      case '--reply-text':
+        args.replyText = next();
+        break;
+      case '--contact':
+        args.contact = next();
+        break;
+      case '--whitelist':
+      case '--allow-contacts':
+        args.whitelist = splitList(next());
+        break;
+      case '--auto-send':
+        args.autoSend = true;
+        break;
+      case '--allow-group-chat':
+        args.allowGroupChat = true;
+        break;
       case '--json':
         args.json = true;
         break;
@@ -220,6 +251,13 @@ function normalizedDaemonMode(value) {
   if (!mode || mode === '1' || mode === 'true' || mode === 'on') return 'auto';
   if (mode === '0' || mode === 'false' || mode === 'disabled') return 'off';
   return mode;
+}
+
+function splitList(value) {
+  return String(value || '')
+    .split(/[,;\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 async function resolveConfig(args) {
@@ -669,11 +707,20 @@ function fixedFastPathResult(config, plan, payload, wallMs) {
     mode: metrics.mode,
     currentStep,
     events: data?.events,
+    ...fastPathPublicFields(data),
     queue: { queueMs: 0, queueDepth: 0, cancelRequested: false },
     payload,
     data,
     error: final.error || undefined,
   };
+}
+
+function fastPathPublicFields(data) {
+  const fields = {};
+  for (const key of ['action', 'screenHash', 'summary', 'currentPackage', 'beforeHash', 'afterHash', 'changed', 'actionMs', 'verifyMs']) {
+    if (data?.[key] !== undefined) fields[key] = data[key];
+  }
+  return fields;
 }
 
 function fixedFastPathError(config, plan, error, wallMs) {
@@ -728,12 +775,45 @@ async function getTask(config, taskId) {
   return signedJsonRequest(config, 'GET', `/api/lumi/agent/tasks/${encodeURIComponent(taskId)}`, undefined, config.stepTimeoutSec * 1000);
 }
 
+async function getTaskEvents(config, taskId) {
+  return signedJsonRequest(config, 'GET', `/api/lumi/agent/tasks/${encodeURIComponent(taskId)}/events`, undefined, config.stepTimeoutSec * 1000);
+}
+
 async function cancelTask(config, taskId) {
   return signedJsonRequest(config, 'POST', `/api/lumi/agent/tasks/${encodeURIComponent(taskId)}/cancel`, {}, config.stepTimeoutSec * 1000);
 }
 
 async function getMetrics(config) {
   return signedJsonRequest(config, 'GET', '/api/lumi/metrics', undefined, config.stepTimeoutSec * 1000);
+}
+
+async function runWeChatReply(config) {
+  if (!config.replyText.trim()) throw new Error('Missing --reply');
+  const payload = await signedJsonRequest(config, 'POST', '/api/lumi/wechat/auto_reply', {
+    replyText: config.replyText,
+    contact: config.contact || undefined,
+    autoSend: Boolean(config.autoSend),
+    whitelist: config.whitelist,
+    allowGroupChat: Boolean(config.allowGroupChat),
+  }, config.stepTimeoutSec * 1000);
+  const data = payload?.data || payload || {};
+  const ok = payload?.success !== false && data?.success !== false;
+  return {
+    ok,
+    mode: data.mode || 'wechat_auto_reply',
+    currentStep: data.currentStep || (ok ? 'success' : 'error'),
+    contact: data.contact || '',
+    latestMessage: data.latestMessage || '',
+    replyText: data.replyText || config.replyText,
+    autoSend: Boolean(data.autoSend ?? config.autoSend),
+    drafted: Boolean(data.drafted),
+    sent: Boolean(data.sent),
+    shouldSend: Boolean(data.shouldSend),
+    errorCode: data.errorCode || payload?.errorCode || '',
+    message: data.message || payload?.error || '',
+    data,
+    payload,
+  };
 }
 
 async function waitForTask(config, taskId) {
@@ -1017,6 +1097,22 @@ async function main() {
     return;
   }
 
+  if (config.command === 'wechat-reply' || config.command === 'wechat_reply') {
+    const result = await runWeChatReply(config);
+    await appendHistory({
+      command: 'wechat-reply',
+      status: result.ok ? 'success' : 'error',
+      submittedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      mode: result.mode,
+      summary: result.currentStep,
+      error: result.message || result.errorCode || '',
+      device: publicDevice(config),
+    });
+    print(config, result, result.ok ? `wechat ${result.currentStep}` : (result.message || result.errorCode || 'wechat_reply_failed'));
+    return;
+  }
+
   if (config.command === 'submit') {
     if (!config.prompt.trim()) throw new Error('Missing --prompt');
     const submitted = await submitTask(config);
@@ -1086,6 +1182,13 @@ async function main() {
   if (config.command === 'status') {
     if (!config.taskId.trim()) throw new Error('Missing --task-id');
     const payload = await getTask(config, config.taskId);
+    print(config, payload, summarizeTask(payload?.data || payload));
+    return;
+  }
+
+  if (config.command === 'events' || config.command === 'task-events' || config.command === 'task_events') {
+    if (!config.taskId.trim()) throw new Error('Missing --task-id');
+    const payload = await getTaskEvents(config, config.taskId);
     print(config, payload, summarizeTask(payload?.data || payload));
     return;
   }

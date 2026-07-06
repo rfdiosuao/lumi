@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { APP_DISPLAY_NAME } from '../version';
 
 let bridgeStartup: Promise<void> | null = null;
 let bridgeHttpBase = '';
@@ -37,10 +38,10 @@ export function parseErrorText(value: unknown): string {
 
 function friendlyErrorText(text: string): string {
   if (/cannot read properties of undefined \(reading 'invoke'\)/i.test(text) || /__tauri(_internals)?__/i.test(text)) {
-    return '当前不在 LOOM 桌面运行环境中，无法连接本地 Bridge。请使用桌面应用运行，或打开诊断查看 Bridge 状态。';
+    return `当前不在 ${APP_DISPLAY_NAME} 桌面运行环境中，无法连接本地 Bridge。请使用桌面应用运行，或打开诊断查看 Bridge 状态。`;
   }
   if (/ipc.*not.*available/i.test(text) || /tauri.*not.*available/i.test(text)) {
-    return '桌面通信通道不可用，请使用 LOOM 桌面应用运行。';
+    return `桌面通信通道不可用，请使用 ${APP_DISPLAY_NAME} 桌面应用运行。`;
   }
   if (/username or password is incorrect/i.test(text)) {
     return '用户名、邮箱或密码错误，或账号已被禁用';

@@ -14,6 +14,7 @@ import { loadCachedPreflight, preflightCacheUsable, saveCachedPreflight } from '
 import { buildMcpJson, buildOneShotAgentPrompt } from '../agentAccess/AgentAccessPage';
 import { BusyOverlay, Button, Input, Select, showConfirm, showToast } from '../common';
 import { AgentLogo } from './AgentLogo';
+import { APP_DISPLAY_NAME } from '../../version';
 
 const PINNED_COMPONENT_IDS = [
   'codex-desktop',
@@ -642,7 +643,7 @@ const AgentModelConfigPanel: React.FC<{
               if (!oneClickLocked) onApply();
             }}
             disabled={oneClickLocked || busy}
-            title={oneClickLocked ? '登录后解锁：请先同步中转站模型' : '一键写入 LOOM 托管模型'}
+            title={oneClickLocked ? '登录后解锁：请先同步中转站模型' : `一键写入 ${APP_DISPLAY_NAME} 托管模型`}
             className={`h-10 rounded-full text-xs font-black transition ${sourceMode === 'oneClick' ? 'bg-surface text-text shadow-sm' : 'text-text-muted hover:text-text'} disabled:cursor-not-allowed disabled:opacity-65`}
           >
             <span className="inline-flex items-center justify-center gap-2">
@@ -1437,7 +1438,7 @@ export const AgentInstallerPage: React.FC = () => {
                 : '正在安装或升级智能体';
   const busyOverlayDetail = activeBusyName
     ? `${activeBusyName} 正在处理，请稍候。`
-    : 'LOOM 正在检查本机环境和安装状态。';
+    : `${APP_DISPLAY_NAME} 正在检查本机环境和安装状态。`;
 
   return (
     <div

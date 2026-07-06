@@ -1,5 +1,5 @@
 import React from 'react';
-import { LumingWordmarkImage } from './LoomBrand';
+import { APP_DISPLAY_NAME } from '../../version';
 
 const MIN_SPLASH_DURATION_MS = 4400;
 const MAX_SPLASH_DURATION_MS = 10000;
@@ -52,14 +52,14 @@ export const LoomSplash: React.FC = () => {
     <div
       data-loom-splash
       className="loom-splash fixed inset-0 z-[99990] flex items-center justify-center bg-[#071b24] text-[#dffaff]"
-      aria-label="LOOM 麓鸣启动中"
+      aria-label={`${APP_DISPLAY_NAME}启动中`}
     >
       <div className="flex flex-col items-center">
         <div className="loom-splash-orbit relative h-[268px] w-[268px] rounded-[34px] bg-[#071b24] p-0 shadow-[0_34px_90px_rgba(0,0,0,0.34)]">
           <div className="h-full w-full overflow-hidden rounded-[34px] bg-[#071b24]">
             <iframe
               ref={iframeRef}
-              title="LOOM 麓鸣启动动画"
+              title={`${APP_DISPLAY_NAME}启动动画`}
               src={`/loom-motion/logo_motion_vector-v1.html?embed=1&loop=1&motion=calm&v=20260630-v1&nonce=${MOTION_READY_NONCE}`}
               className="h-full w-full border-0"
               sandbox="allow-scripts"
@@ -67,8 +67,10 @@ export const LoomSplash: React.FC = () => {
             />
           </div>
         </div>
-        <LumingWordmarkImage tone="light" className="mt-6 h-[106px] w-[168px] opacity-95" />
-        <div className="mt-1 text-sm font-bold text-[#dffaff]">正在启动 LOOM</div>
+        <div className="mt-6 max-w-[360px] px-4 text-center text-[28px] font-black leading-tight text-[#dffaff]">
+          {APP_DISPLAY_NAME}
+        </div>
+        <div className="mt-2 text-sm font-bold text-[#dffaff]">正在启动 {APP_DISPLAY_NAME}</div>
         <div className="loom-splash-dots mt-4 flex items-center gap-1.5" aria-hidden="true">
           <span />
           <span />

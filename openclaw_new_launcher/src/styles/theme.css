@@ -26,8 +26,8 @@
 
   --font-display: 'HarmonyOS Sans SC', 'MiSans', 'Alibaba PuHuiTi', 'Source Han Sans SC', 'Microsoft YaHei UI', system-ui, sans-serif;
   --font-mono: 'Cascadia Mono', Consolas, monospace;
-  --brand-name: 'LOOM';
-  --brand-subtitle: '多智能体安装器';
+  --brand-name: '麓鸣AI矩阵获客工作台';
+  --brand-subtitle: '手机矩阵获客与自动化总控';
 }
 
 :root[data-theme-mode='light'] {

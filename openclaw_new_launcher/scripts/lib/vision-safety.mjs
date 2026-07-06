@@ -1,4 +1,51 @@
-const MUTATING_ACTIONS = new Set(['tap', 'long_press', 'longpress', 'swipe', 'drag']);
+const MUTATING_ACTIONS = new Set([
+  'tap',
+  'long_press',
+  'longpress',
+  'swipe',
+  'drag',
+  'click_ref',
+  'click_text',
+  'tap_text',
+  'click_node',
+  'tap_node',
+  'click_element',
+  'tap_element',
+  'click_description',
+  'tap_description',
+  'input',
+  'input_text',
+  'scroll',
+]);
+const ACTION_FAST_ACTIONS = new Set([
+  'back',
+  'home',
+  'open_app',
+  'refresh',
+  'wait_element',
+  'click_ref',
+  'click_text',
+  'tap_text',
+  'click_node',
+  'tap_node',
+  'click_element',
+  'tap_element',
+  'click_description',
+  'tap_description',
+  'input',
+  'input_text',
+  'scroll',
+]);
+const REF_PREFERRED_ACTIONS = new Set([
+  'click_text',
+  'tap_text',
+  'click_node',
+  'tap_node',
+  'click_element',
+  'tap_element',
+  'click_description',
+  'tap_description',
+]);
 
 export const VISION_SAFETY_KEYWORDS = [
   '支付',
@@ -86,6 +133,15 @@ const METADATA_KEYS = new Set([
   'description',
   'targetDescription',
   'target_description',
+  'text',
+  'targetText',
+  'target_text',
+  'contentDescription',
+  'content_description',
+  'resourceId',
+  'resource_id',
+  'nodeId',
+  'node_id',
   'risk',
   'safetyNote',
   'safety_note',
@@ -108,7 +164,7 @@ export function visionSafetyPolicy() {
 }
 
 export function inspectVisionActionPlan(plan, options = {}) {
-  const action = String(plan?.action || plan?.type || '').toLowerCase();
+  const action = normalizePhoneActionName(plan?.action || plan?.type || '');
   const strict = options.strict !== false;
   if (!action) {
     return blocked('missing_action', 'Missing action in visual plan.');
@@ -172,42 +228,82 @@ export function minimalActionForPhone(plan) {
   return body;
 }
 
+export function visionActionEndpointForBody(plan, fastPath = '') {
+  if (String(fastPath || '').toLowerCase() === 'action_fast') {
+    return '/api/lumi/agent/action_fast';
+  }
+  const action = normalizePhoneActionName(plan?.action || plan?.type || '');
+  if (ACTION_FAST_ACTIONS.has(action)) {
+    return '/api/lumi/agent/action_fast';
+  }
+  return '/api/lumi/vision/action';
+}
+
 export function compactReadSelectors(value, limit = 40) {
   const items = Array.isArray(value) ? value : [];
   const selectors = [];
   for (const item of items) {
     if (!item || typeof item !== 'object' || selectors.length >= limit) continue;
     const sourceBody = item.actionBody && typeof item.actionBody === 'object' ? item.actionBody : item;
-    const actionBody = compactActionBody(sourceBody);
+    const actionBody = compactActionBody(sourceBody, item);
     if (!actionBody) continue;
-    selectors.push({
+    const ref = clipText(item.ref || item.selectorRef || item.selector_ref || actionBody.ref, 100);
+    const selector = {
       nodeId: clipText(item.nodeId || item.node_id || item.id, 80),
       label: clipText(item.label || item.text || item.description || item.contentDescription || item.resourceId, 120),
       actionBody,
-    });
+    };
+    if (ref) selector.ref = ref;
+    selectors.push(selector);
   }
   return selectors;
 }
 
-function compactActionBody(value) {
-  const action = normalizePhoneActionName(value?.action || value?.type || value?.name || '');
+function compactActionBody(value, source = {}) {
+  const item = value && typeof value === 'object' ? value : {};
+  const parent = source && typeof source === 'object' ? source : {};
+  let action = normalizePhoneActionName(item.action || item.type || item.name || parent.action || parent.type || parent.name || '');
   if (!action) return null;
+  const ref = clipText(item.ref || item.selectorRef || item.selector_ref || parent.ref || parent.selectorRef || parent.selector_ref, 100);
+  if (ref && REF_PREFERRED_ACTIONS.has(action)) action = 'click_ref';
   const body = { action };
-  const text = clipText(value.text || value.targetText || value.target_text || value.label, 160);
+  if (ref) body.ref = ref;
+  const text = clipText(item.text || item.targetText || item.target_text || item.label || parent.text || parent.targetText || parent.target_text || parent.label, 160);
   if (text) body.text = text;
   const contentDescription = clipText(
-    value.contentDescription || value.content_description || value.description || value.targetDescription || value.target_description,
+    item.contentDescription
+      || item.content_description
+      || item.description
+      || item.targetDescription
+      || item.target_description
+      || parent.contentDescription
+      || parent.content_description
+      || parent.description
+      || parent.targetDescription
+      || parent.target_description,
     160
   );
   if (contentDescription) body.contentDescription = contentDescription;
-  const resourceId = clipText(value.resourceId || value.resource_id || value.viewId || value.view_id, 200);
+  const targetLabel = clipText(
+    item.targetLabel
+      || item.target_label
+      || parent.targetLabel
+      || parent.target_label
+      || item.label
+      || parent.label
+      || text
+      || contentDescription,
+    160
+  );
+  if (targetLabel) body.targetLabel = targetLabel;
+  const resourceId = clipText(item.resourceId || item.resource_id || item.viewId || item.view_id || parent.resourceId || parent.resource_id || parent.viewId || parent.view_id, 200);
   if (resourceId) body.resourceId = resourceId;
-  const nodeId = clipText(value.nodeId || value.node_id || value.id, 100);
+  const nodeId = clipText(item.nodeId || item.node_id || item.id || parent.nodeId || parent.node_id || parent.id, 100);
   if (nodeId) body.nodeId = nodeId;
-  const direction = clipText(value.direction, 24);
+  const direction = clipText(item.direction || parent.direction, 24);
   if (direction) body.direction = direction;
-  if (Number.isFinite(Number(value.timeoutMs))) body.timeoutMs = Number(value.timeoutMs);
-  if (Number.isFinite(Number(value.durationMs))) body.durationMs = Number(value.durationMs);
+  if (Number.isFinite(Number(item.timeoutMs ?? parent.timeoutMs))) body.timeoutMs = Number(item.timeoutMs ?? parent.timeoutMs);
+  if (Number.isFinite(Number(item.durationMs ?? parent.durationMs))) body.durationMs = Number(item.durationMs ?? parent.durationMs);
   return body;
 }
 
@@ -224,6 +320,10 @@ function normalizePhoneActionName(value) {
     .toLowerCase();
   if (action === 'longpress') return 'long_press';
   const aliases = {
+    click_selector: 'click_ref',
+    selector_click: 'click_ref',
+    ref_click: 'click_ref',
+    tap_ref: 'click_ref',
     wait_element: 'wait_element',
     wait_for_element: 'wait_element',
     wait_until_element: 'wait_element',
@@ -244,8 +344,11 @@ function formatPlanCoordinates(plan) {
 }
 
 function hasAnyTargetMetadata(plan) {
-  return ['targetLabel', 'target_label', 'label', 'reason', 'intent', 'description', 'targetDescription', 'target_description']
-    .some((key) => typeof plan?.[key] === 'string' && plan[key].trim());
+  if (!plan || typeof plan !== 'object') return false;
+  for (const key of METADATA_KEYS) {
+    if (typeof plan[key] === 'string' && plan[key].trim()) return true;
+  }
+  return false;
 }
 
 function collectMetadata(value) {

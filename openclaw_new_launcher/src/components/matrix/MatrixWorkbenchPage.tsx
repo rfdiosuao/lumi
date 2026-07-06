@@ -39,9 +39,22 @@ type ExperienceReport = {
   templateSuggestions?: Array<{ id?: string; reason?: string }>;
 };
 
+type StudioEvent = {
+  eventId: string;
+  timestamp: string;
+  type: string;
+  label: string;
+  source: string;
+  target: string;
+  message: string;
+  tone: 'info' | 'success' | 'warn' | 'danger' | 'device';
+};
+
 const DEFAULT_PHONE_MODEL = 'qwen3.7-plus';
 const PHONE_AGENT_APK_URL = 'https://gitee.com/rfdiosuao/lumiapkclaw/releases/download/lumiclaw13241/OpenClaw-AgentPhone.apk';
 const PHONE_AGENT_QR_SRC = '/phone-agent-apk-qr.svg';
+const MATRIX_STUDIO_EVENT_LIMIT = 42;
+const MATRIX_STUDIO_DEVICE_EVENT_LIMIT = 10;
 
 const TEMPLATES: TemplateOption[] = [
   { id: 'screen-summary', label: '读取屏幕', kind: 'direct' },
@@ -97,11 +110,88 @@ function stateClasses(value: WorkerState): string {
   return 'border-cyan-300/18 bg-cyan-300/[0.06]';
 }
 
-function eventTone(type: string): string {
-  if (type === 'error') return 'bg-rose-400/15 text-rose-100 ring-rose-400/25';
-  if (type === 'result') return 'bg-emerald-400/15 text-emerald-100 ring-emerald-400/25';
-  if (type === 'step' || type === 'assigned') return 'bg-amber-400/15 text-amber-100 ring-amber-400/25';
-  return 'bg-sky-400/15 text-sky-100 ring-sky-400/25';
+function eventTone(type: string): StudioEvent['tone'] {
+  if (type === 'error' || type === 'cancelled') return 'danger';
+  if (type === 'result' || type === 'succeeded') return 'success';
+  if (type === 'step' || type === 'assigned' || type === 'retry') return 'warn';
+  if (type.startsWith('phone.events')) return 'device';
+  return 'info';
+}
+
+function eventToneClasses(tone: StudioEvent['tone']): string {
+  if (tone === 'danger') return 'border-rose-300/28 bg-rose-300/[0.10] text-rose-100';
+  if (tone === 'success') return 'border-emerald-300/28 bg-emerald-300/[0.10] text-emerald-100';
+  if (tone === 'warn') return 'border-amber-300/28 bg-amber-300/[0.10] text-amber-100';
+  if (tone === 'device') return 'border-cyan-300/28 bg-cyan-300/[0.10] text-cyan-100';
+  return 'border-sky-300/22 bg-sky-300/[0.08] text-sky-100';
+}
+
+function eventLabel(type: string): string {
+  if (type === 'queued') return '排队';
+  if (type === 'assigned') return '分配';
+  if (type === 'running') return '运行';
+  if (type === 'step') return '步骤';
+  if (type === 'result') return '成功';
+  if (type === 'error') return '失败';
+  if (type === 'retry') return '重试';
+  if (type.startsWith('phone.events')) return '手机';
+  if (type === 'device.snapshot') return '状态';
+  return type || '事件';
+}
+
+function compactMatrixLogText(value: unknown, limit = 118): string {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/sk-[A-Za-z0-9_\-]{4,}/g, 'sk-***')
+    .replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer ***')
+    .replace(/https?:\/\/[^\s)）]+/g, (url) => {
+      try {
+        const parsed = new URL(url);
+        return `[链接 ${parsed.hostname}]`;
+      } catch {
+        return '[链接]';
+      }
+    })
+    .trim();
+  if (!text) return '运行事件已记录';
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function eventTime(value: string | undefined): string {
+  return String(value || '').slice(11, 19) || '--:--:--';
+}
+
+function formatStudioEvent(event: MatrixEvent, index: number): StudioEvent {
+  const record = event as MatrixEvent & { source?: string };
+  const type = String(event.type || 'event');
+  return {
+    eventId: event.eventId || `${type}-${event.timestamp || index}`,
+    timestamp: event.timestamp || '',
+    type,
+    label: eventLabel(type),
+    source: compactMatrixLogText(record.source || (type.startsWith('phone.events') ? 'phone stream' : 'matrix'), 28),
+    target: compactMatrixLogText(event.deviceId || event.deviceTaskId || event.campaignId || 'control', 32),
+    message: compactMatrixLogText(event.message, 132),
+    tone: eventTone(type),
+  };
+}
+
+function buildDerivedDeviceEvents(workers: WorkerView[]): StudioEvent[] {
+  return workers.slice(0, MATRIX_STUDIO_DEVICE_EVENT_LIMIT).map((worker, index) => {
+    const onlineState = worker.online ? '在线' : '离线';
+    const busyState = worker.state === 'running' ? '正在执行' : stateLabel(worker.state);
+    const message = `${worker.name || worker.deviceId} ${onlineState} / ${busyState} / ${worker.task}`;
+    return {
+      eventId: `device-${worker.deviceId}-${worker.updatedAt || worker.lastEventAt || index}`,
+      timestamp: worker.lastEventAt || worker.heartbeatAt || worker.updatedAt || '',
+      type: 'device.snapshot',
+      label: '状态',
+      source: worker.source || 'device registry',
+      target: worker.deviceId,
+      message: compactMatrixLogText(message, 132),
+      tone: worker.state === 'blocked' ? 'danger' : worker.online ? 'device' : 'info',
+    };
+  });
 }
 
 function workerFromDevice(device: MatrixDeviceSummary): WorkerView {
@@ -156,11 +246,11 @@ function copyToClipboard(text: string) {
 }
 
 const MiniScreen: React.FC<{ worker: WorkerView }> = ({ worker }) => (
-  <div className="relative h-[72px] w-[42px] overflow-hidden rounded-[6px] border border-white/12 bg-slate-950 shadow-inner">
-    <div className="absolute inset-x-1 top-1 h-2 rounded-full bg-white/10" />
-    <div className="absolute left-1 right-1 top-5 h-3 rounded bg-cyan-300/25" />
-    <div className="absolute left-1 right-1 top-10 h-2 rounded bg-white/12" />
-    <div className="absolute left-1 right-1 top-15 h-5 rounded bg-emerald-300/20" />
+  <div className="relative h-[58px] w-[34px] shrink-0 overflow-hidden rounded-[5px] border border-white/12 bg-slate-950 shadow-inner">
+    <div className="absolute inset-x-1 top-1 h-1.5 rounded-full bg-white/10" />
+    <div className="absolute left-1 right-1 top-4 h-2.5 rounded bg-cyan-300/25" />
+    <div className="absolute left-1 right-1 top-8 h-1.5 rounded bg-white/12" />
+    <div className="absolute left-1 right-1 top-12 h-4 rounded bg-emerald-300/20" />
     <div className={`absolute bottom-1 left-1 h-1.5 w-1.5 rounded-full ${worker.online ? 'matrix-heartbeat bg-emerald-300' : 'bg-slate-500'}`} />
   </div>
 );
@@ -170,44 +260,48 @@ const WorkerCard: React.FC<{ worker: WorkerView; selected: boolean; onToggle: ()
     type="button"
     onClick={onToggle}
     disabled={!worker.online && !worker.busy}
-    className={`group min-h-[154px] rounded-[8px] border p-3 text-left transition hover:border-cyan-300/35 disabled:cursor-not-allowed ${stateClasses(worker.state)} ${selected ? 'ring-2 ring-cyan-300/35' : ''}`}
+    className={`group min-h-[104px] rounded-[8px] border p-2.5 text-left transition hover:border-cyan-300/35 disabled:cursor-not-allowed ${stateClasses(worker.state)} ${selected ? 'ring-2 ring-cyan-300/35' : ''}`}
   >
-    <div className="mb-2 flex items-start justify-between gap-2">
+    <div className="mb-1.5 flex items-start justify-between gap-2">
       <div className="min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <span className={`h-2 w-2 rounded-full ${worker.online ? 'matrix-heartbeat bg-emerald-300' : 'bg-slate-500'}`} />
-          <span className="truncate font-mono text-[13px] font-black text-white">{worker.name || worker.deviceId}</span>
+          <span className="truncate font-mono text-[12px] font-black text-white">{worker.name || worker.deviceId}</span>
         </div>
-        <div className="mt-1 truncate text-[11px] text-slate-400">{worker.platform} / {worker.account}</div>
+        <div className="mt-0.5 truncate text-[10px] text-slate-400">{worker.platform} / {worker.account}</div>
       </div>
-      <span className="rounded-full border border-current/20 px-2 py-1 text-[10px] font-black text-slate-100">{stateLabel(worker.state)}</span>
+      <span className="rounded-full border border-current/20 px-1.5 py-0.5 text-[9px] font-black text-slate-100">{stateLabel(worker.state)}</span>
     </div>
-    <div className="flex gap-3">
+    <div className="flex gap-2">
       <MiniScreen worker={worker} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-bold text-white">{worker.task}</div>
-        <div className="mt-1 text-[11px] text-slate-400">{worker.elapsed} / 队列 {worker.queue}</div>
-        <div className="mt-3 h-1.5 rounded-full bg-white/8">
+        <div className="truncate text-[12px] font-bold text-white">{worker.task}</div>
+        <div className="mt-0.5 text-[10px] text-slate-400">{worker.elapsed} / 队列 {worker.queue}</div>
+        <div className="mt-2 h-1 rounded-full bg-white/8">
           <div
             className={`h-full rounded-full ${worker.state === 'blocked' ? 'bg-rose-300' : worker.state === 'offline' ? 'bg-slate-500' : 'bg-emerald-300'}`}
             style={{ width: `${Math.max(6, worker.progress)}%` }}
           />
         </div>
-        <div className="mt-2 truncate text-[11px] text-slate-400">{worker.lastResult || worker.source || '后端设备'}</div>
+        <div className="mt-1 truncate text-[10px] text-slate-400">{worker.lastResult || worker.source || '后端设备'}</div>
       </div>
     </div>
   </button>
 );
 
-const EventRow: React.FC<{ event: MatrixEvent }> = ({ event }) => (
-  <div className="grid grid-cols-[66px_1fr] gap-3 border-b border-white/[0.06] py-3">
-    <div className="font-mono text-[11px] text-slate-500">{String(event.timestamp || '').slice(11, 19) || '--:--:--'}</div>
+const StudioEventRow: React.FC<{ event: StudioEvent; index: number }> = ({ event, index }) => (
+  <div
+    className={`matrix-live-feed-row grid grid-cols-[42px_1fr] gap-2 border-l-2 px-2 py-1.5 ${eventToneClasses(event.tone)}`}
+    style={{ animationDelay: `${Math.min(index, 10) * 32}ms` }}
+  >
+    <div className="font-mono text-[10px] leading-4 text-slate-400">{eventTime(event.timestamp)}</div>
     <div className="min-w-0">
-      <div className="mb-1 flex items-center gap-2">
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ring-1 ${eventTone(event.type)}`}>{event.type}</span>
-        <span className="truncate font-mono text-[11px] text-slate-400">{event.deviceId || event.campaignId || 'matrix'}</span>
+      <div className="mb-0.5 flex items-center gap-1.5">
+        <span className="rounded-full border border-current/25 px-1.5 py-0.5 text-[9px] font-black leading-none">{event.label}</span>
+        <span className="truncate font-mono text-[10px] text-slate-300">{event.target}</span>
+        <span className="ml-auto truncate text-[9px] uppercase tracking-[0.12em] text-slate-500">{event.source}</span>
       </div>
-      <div className="text-[12px] leading-5 text-slate-200">{event.message || '事件已记录'}</div>
+      <div className="truncate text-[10.5px] font-semibold leading-4 text-slate-100">{event.message}</div>
     </div>
   </div>
 );
@@ -289,7 +383,14 @@ export const MatrixWorkbenchPage = () => {
   }, [workers]);
 
   const metrics = metricFromSnapshot(snapshot, workers, experience);
-  const visibleEvents = events.slice(-16).reverse();
+  const derivedDeviceEvents = React.useMemo(() => buildDerivedDeviceEvents(workers), [workers]);
+  const visibleEvents = React.useMemo(() => {
+    const taskEvents = events.slice(-MATRIX_STUDIO_EVENT_LIMIT).map(formatStudioEvent);
+    return [...taskEvents, ...derivedDeviceEvents]
+      .sort((left, right) => String(left.timestamp).localeCompare(String(right.timestamp)))
+      .slice(-MATRIX_STUDIO_EVENT_LIMIT)
+      .reverse();
+  }, [derivedDeviceEvents, events]);
   const needsReview = riskNeedsReview(templateId, prompt);
   const suggestions = experience?.templateSuggestions || [];
   const composerDisabled = dispatching || !workers.length;
@@ -340,56 +441,56 @@ export const MatrixWorkbenchPage = () => {
   };
 
   return (
-    <div data-white-label-layout="phone-matrix" className="loom-matrix-shell h-full overflow-hidden bg-[#07131B] text-slate-100">
+    <div data-white-label-layout="phone-matrix" data-matrix-studio-mode="recording" className="loom-matrix-shell h-full overflow-hidden bg-[#07131B] text-slate-100">
       <div className="flex h-full flex-col">
-        <header className="shrink-0 border-b border-white/[0.08] bg-[#091722]/95 px-6 py-4">
-          <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+        <header className="shrink-0 border-b border-white/[0.08] bg-[#091722]/95 px-3 py-2.5">
+          <div className="grid grid-cols-[1fr_auto] items-center gap-3">
             <div className="min-w-0">
-              <div className="text-[11px] font-black tracking-[0.28em] text-cyan-200/70">手机工作台</div>
-              <h1 className="mt-1 truncate text-[24px] font-black text-white">手机矩阵任务发布工作台</h1>
+              <div className="text-[9px] font-black tracking-[0.22em] text-cyan-200/70">STUDIO MODE / PHONE MATRIX</div>
+              <h1 className="mt-0.5 truncate text-[18px] font-black text-white">超级矩阵工作台</h1>
             </div>
-            <div className="flex items-center gap-3">
-              <Button variant="quiet" disabled className="!rounded-[8px] !border-white/12 !bg-white/[0.04] !text-slate-400">全局暂停</Button>
-              <Button variant="danger" disabled className="!rounded-[8px] !opacity-70">紧急停止</Button>
+            <div className="flex items-center gap-2">
+              <span className="loom-scan-line rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2.5 py-1 text-[10px] font-black text-cyan-100">实时流</span>
+              <Button variant="danger" disabled className="!rounded-[8px] !px-3 !py-1.5 !text-xs !opacity-70">急停</Button>
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-4 gap-2 xl:grid-cols-8">
+          <div className="mt-2 grid grid-cols-8 gap-1.5">
             {[
-              ['Codex 总控', '待接入', 'text-sky-200'],
-              ['MCP / CLI', '可调度', 'text-emerald-200'],
+              ['Codex', '总控', 'text-sky-200'],
+              ['CLI/MCP', '可调度', 'text-emerald-200'],
               ['在线手机', `${metrics.online}/${metrics.total}`, 'text-emerald-200'],
               ['运行中', String(metrics.running), 'text-emerald-200'],
-              ['等待队列', String(metrics.queue), 'text-amber-200'],
-              ['累计成功', String(metrics.success), 'text-emerald-200'],
-              ['失败设备', String(metrics.failed), 'text-rose-200'],
-              ['默认模型', DEFAULT_PHONE_MODEL, 'text-cyan-200'],
+              ['队列', String(metrics.queue), 'text-amber-200'],
+              ['成功', String(metrics.success), 'text-emerald-200'],
+              ['失败', String(metrics.failed), 'text-rose-200'],
+              ['模型', DEFAULT_PHONE_MODEL, 'text-cyan-200'],
             ].map(([label, value, tone]) => (
-              <div key={label} className="rounded-[8px] border border-white/[0.07] bg-white/[0.035] px-3 py-2">
-                <div className="text-[10px] font-bold text-slate-500">{label}</div>
-                <div className={`mt-1 truncate text-[15px] font-black ${tone}`}>{value}</div>
+              <div key={label} className="rounded-[8px] border border-white/[0.07] bg-white/[0.035] px-1.5 py-1.5">
+                <div className="text-[9px] font-bold text-slate-500">{label}</div>
+                <div className={`mt-0.5 truncate text-[13px] font-black ${tone}`}>{value}</div>
               </div>
             ))}
           </div>
         </header>
 
-        <main className="min-h-0 flex-1 overflow-auto px-6 py-5">
-          <div className="loom-matrix-layout mx-auto grid min-h-[680px] w-full max-w-[1180px] grid-cols-[280px_minmax(420px,1fr)_280px] gap-4">
+        <main className="min-h-0 flex-1 overflow-hidden px-3 py-3">
+          <div className="loom-matrix-layout mx-auto grid h-full min-h-0 w-full max-w-[1060px] grid-cols-[230px_minmax(280px,1fr)_320px] gap-3">
             <section className="loom-matrix-composer flex min-h-0 flex-col rounded-[8px] border border-white/[0.08] bg-white/[0.035]">
-              <div className="border-b border-white/[0.07] px-4 py-3">
-                <div className="text-[11px] font-black tracking-[0.22em] text-cyan-200/70">任务</div>
-                <h2 className="mt-1 text-lg font-black text-white">任务编排</h2>
+              <div className="border-b border-white/[0.07] px-3 py-2">
+                <div className="text-[9px] font-black tracking-[0.2em] text-cyan-200/70">TASK</div>
+                <h2 className="mt-0.5 text-sm font-black text-white">任务编排</h2>
               </div>
-              <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
+              <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
                 <label className="block">
-                  <span className="text-xs font-bold text-slate-400">任务模板</span>
+                  <span className="text-[11px] font-bold text-slate-400">任务模板</span>
                   <select
                     value={templateId}
                     onChange={(event) => {
                       setTemplateId(event.target.value);
                       setConfirmed(false);
                     }}
-                    className="mt-2 w-full rounded-[8px] border border-white/10 bg-[#0D1D27] px-3 py-2 text-sm text-white outline-none focus:border-cyan-300/50"
+                    className="mt-1.5 w-full rounded-[8px] border border-white/10 bg-[#0D1D27] px-2.5 py-1.5 text-xs text-white outline-none focus:border-cyan-300/50"
                   >
                     {TEMPLATES.map((template) => (
                       <option key={template.id} value={template.id}>{template.label} / {kindLabel(template.kind)}</option>
@@ -398,24 +499,24 @@ export const MatrixWorkbenchPage = () => {
                 </label>
 
                 <div>
-                  <span className="text-xs font-bold text-slate-400">执行设备</span>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <span className="text-[11px] font-bold text-slate-400">执行设备</span>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {selectedIds.slice(0, 8).map((id) => (
-                      <button key={id} type="button" onClick={() => toggleWorker(id)} className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2.5 py-1 text-xs font-bold text-cyan-100">
+                      <button key={id} type="button" onClick={() => toggleWorker(id)} className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[10px] font-bold text-cyan-100">
                         {id} x
                       </button>
                     ))}
-                    <span className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-slate-400">已选 {selectedIds.length}</span>
+                    <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-400">已选 {selectedIds.length}</span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-1.5">
                   {(['observe', 'safe', 'full'] as PhoneTaskMode[]).map((item) => (
                     <button
                       key={item}
                       type="button"
                       onClick={() => setMode(item)}
-                      className={`rounded-[8px] border px-3 py-2 text-left text-xs font-black ${mode === item ? 'border-cyan-300/50 bg-cyan-300/12 text-cyan-100' : 'border-white/10 bg-white/[0.03] text-slate-400'}`}
+                      className={`rounded-[8px] border px-2 py-1.5 text-left text-[10px] font-black ${mode === item ? 'border-cyan-300/50 bg-cyan-300/12 text-cyan-100' : 'border-white/10 bg-white/[0.03] text-slate-400'}`}
                     >
                       {modeLabel(item)}
                     </button>
@@ -425,7 +526,7 @@ export const MatrixWorkbenchPage = () => {
                       key={item}
                       type="button"
                       onClick={() => setProfile(item)}
-                      className={`rounded-[8px] border px-3 py-2 text-left text-xs font-black ${profile === item ? 'border-emerald-300/50 bg-emerald-300/12 text-emerald-100' : 'border-white/10 bg-white/[0.03] text-slate-400'}`}
+                      className={`rounded-[8px] border px-2 py-1.5 text-left text-[10px] font-black ${profile === item ? 'border-emerald-300/50 bg-emerald-300/12 text-emerald-100' : 'border-white/10 bg-white/[0.03] text-slate-400'}`}
                     >
                       {profileLabel(item)}
                     </button>
@@ -433,22 +534,22 @@ export const MatrixWorkbenchPage = () => {
                 </div>
 
                 <label className="block">
-                  <span className="text-xs font-bold text-slate-400">任务内容</span>
+                  <span className="text-[11px] font-bold text-slate-400">任务内容</span>
                   <TextArea
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value)}
-                    rows={6}
-                    className="mt-2 !rounded-[8px] !border-white/10 !bg-[#0D1D27] !text-slate-100"
+                    rows={3}
+                    className="mt-1.5 !rounded-[8px] !border-white/10 !bg-[#0D1D27] !text-xs !leading-5 !text-slate-100"
                   />
                 </label>
 
-                <div className={`rounded-[8px] border px-3 py-3 ${needsReview ? 'border-amber-300/25 bg-amber-300/10' : 'border-emerald-300/20 bg-emerald-300/8'}`}>
-                  <div className="flex items-center justify-between gap-3">
+                <div className={`rounded-[8px] border px-2.5 py-2 ${needsReview ? 'border-amber-300/25 bg-amber-300/10' : 'border-emerald-300/20 bg-emerald-300/8'}`}>
+                  <div className="flex items-center justify-between gap-2">
                     <div>
-                      <div className="text-sm font-black text-white">安全确认</div>
-                      <div className="mt-1 text-xs text-slate-400">{needsReview ? '外发、评论、批量任务需要人工确认' : '当前任务可直接执行'}</div>
+                      <div className="text-xs font-black text-white">安全确认</div>
+                      <div className="mt-0.5 text-[10px] text-slate-400">{needsReview ? '外发/批量需确认' : '可直接执行'}</div>
                     </div>
-                    <label className="flex items-center gap-2 text-xs font-bold text-slate-200">
+                    <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-200">
                       <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
                       已授权
                     </label>
@@ -456,34 +557,34 @@ export const MatrixWorkbenchPage = () => {
                 </div>
 
                 {!workers.length ? (
-                  <div className="matrix-empty-state rounded-[8px] border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-100">
+                  <div className="matrix-empty-state rounded-[8px] border border-amber-300/20 bg-amber-300/10 px-2.5 py-2 text-[11px] font-bold text-amber-100">
                     暂无手机。先到手机页保存并检测设备。
                   </div>
                 ) : null}
-                <Button variant="primary" disabled={composerDisabled} onClick={() => void dispatchTask()} className="matrix-dispatch w-full !rounded-[8px]">
+                <Button variant="primary" disabled={composerDisabled} onClick={() => void dispatchTask()} className="matrix-dispatch sticky bottom-0 w-full !rounded-[8px] !py-2 !text-sm">
                   {dispatching ? '发布中...' : '发布任务'}
                 </Button>
               </div>
             </section>
 
             <section className="loom-matrix-workers min-h-0 rounded-[8px] border border-white/[0.08] bg-white/[0.035]">
-              <div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-3">
+              <div className="flex items-center justify-between border-b border-white/[0.07] px-3 py-2">
                 <div>
-                  <div className="text-[11px] font-black tracking-[0.22em] text-cyan-200/70">设备</div>
-                  <h2 className="mt-1 text-lg font-black text-white">电子员工矩阵</h2>
+                  <div className="text-[9px] font-black tracking-[0.2em] text-cyan-200/70">WORKERS</div>
+                  <h2 className="mt-0.5 text-sm font-black text-white">电子员工矩阵</h2>
                 </div>
-                <Button variant="quiet" onClick={() => void refresh()} className="!rounded-[8px] !border-white/12 !bg-white/[0.04] !text-slate-200">刷新</Button>
+                <Button variant="quiet" onClick={() => void refresh()} className="!rounded-[8px] !border-white/12 !bg-white/[0.04] !px-2.5 !py-1.5 !text-xs !text-slate-200">刷新</Button>
               </div>
-              <div className="max-h-[620px] overflow-auto p-4">
+              <div className="h-[calc(100%-49px)] overflow-auto p-3">
                 {workers.length ? (
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     {groupWorkers(workers).map(([group, groupItems]) => (
                       <div key={group}>
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="text-sm font-black text-white">{group}</div>
-                          <div className="text-xs text-slate-500">{groupItems.filter((item) => item.online).length}/{groupItems.length} 在线</div>
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <div className="text-xs font-black text-white">{group}</div>
+                          <div className="text-[10px] text-slate-500">{groupItems.filter((item) => item.online).length}/{groupItems.length} 在线</div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
                           {groupItems.map((worker) => (
                             <WorkerCard key={worker.deviceId} worker={worker} selected={selectedIds.includes(worker.deviceId)} onToggle={() => toggleWorker(worker.deviceId)} />
                           ))}
@@ -492,70 +593,75 @@ export const MatrixWorkbenchPage = () => {
                     ))}
                   </div>
                 ) : (
-                  <div className="matrix-empty-state flex h-[340px] items-center justify-center rounded-[8px] border border-dashed border-white/12 bg-white/[0.025] text-center">
+                  <div className="matrix-empty-state flex h-full min-h-[260px] items-center justify-center rounded-[8px] border border-dashed border-white/12 bg-white/[0.025] text-center">
                     <div>
-                      <div className="text-lg font-black text-white">暂无真实后端设备</div>
-                      <div className="mt-2 text-sm text-slate-400">手机页保存配置后会自动出现在这里。</div>
+                      <div className="text-sm font-black text-white">暂无真实后端设备</div>
+                      <div className="mt-1 text-xs text-slate-400">手机页保存配置后会自动出现。</div>
                     </div>
                   </div>
                 )}
               </div>
             </section>
 
-            <aside className="flex min-h-0 flex-col gap-4">
+            <aside className="flex min-h-0 flex-col gap-3">
               <section className="loom-matrix-stream min-h-0 flex-1 rounded-[8px] border border-white/[0.08] bg-white/[0.035]">
-                <div className="border-b border-white/[0.07] px-4 py-3">
-                  <div className="text-[11px] font-black tracking-[0.22em] text-cyan-200/70">日志</div>
-                  <h2 className="mt-1 text-lg font-black text-white">实时任务流</h2>
+                <div className="flex items-center justify-between border-b border-white/[0.07] px-3 py-2">
+                  <div>
+                    <div className="text-[9px] font-black tracking-[0.2em] text-cyan-200/70">LIVE FEED</div>
+                    <h2 className="mt-0.5 text-sm font-black text-white">实时价值日志</h2>
+                  </div>
+                  <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-0.5 text-[10px] font-black text-emerald-100">
+                    {visibleEvents.length} 条
+                  </span>
                 </div>
-                <div className="max-h-[486px] overflow-auto px-4">
+                <div className="h-[calc(100%-49px)] space-y-1.5 overflow-auto p-2">
                   {visibleEvents.length ? (
-                    visibleEvents.map((event, index) => <EventRow key={event.eventId || `${event.type}-${index}`} event={event} />)
+                    visibleEvents.map((event, index) => <StudioEventRow key={event.eventId || `${event.type}-${index}`} event={event} index={index} />)
                   ) : (
-                    <div className="matrix-empty-state py-10 text-sm text-slate-400">暂无任务事件。</div>
+                    <div className="matrix-empty-state px-2 py-8 text-xs text-slate-400">暂无任务事件，开始连接手机后这里会实时滚动。</div>
                   )}
                 </div>
               </section>
 
-              <section data-matrix-phone-app-download className="rounded-[8px] border border-white/[0.08] bg-white/[0.035] p-4">
-                <div className="flex items-start justify-between gap-3">
+              <section data-matrix-phone-app-download className="rounded-[8px] border border-white/[0.08] bg-white/[0.035] p-3">
+                <div className="flex items-start justify-between gap-2">
                   <div>
-                    <div className="text-[11px] font-black tracking-[0.22em] text-cyan-200/70">手机端</div>
-                    <h2 className="mt-1 text-lg font-black text-white">下载手机端 App</h2>
+                    <div className="text-[9px] font-black tracking-[0.2em] text-cyan-200/70">APKCLAW</div>
+                    <h2 className="mt-0.5 text-sm font-black text-white">手机端 App</h2>
                   </div>
-                  <Button variant="quiet" onClick={() => copyToClipboard(PHONE_AGENT_APK_URL)} className="!rounded-[8px] !border-white/12 !bg-white/[0.04] !text-slate-200">
+                  <Button variant="quiet" onClick={() => copyToClipboard(PHONE_AGENT_APK_URL)} className="!rounded-[8px] !border-white/12 !bg-white/[0.04] !px-2.5 !py-1.5 !text-xs !text-slate-200">
                     复制链接
                   </Button>
                 </div>
-                <div className="mt-3 flex items-center gap-3">
-                  <img src={PHONE_AGENT_QR_SRC} alt="手机端 App 下载二维码" className="h-20 w-20 rounded-[6px] bg-white p-1" />
-                  <div className="min-w-0 text-xs leading-5 text-slate-400">
+                <div className="mt-2 flex items-center gap-2">
+                  <img src={PHONE_AGENT_QR_SRC} alt="手机端 App 下载二维码" className="h-14 w-14 rounded-[6px] bg-white p-1" />
+                  <div className="min-w-0 text-[10px] leading-4 text-slate-400">
                     <div className="truncate font-mono text-slate-300">{PHONE_AGENT_APK_URL}</div>
-                    <div>手机扫码安装后，在手机页保存 IP 和令牌。</div>
+                    <div>扫码安装后，在手机页保存 IP 和令牌。</div>
                   </div>
                 </div>
               </section>
 
-              <section className="rounded-[8px] border border-white/[0.08] bg-white/[0.035] p-4">
-                <div className="text-[11px] font-black tracking-[0.22em] text-cyan-200/70">经验</div>
-                <h2 className="mt-1 text-lg font-black text-white">任务沉淀</h2>
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <div className="rounded-[8px] border border-white/8 bg-white/[0.03] p-3">
-                    <div className="text-[11px] text-slate-500">成功率</div>
-                    <div className="mt-1 text-xl font-black text-emerald-200">{Math.round(numberOr(experience?.summary?.successRate, 0) * 100)}%</div>
+              <section className="rounded-[8px] border border-white/[0.08] bg-white/[0.035] p-3">
+                <div className="text-[9px] font-black tracking-[0.2em] text-cyan-200/70">MEMORY</div>
+                <h2 className="mt-0.5 text-sm font-black text-white">任务沉淀</h2>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <div className="rounded-[8px] border border-white/8 bg-white/[0.03] p-2">
+                    <div className="text-[10px] text-slate-500">成功率</div>
+                    <div className="mt-0.5 text-lg font-black text-emerald-200">{Math.round(numberOr(experience?.summary?.successRate, 0) * 100)}%</div>
                   </div>
-                  <div className="rounded-[8px] border border-white/8 bg-white/[0.03] p-3">
-                    <div className="text-[11px] text-slate-500">样本数</div>
-                    <div className="mt-1 text-xl font-black text-cyan-200">{numberOr(experience?.summary?.total, 0)}</div>
+                  <div className="rounded-[8px] border border-white/8 bg-white/[0.03] p-2">
+                    <div className="text-[10px] text-slate-500">样本数</div>
+                    <div className="mt-0.5 text-lg font-black text-cyan-200">{numberOr(experience?.summary?.total, 0)}</div>
                   </div>
                 </div>
-                <div className="mt-3 space-y-2 text-xs text-slate-300">
+                <div className="mt-2 space-y-1.5 text-[10px] text-slate-300">
                   {suggestions.length ? suggestions.slice(0, 2).map((item) => (
-                    <div key={item.id || item.reason} className="rounded-[8px] border border-cyan-300/15 bg-cyan-300/8 p-3">
+                    <div key={item.id || item.reason} className="rounded-[8px] border border-cyan-300/15 bg-cyan-300/8 p-2">
                       {item.reason || '后端建议可固化为模板。'}
                     </div>
                   )) : (
-                    <div className="matrix-empty-state rounded-[8px] border border-white/10 bg-white/[0.03] p-3">暂无后端经验样本。</div>
+                    <div className="matrix-empty-state rounded-[8px] border border-white/10 bg-white/[0.03] p-2">暂无后端经验样本。</div>
                   )}
                 </div>
               </section>

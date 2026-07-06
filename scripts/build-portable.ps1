@@ -356,6 +356,33 @@ function Write-PortableRuntimePackageJson {
         version = $Version
         scripts = [ordered]@{
             start = "node start.js"
+            "verify:phone" = "powershell -ExecutionPolicy Bypass -File scripts/verify-phone-agent.ps1"
+            "phone:image" = "node scripts/openclaw-image-phone.mjs"
+            "phone:image:edit" = "node scripts/openclaw-image-phone.mjs --mode edit"
+            "phone:agent" = "node scripts/openclaw-phone-agent.mjs"
+            "phone:fleet" = "node scripts/openclaw-phone-fleet.mjs"
+            "phone:video" = "node scripts/openclaw-phone-video.mjs"
+            "phone:vision" = "node scripts/openclaw-phone-vision.mjs"
+            "phone:game" = "node scripts/openclaw-phone-game.mjs"
+            "phone:publish" = "node scripts/openclaw-publish-phone.mjs"
+            "phone:relay" = "node scripts/openclaw-publish-relay.mjs"
+            "phone:relay:check" = "node scripts/openclaw-publish-relay-check.mjs"
+            "phone:relay:smoke" = "node scripts/openclaw-publish-relay-smoke.mjs"
+            "phone:demo:shopping" = "node scripts/openclaw-phone-demo.mjs shopping"
+            "phone:demo:read" = "node scripts/openclaw-phone-demo.mjs read"
+            "phone:demo:game" = "node scripts/openclaw-phone-demo.mjs game"
+            "desktop:agent" = "node scripts/openclaw-desktop-agent.mjs"
+            "desktop:reply" = "node scripts/openclaw-desktop-agent.mjs reply"
+            "loom:context" = "node scripts/openclaw-context.mjs"
+            "loom:phone" = "node scripts/openclaw-phone-agent.mjs"
+            "loom:phone:fleet" = "node scripts/openclaw-phone-fleet.mjs"
+            "loom:phone:vision" = "node scripts/openclaw-phone-vision.mjs"
+            "loom:phone:video" = "node scripts/openclaw-phone-video.mjs"
+            "loom:phone:publish" = "node scripts/openclaw-publish-phone.mjs"
+            "loom:image" = "node scripts/openclaw-image-phone.mjs"
+            "loom:desktop" = "node scripts/openclaw-desktop-agent.mjs"
+            "loom:desktop:reply" = "node scripts/openclaw-desktop-agent.mjs reply"
+            "openclaw:context" = "node scripts/openclaw-context.mjs"
         }
         dependencies = [ordered]@{
             openclaw = $OpenClawRuntimeVersion
@@ -758,10 +785,6 @@ function Remove-LegacyScriptArtifacts {
 
     foreach ($relative in @(
         "scripts\bot-plugin-helper.mjs",
-        "scripts\openclaw-publish-phone.mjs",
-        "scripts\openclaw-publish-relay.mjs",
-        "scripts\openclaw-publish-relay-check.mjs",
-        "scripts\openclaw-publish-relay-smoke.mjs",
         "scripts\package-mac-complete.mjs",
         "scripts\package-mac-online.mjs"
     )) {

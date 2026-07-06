@@ -7,10 +7,10 @@ import os
 import re
 import time
 from collections import Counter
-from typing import Any
+from typing import Any, Tuple
 
 
-FailureRule = tuple[str, str, bool, str, str, tuple[str, ...]]
+FailureRule = Tuple[str, str, bool, str, str, Tuple[str, ...]]
 
 FAILURE_RULES: tuple[FailureRule, ...] = (
     (

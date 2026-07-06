@@ -13,7 +13,7 @@ import {
   readLauncherPhoneConfigByDevice,
   signedJsonRequest,
 } from './openclaw-phone-secure.mjs';
-import { compactReadSelectors, inspectVisionActionPlan, minimalActionForPhone } from './lib/vision-safety.mjs';
+import { compactReadSelectors, inspectVisionActionPlan, minimalActionForPhone, visionActionEndpointForBody } from './lib/vision-safety.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,7 +50,7 @@ Frame options:
   --no-grid                    Disable grid overlay
 
 Action options:
-  --action-body <json>         Raw body for /api/lumi/vision/action
+  --action-body <json>         Raw action JSON. Text/node actions use action_fast; coordinate actions use vision/action
   --action-body-file <path>    Read action JSON from file. Recommended for PowerShell
   --action-body-stdin          Read action JSON from stdin
   --force-action               Required for action. Use only after APKClaw Agent fails, for debugging, or for explicit coordinate tasks
@@ -486,8 +486,9 @@ async function main() {
     if (!safety.allowed) {
       throw new Error(`Vision safety guard blocked action: ${safety.reason}`);
     }
-    const endpoint = config.fastPath === 'action_fast' ? '/api/lumi/agent/action_fast' : '/api/lumi/vision/action';
-    const payload = await signedJsonRequest(config, 'POST', endpoint, minimalActionForPhone(body), Math.min(25_000, config.actionTimeoutMs || 25_000));
+    const actionBody = minimalActionForPhone(body);
+    const endpoint = visionActionEndpointForBody(actionBody, config.fastPath);
+    const payload = await signedJsonRequest(config, 'POST', endpoint, actionBody, Math.min(25_000, config.actionTimeoutMs || 25_000));
     print(config, payload, `action=${payload?.data?.action || body.action} success=${payload?.success !== false} safety=${safety.category}`);
     return;
   }
