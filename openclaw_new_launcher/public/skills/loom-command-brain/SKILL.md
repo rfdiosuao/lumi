@@ -47,6 +47,7 @@ Prefer MCP tools when available. Prefer CLI when you need deterministic JSON, dr
 - Matrix: matrix status, matrix dispatch, matrix watch, matrix retry, matrix cancel
 - Media config/generation: media config, media save-image, media save-video, media test-image, media test-video, media image, media video
 - Templates and experience: template run, experience report, logs ledger
+- Feishu lead table: integration feishu doctor, integration feishu status, integration feishu login, integration feishu bind-table, integration feishu test-write, integration feishu retry-sync
 
 ## Operating Rules
 
@@ -56,10 +57,12 @@ Prefer MCP tools when available. Prefer CLI when you need deterministic JSON, dr
 4. For multi-phone work, dispatch once, then supervise by events. Codex should do macro-control, not micromanage every tap.
 5. For outbound messages, comments, private messages, publishing, batch reach-out, account changes, or paid actions, require explicit user confirmation.
 6. Never print or store raw API keys, tokens, passwords, launcher secrets, or phone tokens.
-7. For npm run phone:* commands, work from doctor.data.paths.npmRoot, always add --json, and prefer saved launcher phone config. Pass --phone-url / --phone-token only for explicit debugging.
-8. Phone screen recording requires clear user intent and may show an Android MediaProjection consent prompt. doctor reports this as a system prompt; do not claim it can always be bypassed.
-9. Generated HTML, Markdown, scripts, and config files must be UTF-8. HTML files must include <!doctype html>, <html lang="zh-CN">, <meta charset="UTF-8">, and a viewport meta tag.
-10. If Computer Use, Node REPL, Browser, Chrome, or desktop automation tools are unavailable, do not stop the task. Continue through LOOM CLI/MCP, local file edits, direct phone/matrix commands, phone npm helpers, and concise manual handoff only for login, captcha, payment, 2FA, or OS permission prompts.
+7. 飞书线索表: 先调用麓鸣集成检查 (`integration feishu doctor/status`)；Agent 不直接乱装工具。`lark-cli` 缺失时只提示用户确认后再安装。自动记录线索可以默认执行；真实对外评论、私信、微信发送、加好友、发布内容必须人工确认。
+8. If Feishu is not logged in or the table write fails, keep the lead in LOOM's local lead pool with pending/sync_failed state, then offer login, bind-table, or retry-sync. Never print Feishu passwords, tokens, device codes, or refresh tokens.
+9. For npm run phone:* commands, work from doctor.data.paths.npmRoot, always add --json, and prefer saved launcher phone config. Pass --phone-url / --phone-token only for explicit debugging.
+10. Phone screen recording requires clear user intent and may show an Android MediaProjection consent prompt. doctor reports this as a system prompt; do not claim it can always be bypassed.
+11. Generated HTML, Markdown, scripts, and config files must be UTF-8. HTML files must include <!doctype html>, <html lang="zh-CN">, <meta charset="UTF-8">, and a viewport meta tag.
+12. If Computer Use, Node REPL, Browser, Chrome, or desktop automation tools are unavailable, do not stop the task. Continue through LOOM CLI/MCP, local file edits, direct phone/matrix commands, phone npm helpers, and concise manual handoff only for login, captcha, payment, 2FA, OS permission prompts.
 
 ## Tool Fallback
 

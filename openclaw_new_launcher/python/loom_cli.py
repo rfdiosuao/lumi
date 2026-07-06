@@ -154,6 +154,7 @@ def _command_name(argv: list[str]) -> str:
         "template",
         "experience",
         "wire",
+        "integration",
     }:
         return f"{words[0]} {words[1]}"
     return words[0] if words else "help"
@@ -261,6 +262,8 @@ def _dispatch_command(args: list[str], ctx: CliContext) -> Json:
         return _template(rest, ctx)
     if command == "experience":
         return _experience(rest, ctx)
+    if command == "integration":
+        return _integration(rest, ctx)
     if command == "schedule":
         return _schedule(rest, ctx)
 
@@ -282,6 +285,7 @@ def _help_payload() -> Json:
             "phone status|screenshot|read|read-screen|events-start|events-status|events-stop|quick-task|run-task|template-task",
             "phone adb-doctor",
             "matrix status|dispatch|watch|cancel|retry|leads|record-lead",
+            "integration feishu doctor|status|install|login|bind-table|create-table|test-write|retry-sync",
             "template run",
             "experience report",
             "schedule list|add|run|cancel",
@@ -386,6 +390,20 @@ def _command_catalog(paths: AppPaths | None = None) -> Json:
                 {"name": "matrix retry", "permission": "control", "endpoint": "POST /api/matrix/retry"},
                 {"name": "template run", "permission": "read/control", "endpoint": "POST /api/matrix/template/run"},
                 {"name": "experience report", "permission": "read", "endpoint": "GET /api/matrix/experience"},
+            ],
+        },
+        {
+            "domain": "integration",
+            "summary": "Optional external integrations with explicit confirmation gates.",
+            "commands": [
+                {"name": "integration feishu doctor", "permission": "read", "endpoint": "GET /api/matrix/acquisition/feishu/doctor"},
+                {"name": "integration feishu status", "permission": "read", "endpoint": "GET /api/matrix/acquisition/feishu/status"},
+                {"name": "integration feishu install", "permission": "admin", "endpoint": "POST /api/matrix/acquisition/feishu/install"},
+                {"name": "integration feishu login", "permission": "control", "endpoint": "POST /api/matrix/acquisition/feishu/login"},
+                {"name": "integration feishu bind-table", "permission": "control", "endpoint": "POST /api/matrix/acquisition/feishu/bind-table"},
+                {"name": "integration feishu create-table", "permission": "control", "endpoint": "POST /api/matrix/acquisition/feishu/create-table"},
+                {"name": "integration feishu test-write", "permission": "control", "endpoint": "POST /api/matrix/acquisition/feishu/test-write"},
+                {"name": "integration feishu retry-sync", "permission": "control", "endpoint": "POST /api/matrix/acquisition/feishu/retry-sync"},
             ],
         },
         {
@@ -1205,6 +1223,39 @@ def _experience(args: list[str], ctx: CliContext) -> Json:
     return _bridge_call(ctx, "GET", "/api/matrix/experience", {})
 
 
+def _integration(args: list[str], ctx: CliContext) -> Json:
+    provider = args[0] if args else ""
+    if provider != "feishu":
+        raise CliError("unknown_command", "Integration command currently supports feishu only.")
+    action = args[1] if len(args) > 1 else "status"
+    rest = args[2:]
+    if action == "doctor":
+        _require_permission(ctx, "read")
+        return _bridge_call(ctx, "GET", "/api/matrix/acquisition/feishu/doctor", {})
+    if action == "status":
+        _require_permission(ctx, "read")
+        return _bridge_call(ctx, "GET", "/api/matrix/acquisition/feishu/status", {})
+    if action == "install":
+        _require_permission(ctx, "admin")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/feishu/install", {"confirmed": _flag(rest, "--confirmed")})
+    if action == "login":
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/feishu/login", {})
+    if action == "bind-table":
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/feishu/bind-table", _feishu_bind_body(rest))
+    if action == "create-table":
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/feishu/create-table", {"confirmed": _flag(rest, "--confirmed")})
+    if action == "test-write":
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/feishu/test-write", {})
+    if action == "retry-sync":
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/feishu/retry-sync", {})
+    raise CliError("unknown_command", "Feishu integration supports doctor, status, install, login, bind-table, create-table, test-write, retry-sync.")
+
+
 def _bridge_call(ctx: CliContext, method: str, endpoint: str, body: Json) -> Json:
     if ctx.dry_run:
         return {"method": method, "endpoint": endpoint, "body": _redact_json(body), "dryRun": True}
@@ -1362,6 +1413,18 @@ def _lead_body(args: list[str]) -> Json:
     if tags:
         body["tags"] = tags
     return body
+
+
+def _feishu_bind_body(args: list[str]) -> Json:
+    body: Json = {
+        "url": _option(args, "--url") or _option(args, "--table-url") or _positional(args, 0),
+        "baseToken": _option(args, "--base-token"),
+        "tableId": _option(args, "--table-id"),
+        "name": _option(args, "--name") or "麓鸣获客线索表",
+    }
+    if not body["url"] and not (body["baseToken"] and body["tableId"]):
+        raise CliError("missing_feishu_table", "Provide a Feishu table URL, or both --base-token and --table-id.")
+    return _compact_body(body)
 
 
 def _matrix_execution_layer(prompt: str, *, body_mode: str, template: str, action: str) -> str:

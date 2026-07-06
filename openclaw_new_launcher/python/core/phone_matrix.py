@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from core.paths import AppPaths
+from core.feishu_integration import FeishuAcquisitionIntegration
 
 
 Json = Dict[str, Any]
@@ -81,6 +82,10 @@ class MatrixControlPlane:
     @property
     def leads_path(self) -> str:
         return os.path.join(self.paths.launcher_dir, "matrix-leads.jsonl")
+
+    @property
+    def acquisition_path(self) -> str:
+        return os.path.join(self.paths.launcher_dir, "matrix-acquisition.json")
 
     def register_device(self, raw: Json) -> Json:
         devices = self._load_registered_devices()
@@ -274,6 +279,143 @@ class MatrixControlPlane:
         rows = self._read_jsonl(self.leads_path)
         bounded = max(1, min(int(limit or 100), 500))
         return {"schema": "loom.matrix.leads.v1", "leads": _redact_json(rows[-bounded:])}
+
+    def acquisition_snapshot(self) -> Json:
+        state = self._load_acquisition_state()
+        drafts = [item for item in state["drafts"] if isinstance(item, dict)]
+        feishu = FeishuAcquisitionIntegration(self.paths).status()
+        return _redact_json(
+            {
+                "schema": "loom.customer_acquisition.v1",
+                "updatedAt": state.get("updatedAt") or _now_iso(),
+                "contentTasks": state["contentTasks"][-50:],
+                "leads": state["leads"][-100:],
+                "customers": state["customers"][-100:],
+                "drafts": drafts[-100:],
+                "sop": state["sop"],
+                "logs": state["logs"][-100:],
+                "stats": {
+                    "contentTasks": len(state["contentTasks"]),
+                    "leads": len(state["leads"]),
+                    "customers": len(state["customers"]),
+                    "draftsPending": sum(1 for item in drafts if item.get("status") == "pending_manual_review"),
+                    "approvedDrafts": sum(1 for item in drafts if item.get("status") == "approved_pending_manual_send"),
+                    "pendingSync": sum(1 for item in state["leads"] if item.get("syncStatus") in {"pending_sync", "sync_failed"}),
+                },
+                "outboundPolicy": _acquisition_policy(),
+                "integrations": {
+                    "feishu": feishu,
+                },
+            }
+        )
+
+    def create_acquisition_demo_flow(self, raw: Json) -> Json:
+        state = self._load_acquisition_state()
+        now = _now_iso()
+        topic = _clip(raw.get("topic") or "AI 矩阵获客内容", 120)
+        platform = _acquisition_platform(raw.get("platform"))
+        channel = _acquisition_channel(raw.get("channel"))
+        knowledge = _safe_lead_summary(raw.get("knowledge") or "先判断客户意图，再给出案例和人工跟进入口。", limit=320)
+        lead_summary = _safe_lead_summary(
+            raw.get("leadSummary") or raw.get("summary") or "评论区出现潜在线索，适合进入人工跟进。",
+            limit=320,
+        )
+        content_task = {
+            "taskId": f"content_{uuid.uuid4().hex[:10]}",
+            "createdAt": now,
+            "title": topic,
+            "platform": platform,
+            "status": "draft_ready",
+            "assetPlan": [
+                "短视频脚本",
+                "评论区线索观察",
+                "人工确认后跟进",
+            ],
+        }
+        lead = {
+            "leadId": f"lead_{uuid.uuid4().hex[:12]}",
+            "createdAt": now,
+            "updatedAt": now,
+            "source": "demo_flow",
+            "platform": platform,
+            "channel": channel,
+            "status": "qualified",
+            "title": f"{topic} 线索",
+            "summary": lead_summary,
+            "tags": ["mvp-demo", channel, platform],
+        }
+        customer = {
+            "customerId": f"customer_{uuid.uuid4().hex[:12]}",
+            "createdAt": now,
+            "updatedAt": now,
+            "leadId": lead["leadId"],
+            "name": f"{platform.upper()} 潜在客户",
+            "stage": "needs_follow_up",
+            "summary": lead_summary,
+            "allowedChannels": [channel],
+        }
+        draft = {
+            "draftId": f"draft_{uuid.uuid4().hex[:12]}",
+            "createdAt": now,
+            "updatedAt": now,
+            "leadId": lead["leadId"],
+            "customerId": customer["customerId"],
+            "channel": channel,
+            "status": "pending_manual_review",
+            "requiresHumanReview": True,
+            "sendEnabled": False,
+            "policy": _acquisition_policy(),
+            "body": _safe_lead_summary(
+                f"您好，看到您关注「{topic}」。{knowledge} 如果方便，我可以先整理一份方案草稿，您确认后再继续沟通。",
+                limit=500,
+            ),
+        }
+        sync = FeishuAcquisitionIntegration(self.paths).sync_lead(
+            {
+                **lead,
+                "sourceTask": content_task["title"],
+                "draft": draft["body"],
+                "recommendedAction": "人工确认后跟进",
+                "logId": lead["leadId"],
+            }
+        )
+        lead["syncStatus"] = sync.get("syncStatus") or "pending_sync"
+        lead["syncError"] = sync.get("syncError") or ""
+        lead["feishuRecordId"] = sync.get("recordId") or ""
+        state["contentTasks"].append(content_task)
+        state["leads"].append(lead)
+        state["customers"].append(customer)
+        state["drafts"].append(draft)
+        state["logs"].extend(
+            [
+                _acquisition_log("content_task.created", f"内容任务已生成：{topic}", now),
+                _acquisition_log("lead.qualified", f"线索进入线索池：{lead['title']}", now),
+                _acquisition_log("customer.created", "线索已沉淀到客户池", now),
+                _acquisition_log("draft.created", "跟进草稿已生成，等待人工确认，不会自动发送", now),
+            ]
+        )
+        state["updatedAt"] = now
+        self._write_acquisition_state(state)
+        return _redact_json({"contentTask": content_task, "lead": lead, "customer": customer, "draft": draft})
+
+    def confirm_acquisition_draft(self, draft_id: str, raw: Json | None = None) -> Json:
+        state = self._load_acquisition_state()
+        body = raw if isinstance(raw, dict) else {}
+        safe_id = _clip(draft_id, 80)
+        now = _now_iso()
+        for draft in state["drafts"]:
+            if not isinstance(draft, dict) or draft.get("draftId") != safe_id:
+                continue
+            draft["status"] = "approved_pending_manual_send"
+            draft["updatedAt"] = now
+            draft["approvedBy"] = _clip(body.get("operator") or "human", 80)
+            draft["sendEnabled"] = False
+            draft["requiresHumanReview"] = True
+            state["logs"].append(_acquisition_log("draft.approved", "草稿已人工确认，仍需在白名单和频控下手动发送", now))
+            state["updatedAt"] = now
+            self._write_acquisition_state(state)
+            return _redact_json({"draft": draft, "snapshot": self.acquisition_snapshot()})
+        return {"error": "draft not found", "draftId": safe_id}
 
     def watch(self, campaign_id: str | None = None, *, limit: int = 100) -> Json:
         events = self._load_events()
@@ -667,6 +809,37 @@ class MatrixControlPlane:
             data["campaigns"] = []
         return data
 
+    def _load_acquisition_state(self) -> Json:
+        data = self._read_json(
+            self.acquisition_path,
+            {
+                "schema": "loom.customer_acquisition.v1",
+                "updatedAt": "",
+                "contentTasks": [],
+                "leads": [],
+                "customers": [],
+                "drafts": [],
+                "logs": [],
+                "sop": _default_acquisition_sop(),
+            },
+        )
+        for key in ("contentTasks", "leads", "customers", "drafts", "logs"):
+            if not isinstance(data.get(key), list):
+                data[key] = []
+        if not isinstance(data.get("sop"), list):
+            data["sop"] = _default_acquisition_sop()
+        data["schema"] = "loom.customer_acquisition.v1"
+        return data
+
+    def _write_acquisition_state(self, state: Json) -> None:
+        state["schema"] = "loom.customer_acquisition.v1"
+        state["contentTasks"] = state.get("contentTasks", [])[-200:]
+        state["leads"] = state.get("leads", [])[-500:]
+        state["customers"] = state.get("customers", [])[-500:]
+        state["drafts"] = state.get("drafts", [])[-500:]
+        state["logs"] = state.get("logs", [])[-500:]
+        self._write_json(self.acquisition_path, state)
+
     def _load_events(self) -> list[Json]:
         return self._read_jsonl(self.events_path)
 
@@ -848,6 +1021,53 @@ def _lead_status(value: Any) -> str:
     if text in {"new", "qualified", "follow-up", "ignored", "closed"}:
         return text
     return "new"
+
+
+def _acquisition_platform(value: Any) -> str:
+    text = str(value or "douyin").strip().lower()
+    if text in {"douyin", "xiaohongshu", "wechat", "bilibili", "kuaishou", "manual"}:
+        return text
+    return "manual"
+
+
+def _acquisition_channel(value: Any) -> str:
+    text = str(value or "comment").strip().lower()
+    if text in {"comment", "dm", "wechat", "phone", "manual"}:
+        return text
+    return "manual"
+
+
+def _acquisition_policy() -> list[str]:
+    return ["draft_only", "manual_confirm", "whitelist", "frequency_cap", "audit_log"]
+
+
+def _default_acquisition_sop() -> list[Json]:
+    return [
+        {
+            "id": "qualify",
+            "title": "识别意图",
+            "text": "先确认客户场景、预算和时间窗口，不承诺效果。",
+        },
+        {
+            "id": "reply",
+            "title": "回复草稿",
+            "text": "所有评论、私信和微信跟进先生成草稿，人工确认后再处理。",
+        },
+        {
+            "id": "risk",
+            "title": "频控留痕",
+            "text": "真实触达必须走白名单、频控和日志留痕。",
+        },
+    ]
+
+
+def _acquisition_log(event_type: str, message: str, timestamp: str | None = None) -> Json:
+    return {
+        "logId": f"log_{uuid.uuid4().hex[:12]}",
+        "timestamp": timestamp or _now_iso(),
+        "type": event_type,
+        "message": _safe_lead_summary(message, limit=260),
+    }
 
 
 def _safe_tags(value: Any) -> list[str]:

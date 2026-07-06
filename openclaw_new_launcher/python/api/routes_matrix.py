@@ -23,6 +23,7 @@ from api.routes_phone import (
     _script_path,
 )
 from core.phone_matrix import MatrixControlPlane, MatrixSafetyError
+from core.feishu_integration import FeishuAcquisitionIntegration
 
 
 def register_matrix_routes(app, ctx) -> None:
@@ -196,6 +197,89 @@ def register_matrix_routes(app, ctx) -> None:
         body = await ctx.body(request)
         return ctx.fastapi_json({"lead": matrix.record_lead(body), "leads": matrix.list_leads(limit=20)})
 
+    @app.api_route("/api/matrix/acquisition", methods=["GET", "POST"])
+    async def matrix_acquisition(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(_matrix(ctx).acquisition_snapshot())
+
+    @app.post("/api/matrix/acquisition/demo")
+    async def matrix_acquisition_demo(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        matrix = _matrix(ctx)
+        flow = matrix.create_acquisition_demo_flow(body)
+        return ctx.fastapi_json({"flow": flow, "snapshot": matrix.acquisition_snapshot()}, 201)
+
+    @app.post("/api/matrix/acquisition/draft/confirm")
+    async def matrix_acquisition_draft_confirm(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        draft_id = str(body.get("draftId") or body.get("id") or "").strip()
+        if not draft_id:
+            return ctx.fastapi_json({"error": "draftId is required"}, 400)
+        result = _matrix(ctx).confirm_acquisition_draft(draft_id, body)
+        status = 404 if result.get("error") else 200
+        return ctx.fastapi_json(result, status)
+
+    @app.api_route("/api/matrix/acquisition/feishu/doctor", methods=["GET", "POST"])
+    async def matrix_acquisition_feishu_doctor(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(_feishu(ctx).doctor())
+
+    @app.api_route("/api/matrix/acquisition/feishu/status", methods=["GET", "POST"])
+    async def matrix_acquisition_feishu_status(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(_feishu(ctx).status())
+
+    @app.post("/api/matrix/acquisition/feishu/install")
+    async def matrix_acquisition_feishu_install(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        if not bool(body.get("confirmed")):
+            return ctx.fastapi_json(_feishu(ctx).install_cli(confirmed=False), 202)
+        return ctx.fastapi_json(_feishu(ctx).install_cli(confirmed=True))
+
+    @app.post("/api/matrix/acquisition/feishu/login")
+    async def matrix_acquisition_feishu_login(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        try:
+            return ctx.fastapi_json(_feishu(ctx).start_login())
+        except RuntimeError as exc:
+            return ctx.fastapi_json({"ok": False, "error": str(exc)}, 400)
+
+    @app.post("/api/matrix/acquisition/feishu/bind-table")
+    async def matrix_acquisition_feishu_bind_table(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        return ctx.fastapi_json(_feishu(ctx).bind_table(body))
+
+    @app.post("/api/matrix/acquisition/feishu/create-table")
+    async def matrix_acquisition_feishu_create_table(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        return ctx.fastapi_json(_feishu(ctx).create_table(confirmed=bool(body.get("confirmed"))))
+
+    @app.post("/api/matrix/acquisition/feishu/test-write")
+    async def matrix_acquisition_feishu_test_write(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(_feishu(ctx).test_write())
+
+    @app.post("/api/matrix/acquisition/feishu/retry-sync")
+    async def matrix_acquisition_feishu_retry_sync(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(_feishu(ctx).retry_pending())
+
     @app.post("/api/matrix/template/run")
     async def matrix_template_run(request: Request):
         if error := ctx.auth_error(request):
@@ -225,6 +309,10 @@ def register_matrix_routes(app, ctx) -> None:
 
 def _matrix(ctx) -> MatrixControlPlane:
     return MatrixControlPlane(ctx.paths)
+
+
+def _feishu(ctx) -> FeishuAcquisitionIntegration:
+    return FeishuAcquisitionIntegration(ctx.paths)
 
 
 def _matrix_event_sync_best_effort(ctx) -> dict:

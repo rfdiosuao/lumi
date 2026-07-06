@@ -23,6 +23,7 @@ function iconFor(item: NavItem): IconName {
   if (key === 'dashboard') return 'rocket';
   if (key === 'agents') return 'box';
   if (key === 'creative') return 'creative';
+  if (key === 'acquisition') return 'matrix';
   if (key === 'phone') return 'phone';
   if (key === 'workbench') return 'matrix';
   if (key === 'capabilities') return 'capability';

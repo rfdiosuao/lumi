@@ -14,6 +14,7 @@ function lazyNamed(
 const TerminalPage = lazyNamed(() => import('../components/terminal/TerminalPage'), 'TerminalPage');
 const AgentInstallerPage = lazyNamed(() => import('../components/agents/AgentInstallerPage'), 'AgentInstallerPage');
 const CreativeMediaPage = lazyNamed(() => import('../components/creative/CreativeMediaPage'), 'CreativeMediaPage');
+const AcquisitionWorkbenchPage = lazyNamed(() => import('../components/acquisition/AcquisitionWorkbenchPage'), 'AcquisitionWorkbenchPage');
 const PhoneDemoPage = lazyNamed(() => import('../components/phone/PhoneDemoPage'), 'PhoneDemoPage');
 const MatrixWorkbenchPage = lazyNamed(() => import('../components/matrix/MatrixWorkbenchPage'), 'MatrixWorkbenchPage');
 const CapabilityCenterPage = lazyNamed(() => import('../components/capabilities/CapabilityCenterPage'), 'CapabilityCenterPage');
@@ -27,6 +28,7 @@ const PAGE_COMPONENTS: Record<string, React.ComponentType> = {
   dashboard: DashboardPage,
   agents: AgentInstallerPage,
   creative: CreativeMediaPage,
+  acquisition: AcquisitionWorkbenchPage,
   phone: PhoneDemoPage,
   workbench: MatrixWorkbenchPage,
   capabilities: CapabilityCenterPage,

@@ -951,6 +951,129 @@ export const matrixApi = {
   experience: (): Promise<Record<string, unknown>> => api('/api/matrix/experience'),
 };
 
+export interface AcquisitionContentTask {
+  taskId: string;
+  createdAt?: string;
+  title: string;
+  platform: string;
+  status: string;
+  assetPlan?: string[];
+}
+
+export interface AcquisitionLead {
+  leadId: string;
+  title: string;
+  summary: string;
+  platform?: string;
+  channel?: string;
+  status: string;
+  syncStatus?: 'pending_sync' | 'sync_failed' | 'synced' | string;
+  syncError?: string;
+  feishuRecordId?: string;
+  tags?: string[];
+}
+
+export interface AcquisitionCustomer {
+  customerId: string;
+  leadId?: string;
+  name: string;
+  stage: string;
+  summary?: string;
+  allowedChannels?: string[];
+}
+
+export interface AcquisitionDraft {
+  draftId: string;
+  leadId?: string;
+  customerId?: string;
+  channel: string;
+  status: string;
+  body: string;
+  requiresHumanReview: boolean;
+  sendEnabled: boolean;
+  policy: string[];
+}
+
+export interface AcquisitionSnapshot {
+  schema: 'loom.customer_acquisition.v1' | string;
+  updatedAt?: string;
+  contentTasks: AcquisitionContentTask[];
+  leads: AcquisitionLead[];
+  customers: AcquisitionCustomer[];
+  drafts: AcquisitionDraft[];
+  sop: Array<{ id: string; title: string; text: string }>;
+  logs: Array<{ logId?: string; timestamp?: string; type?: string; message?: string }>;
+  stats: {
+    contentTasks: number;
+    leads: number;
+    customers: number;
+    draftsPending: number;
+    approvedDrafts: number;
+    pendingSync?: number;
+  };
+  outboundPolicy: string[];
+  integrations?: {
+    feishu?: FeishuStatus;
+  };
+}
+
+export const acquisitionApi = {
+  snapshot: (): Promise<AcquisitionSnapshot> => api('/api/matrix/acquisition'),
+  runDemo: (params: {
+    topic: string;
+    platform: string;
+    channel: string;
+    leadSummary: string;
+    knowledge: string;
+  }): Promise<{ flow: Record<string, unknown>; snapshot: AcquisitionSnapshot }> =>
+    api('/api/matrix/acquisition/demo', 'POST', params),
+  confirmDraft: (draftId: string): Promise<{ draft: AcquisitionDraft; snapshot: AcquisitionSnapshot }> =>
+    api('/api/matrix/acquisition/draft/confirm', 'POST', { draftId, operator: 'launcher-user' }),
+};
+
+export interface FeishuStatus {
+  schema?: string;
+  cliInstalled?: boolean;
+  connected?: boolean;
+  pendingCount?: number;
+  auth?: {
+    loggedIn?: boolean;
+    botReady?: boolean;
+    identity?: string;
+    userName?: string;
+    message?: string;
+  };
+  table?: {
+    url?: string;
+    baseToken?: string;
+    tableId?: string;
+    name?: string;
+    fields?: string[];
+  };
+  lastSync?: {
+    leadId?: string;
+    syncStatus?: string;
+    syncError?: string;
+    recordId?: string;
+    updatedAt?: string;
+  };
+}
+
+export const feishuApi = {
+  doctor: (): Promise<Record<string, unknown>> => api('/api/matrix/acquisition/feishu/doctor'),
+  status: (): Promise<FeishuStatus> => api('/api/matrix/acquisition/feishu/status'),
+  install: (confirmed = false): Promise<Record<string, unknown>> =>
+    api('/api/matrix/acquisition/feishu/install', 'POST', { confirmed }),
+  login: (): Promise<{ ok?: boolean; loginUrl?: string; verificationUrl?: string; userCode?: string; qrAscii?: string; error?: string; message?: string }> =>
+    api('/api/matrix/acquisition/feishu/login', 'POST'),
+  bindTable: (params: { url?: string; baseToken?: string; tableId?: string; name?: string }): Promise<{ table?: FeishuStatus['table']; status?: FeishuStatus }> =>
+    api('/api/matrix/acquisition/feishu/bind-table', 'POST', params),
+  createTable: (confirmed = false): Promise<Record<string, unknown>> =>
+    api('/api/matrix/acquisition/feishu/create-table', 'POST', { confirmed }),
+  testWrite: (): Promise<Record<string, unknown>> => api('/api/matrix/acquisition/feishu/test-write', 'POST'),
+  retrySync: (): Promise<Record<string, unknown>> => api('/api/matrix/acquisition/feishu/retry-sync', 'POST'),
+};
+
 // === Runtime wire API ===
 export interface WireSnapshot {
   ok?: boolean;
