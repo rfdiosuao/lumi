@@ -24,6 +24,7 @@ from api.routes_phone import (
 )
 from core.phone_matrix import MatrixControlPlane, MatrixSafetyError
 from core.feishu_integration import FeishuAcquisitionIntegration
+from core.acquisition_templates import AcquisitionTemplateLibrary
 
 
 def register_matrix_routes(app, ctx) -> None:
@@ -224,6 +225,35 @@ def register_matrix_routes(app, ctx) -> None:
         status = 404 if result.get("error") else 200
         return ctx.fastapi_json(result, status)
 
+    @app.api_route("/api/matrix/acquisition/templates", methods=["GET", "POST"])
+    async def matrix_acquisition_templates(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(_templates(ctx).status())
+
+    @app.post("/api/matrix/acquisition/templates/save")
+    async def matrix_acquisition_template_save(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        return ctx.fastapi_json(_templates(ctx).save_from_acquisition(body), 201)
+
+    @app.post("/api/matrix/acquisition/templates/upload")
+    async def matrix_acquisition_template_upload(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        template_id = str(body.get("templateId") or body.get("id") or "").strip()
+        if not template_id:
+            return ctx.fastapi_json({"error": "templateId is required"}, 400)
+        return ctx.fastapi_json(_templates(ctx).upload_template(template_id))
+
+    @app.post("/api/matrix/acquisition/templates/retry")
+    async def matrix_acquisition_template_retry(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(_templates(ctx).retry_pending())
+
     @app.api_route("/api/matrix/acquisition/feishu/doctor", methods=["GET", "POST"])
     async def matrix_acquisition_feishu_doctor(request: Request):
         if error := ctx.auth_error(request):
@@ -313,6 +343,10 @@ def _matrix(ctx) -> MatrixControlPlane:
 
 def _feishu(ctx) -> FeishuAcquisitionIntegration:
     return FeishuAcquisitionIntegration(ctx.paths)
+
+
+def _templates(ctx) -> AcquisitionTemplateLibrary:
+    return AcquisitionTemplateLibrary(ctx.paths)
 
 
 def _matrix_event_sync_best_effort(ctx) -> dict:

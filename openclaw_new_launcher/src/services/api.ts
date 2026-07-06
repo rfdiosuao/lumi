@@ -1017,6 +1017,42 @@ export interface AcquisitionSnapshot {
   };
 }
 
+export interface AcquisitionTemplateSummary {
+  schema?: string;
+  templateId: string;
+  version?: number;
+  name: string;
+  industry?: string;
+  platforms?: string[];
+  targetCustomer?: string;
+  uploadStatus?: 'pending_upload' | 'upload_failed' | 'uploaded' | string;
+  uploadError?: string;
+  remote?: {
+    templateId?: string;
+    version?: number;
+    url?: string;
+    uploadedAt?: string;
+    serverUrl?: string;
+  };
+  updatedAt?: string;
+}
+
+export interface AcquisitionTemplateStatus {
+  schema?: string;
+  updatedAt?: string;
+  cloud?: {
+    configured?: boolean;
+    serverUrl?: string;
+    tokenConfigured?: boolean;
+  };
+  stats?: {
+    total?: number;
+    pendingUpload?: number;
+    uploaded?: number;
+  };
+  templates?: AcquisitionTemplateSummary[];
+}
+
 export const acquisitionApi = {
   snapshot: (): Promise<AcquisitionSnapshot> => api('/api/matrix/acquisition'),
   runDemo: (params: {
@@ -1029,6 +1065,25 @@ export const acquisitionApi = {
     api('/api/matrix/acquisition/demo', 'POST', params),
   confirmDraft: (draftId: string): Promise<{ draft: AcquisitionDraft; snapshot: AcquisitionSnapshot }> =>
     api('/api/matrix/acquisition/draft/confirm', 'POST', { draftId, operator: 'launcher-user' }),
+  templates: (): Promise<AcquisitionTemplateStatus> => api('/api/matrix/acquisition/templates'),
+  saveTemplate: (params: {
+    name?: string;
+    topic?: string;
+    industry?: string;
+    platforms?: string[];
+    platform?: string;
+    targetCustomer?: string;
+    target?: string;
+    keywords?: string[];
+    leadRules?: string[];
+    replyStyle?: string;
+    knowledge?: string;
+  }): Promise<{ template: AcquisitionTemplateSummary; upload?: Record<string, unknown>; status?: AcquisitionTemplateStatus }> =>
+    api('/api/matrix/acquisition/templates/save', 'POST', params),
+  uploadTemplate: (templateId: string): Promise<Record<string, unknown>> =>
+    api('/api/matrix/acquisition/templates/upload', 'POST', { templateId }),
+  retryTemplates: (): Promise<Record<string, unknown>> =>
+    api('/api/matrix/acquisition/templates/retry', 'POST'),
 };
 
 export interface FeishuStatus {

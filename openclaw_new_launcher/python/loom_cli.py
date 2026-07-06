@@ -1196,8 +1196,23 @@ def _matrix(args: list[str], ctx: CliContext) -> Json:
 
 def _template(args: list[str], ctx: CliContext) -> Json:
     action = args[0] if args else "run"
+    if action in {"list", "status"}:
+        _require_permission(ctx, "read")
+        return _bridge_call(ctx, "GET", "/api/matrix/acquisition/templates", {})
+    if action == "save":
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/templates/save", _template_save_body(args))
+    if action == "upload":
+        _require_permission(ctx, "control")
+        template_id = _option(args, "--template-id") or _option(args, "--id") or _positional(args, 1)
+        if not template_id:
+            raise CliError("missing_template_id", "Provide --template-id for template upload.")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/templates/upload", {"templateId": template_id})
+    if action == "retry":
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/templates/retry", {})
     if action != "run":
-        raise CliError("unknown_command", "模板命令只开放 run。")
+        raise CliError("unknown_command", "模板命令只开放 run、list、save、upload、retry。")
     template = _option(args, "--template") or _positional(args, 1) or "read-screen"
     prompt = _option(args, "--prompt") or PHONE_TEMPLATE_PROMPTS.get(template, "")
     permission = "read" if template in {"read-screen", "screen-summary"} else "control"
@@ -1213,6 +1228,23 @@ def _template(args: list[str], ctx: CliContext) -> Json:
         body["confirmed"] = True
     _check_matrix_safety(body)
     return _bridge_call(ctx, "POST", "/api/matrix/template/run", body)
+
+
+def _template_save_body(args: list[str]) -> Json:
+    platform = _option(args, "--platform") or "manual"
+    return {
+        "name": _option(args, "--name") or _option(args, "--topic") or "获客打法模板",
+        "topic": _option(args, "--topic") or _option(args, "--name") or "获客打法模板",
+        "industry": _option(args, "--industry") or _option(args, "--category") or "通用获客",
+        "platform": platform,
+        "platforms": _csv_option(args, "--platforms") or [platform],
+        "targetCustomer": _option(args, "--target") or _option(args, "--target-customer") or "",
+        "keywords": _csv_option(args, "--keywords"),
+        "leadRules": _csv_option(args, "--lead-rules") or _csv_option(args, "--rules"),
+        "replyStyle": _option(args, "--reply-style") or _option(args, "--knowledge") or "",
+        "knowledge": _option(args, "--knowledge") or _option(args, "--reply-style") or "",
+        "source": "loom_cli",
+    }
 
 
 def _experience(args: list[str], ctx: CliContext) -> Json:
@@ -1648,6 +1680,13 @@ def _multi_option(args: list[str], name: str) -> list[str]:
         elif item.startswith(prefix):
             values.append(item.split("=", 1)[1])
     return [value for value in values if value]
+
+
+def _csv_option(args: list[str], name: str) -> list[str]:
+    values: list[str] = []
+    for raw in _multi_option(args, name):
+        values.extend(part.strip() for part in re.split(r"[,，、]", raw) if part.strip())
+    return values
 
 
 def _flag(args: list[str], name: str) -> bool:

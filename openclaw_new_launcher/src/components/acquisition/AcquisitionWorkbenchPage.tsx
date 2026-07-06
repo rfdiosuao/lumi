@@ -6,6 +6,7 @@ import {
   type AcquisitionDraft,
   type AcquisitionLead,
   type AcquisitionSnapshot,
+  type AcquisitionTemplateStatus,
   type FeishuStatus,
 } from '../../services/api';
 import { Button, Input, TextArea, showToast } from '../common';
@@ -126,20 +127,32 @@ export const AcquisitionWorkbenchPage = () => {
   const [loading, setLoading] = React.useState(false);
   const [confirmingId, setConfirmingId] = React.useState('');
   const [feishuBusy, setFeishuBusy] = React.useState('');
+  const [templateBusy, setTemplateBusy] = React.useState('');
+  const [templateStatus, setTemplateStatus] = React.useState<AcquisitionTemplateStatus | null>(null);
   const [tableUrl, setTableUrl] = React.useState('');
   const [loginGuide, setLoginGuide] = React.useState<{ loginUrl?: string; userCode?: string; qrAscii?: string } | null>(null);
+
+  const refreshTemplates = React.useCallback(async () => {
+    try {
+      setTemplateStatus(await acquisitionApi.templates());
+    } catch {
+      setTemplateStatus(null);
+    }
+  }, []);
 
   const refresh = React.useCallback(async () => {
     try {
       setSnapshot(await acquisitionApi.snapshot());
+      void refreshTemplates();
     } catch (error) {
       showToast(parseErrorText(error) || '读取获客工作台失败', 'error');
     }
-  }, []);
+  }, [refreshTemplates]);
 
   React.useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshTemplates();
+  }, [refresh, refreshTemplates]);
 
   const runDemo = async () => {
     if (!topic.trim() || !leadSummary.trim()) {
@@ -247,12 +260,52 @@ export const AcquisitionWorkbenchPage = () => {
     }
   };
 
+  const saveTemplate = async () => {
+    setTemplateBusy('save');
+    try {
+      const result = await acquisitionApi.saveTemplate({
+        name: `${topic || '获客'}模板`,
+        topic,
+        industry: target.split(/[，,、/]/)[0] || '通用获客',
+        platform,
+        platforms: [platform],
+        targetCustomer: target,
+        keywords: [topic, target].filter(Boolean),
+        leadRules: ['询价', '问方案', '问案例', '表达合作意向'],
+        replyStyle: knowledge,
+        knowledge,
+      });
+      setTemplateStatus(result.status || await acquisitionApi.templates());
+      const uploaded = result.template?.uploadStatus === 'uploaded';
+      showToast(uploaded ? '模板已沉淀并自动上传服务器' : '模板已沉淀，服务器未配置时会保留待上传', uploaded ? 'success' : 'info');
+    } catch (error) {
+      showToast(parseErrorText(error) || '沉淀模板失败', 'error');
+    } finally {
+      setTemplateBusy('');
+    }
+  };
+
+  const retryTemplateUpload = async () => {
+    setTemplateBusy('retry');
+    try {
+      const result = await acquisitionApi.retryTemplates();
+      setTemplateStatus((result as { status?: AcquisitionTemplateStatus }).status || await acquisitionApi.templates());
+      showToast('已重试上传待同步模板', 'success');
+    } catch (error) {
+      showToast(parseErrorText(error) || '重试上传模板失败', 'error');
+    } finally {
+      setTemplateBusy('');
+    }
+  };
+
   const pendingDraft = latestPendingDraft(snapshot);
   const latestDraft = snapshot.drafts[snapshot.drafts.length - 1] || null;
   const visibleDraft = pendingDraft || latestDraft;
   const lead = latestLead(snapshot);
   const feishu = snapshot.integrations?.feishu;
   const pendingSync = snapshot.stats.pendingSync || feishu?.pendingCount || 0;
+  const templateStats = templateStatus?.stats || {};
+  const latestTemplate = templateStatus?.templates?.[templateStatus.templates.length - 1];
 
   return (
     <div data-acquisition-workbench className="h-full overflow-auto bg-[#EEF2F5] text-[#18212A]">
@@ -453,6 +506,42 @@ export const AcquisitionWorkbenchPage = () => {
           </section>
 
           <aside className="flex min-h-0 flex-col gap-4">
+            <section data-template-cloud-panel className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-black">云端模板库</h2>
+                  <div className="mt-1 text-xs font-semibold text-[#647181]">
+                    {templateStatus?.cloud?.configured ? '服务器已配置，沉淀后自动上传' : '服务器未配置，模板会先进入待上传'}
+                  </div>
+                </div>
+                <span className="rounded-[6px] bg-[#E0F2FE] px-2 py-1 text-[11px] font-black text-[#075985]">自动上传</span>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-xs font-bold text-[#475569]">
+                <div className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">总数：{templateStats.total || 0}</div>
+                <div className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">待上传：{templateStats.pendingUpload || 0}</div>
+                <div className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">已上传：{templateStats.uploaded || 0}</div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="primary" onClick={() => void saveTemplate()} disabled={Boolean(templateBusy)} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">
+                  {templateBusy === 'save' ? '沉淀中...' : '沉淀为模板并上传服务器'}
+                </Button>
+                <Button variant="quiet" onClick={() => void retryTemplateUpload()} disabled={Boolean(templateBusy)} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">
+                  重试待上传
+                </Button>
+              </div>
+              <div className="mt-3 rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3 text-xs font-semibold leading-5 text-[#647181]">
+                {latestTemplate ? (
+                  <>
+                    <div className="font-black text-[#1F2937]">{latestTemplate.name}</div>
+                    <div>状态：{templateUploadLabel(latestTemplate.uploadStatus || '')}</div>
+                    <div className="break-all">服务器：{latestTemplate.remote?.url || templateStatus?.cloud?.serverUrl || '待配置'}</div>
+                  </>
+                ) : (
+                  <div>还没有沉淀模板。跑通一个获客任务后，可以把行业、关键词、筛选规则和话术风格保存成模板。</div>
+                )}
+              </div>
+            </section>
+
             <section data-feishu-sync-panel data-acquisition-feishu-sync className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
               <div className="flex items-start justify-between gap-2">
                 <div>
@@ -543,6 +632,13 @@ function policyLabel(value: string): string {
   if (value === 'frequency_cap') return '频控';
   if (value === 'audit_log') return '日志留痕';
   return value;
+}
+
+function templateUploadLabel(value: string): string {
+  if (value === 'uploaded') return '已上传';
+  if (value === 'upload_failed') return '上传失败';
+  if (value === 'pending_upload') return '待上传';
+  return value || '待上传';
 }
 
 function LeadColumn({
