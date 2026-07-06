@@ -12,14 +12,14 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from typing import Callable, List
 
 from core.constants import APP_PORT
 from core.paths import AppPaths
 
 UiCall = Callable[..., None]
 LogCall = Callable[[str], None]
-CommandRunner = Callable[[list[str], int], subprocess.CompletedProcess]
+CommandRunner = Callable[[List[str], int], subprocess.CompletedProcess]
 
 
 class OpenClawProcessService:

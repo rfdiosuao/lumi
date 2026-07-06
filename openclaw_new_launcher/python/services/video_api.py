@@ -8,7 +8,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from typing import Callable
 
 from core.constants import DASHSCOPE_TASK_URL, DASHSCOPE_VIDEO_URL, VIDEO_MODEL_I2V, VIDEO_MODEL_T2V
 

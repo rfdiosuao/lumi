@@ -9,7 +9,7 @@ import threading
 import time
 import traceback
 import uuid
-from collections.abc import Callable
+from typing import Callable
 
 from core.reliability import classify_failure
 

@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import threading
-from collections.abc import Callable
+from typing import Callable
 
 from core.paths import AppPaths
 

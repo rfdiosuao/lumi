@@ -14,8 +14,8 @@ import socket
 import tempfile
 import threading
 import time
-from collections.abc import Callable
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from typing import Callable
 from urllib.parse import urlparse
 
 # Ensure the python package root is on sys.path

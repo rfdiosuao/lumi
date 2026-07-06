@@ -12,7 +12,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from typing import Callable
 
 from core.paths import AppPaths
 

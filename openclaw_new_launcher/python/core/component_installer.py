@@ -14,7 +14,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, List
 from urllib.request import Request, urlopen
 
 from core.component_state import ComponentState, ComponentStateStore
@@ -25,7 +25,7 @@ from core.secret_store import unprotect_secret
 ComponentFetcher = Callable[[str, float], bytes]
 ComponentHealthChecker = Callable[[ReleaseComponent, str], None]
 ComponentLauncher = Callable[[str, str], dict]
-ComponentInstallerRunner = Callable[[list[str], str, int], subprocess.CompletedProcess]
+ComponentInstallerRunner = Callable[[List[str], str, int], subprocess.CompletedProcess]
 ProgressCallback = Callable[[str, str], None]
 RetrySleeper = Callable[[float], None]
 
