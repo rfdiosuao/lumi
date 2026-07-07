@@ -21,7 +21,14 @@ class AcquisitionTemplateCloudSyncContractTests(unittest.TestCase):
         from core.acquisition_templates import AcquisitionTemplateLibrary
         from core.paths import AppPaths
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        env = {
+            "LOOM_TEMPLATE_DISABLE_DEFAULT_CLOUD": "1",
+            "LOOM_TEMPLATE_SERVER_URL": "",
+            "LOOM_TEMPLATE_CLOUD_URL": "",
+            "LOOM_TEMPLATE_SERVER_TOKEN": "",
+            "LOOM_TEMPLATE_CLOUD_TOKEN": "",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, env, clear=False):
             library = AcquisitionTemplateLibrary(AppPaths(base_path=temp_dir))
             result = library.save_from_acquisition(
                 {
@@ -40,6 +47,38 @@ class AcquisitionTemplateCloudSyncContractTests(unittest.TestCase):
         self.assertEqual(result["upload"]["status"], "pending_config")
         self.assertEqual(status["stats"]["pendingUpload"], 1)
         self.assertEqual(status["cloud"]["configured"], False)
+
+    def test_template_save_uploads_to_default_cloud_without_client_token(self) -> None:
+        from core.acquisition_templates import AcquisitionTemplateLibrary
+        from core.paths import AppPaths
+
+        calls: list[dict] = []
+
+        def fake_uploader(url: str, token: str, payload: dict, timeout: int = 20) -> dict:
+            calls.append({"url": url, "token": token, "payload": payload, "timeout": timeout})
+            return {"ok": True, "templateId": "remote_default_tpl", "version": 1, "url": "https://api.heang.top/template-admin/?templateId=remote_default_tpl"}
+
+        env = {
+            "LOOM_TEMPLATE_SERVER_URL": "",
+            "LOOM_TEMPLATE_CLOUD_URL": "",
+            "LOOM_TEMPLATE_SERVER_TOKEN": "",
+            "LOOM_TEMPLATE_CLOUD_TOKEN": "",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, env, clear=False):
+            library = AcquisitionTemplateLibrary(AppPaths(base_path=temp_dir), uploader=fake_uploader)
+            result = library.save_from_acquisition(
+                {
+                    "name": "榛樿浜戠妯℃澘",
+                    "industry": "閫氱敤",
+                    "platforms": ["manual"],
+                    "leadRules": ["浜哄伐纭"],
+                }
+            )
+
+        self.assertEqual(result["template"]["uploadStatus"], "uploaded")
+        self.assertEqual(result["upload"]["status"], "uploaded")
+        self.assertEqual(calls[0]["url"], "https://api.heang.top/api/loom/templates")
+        self.assertEqual(calls[0]["token"], "")
 
     def test_template_save_auto_uploads_to_configured_server_and_redacts_secret(self) -> None:
         from core.acquisition_templates import AcquisitionTemplateLibrary
@@ -101,7 +140,14 @@ class AcquisitionTemplateCloudSyncContractTests(unittest.TestCase):
             payload["_meta"] = {"ok": 200 <= status_code < 400 and "error" not in payload, "status": status_code}
             return JSONResponse(status_code=status_code, content=payload)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        env = {
+            "LOOM_TEMPLATE_DISABLE_DEFAULT_CLOUD": "1",
+            "LOOM_TEMPLATE_SERVER_URL": "",
+            "LOOM_TEMPLATE_CLOUD_URL": "",
+            "LOOM_TEMPLATE_SERVER_TOKEN": "",
+            "LOOM_TEMPLATE_CLOUD_TOKEN": "",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, env, clear=False):
             app = FastAPI()
             register_matrix_routes(
                 app,

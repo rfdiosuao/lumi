@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-from template_cloud_server.server import TemplateStore, create_response, decode_payload, require_bearer
+from template_cloud_server.server import TemplateStore, can_write_template, create_response, decode_payload, require_bearer
 
 
 class TemplateCloudServerTests(unittest.TestCase):
@@ -70,6 +70,11 @@ class TemplateCloudServerTests(unittest.TestCase):
         self.assertFalse(require_bearer("Bearer wrong", "abc123"))
         self.assertFalse(require_bearer("", "abc123"))
         self.assertFalse(require_bearer("abc123", "abc123"))
+
+    def test_public_upload_allows_writes_but_not_admin_reads(self) -> None:
+        self.assertTrue(can_write_template("", "admin-token", allow_public_upload=True))
+        self.assertTrue(can_write_template("Bearer admin-token", "admin-token", allow_public_upload=True))
+        self.assertFalse(require_bearer("", "admin-token"))
 
     def test_decode_payload_accepts_utf8_bom(self) -> None:
         payload = decode_payload(b'\xef\xbb\xbf{"templateId":"bom-ok","name":"BOM"}')

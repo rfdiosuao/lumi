@@ -99,7 +99,11 @@ def require_bearer(header: str, token: str) -> bool:
     return header.startswith(prefix) and header[len(prefix) :].strip() == token
 
 
-def make_handler(store: TemplateStore, token: str, public_base: str):
+def can_write_template(header: str, token: str, *, allow_public_upload: bool = False) -> bool:
+    return allow_public_upload or require_bearer(header, token)
+
+
+def make_handler(store: TemplateStore, token: str, public_base: str, *, allow_public_upload: bool = False):
     class Handler(BaseHTTPRequestHandler):
         server_version = "LoomTemplateCloud/1.0"
 
@@ -134,7 +138,7 @@ def make_handler(store: TemplateStore, token: str, public_base: str):
             if parsed.path != "/api/loom/templates":
                 self._json({"error": "not_found"}, 404)
                 return
-            if not self._authorized():
+            if not self._can_write():
                 self._json({"error": "unauthorized"}, 401)
                 return
             try:
@@ -147,6 +151,9 @@ def make_handler(store: TemplateStore, token: str, public_base: str):
 
         def _authorized(self) -> bool:
             return require_bearer(self.headers.get("Authorization", ""), token)
+
+        def _can_write(self) -> bool:
+            return can_write_template(self.headers.get("Authorization", ""), token, allow_public_upload=allow_public_upload)
 
         def _json(self, payload: Json, status: int = 200) -> None:
             data = json.dumps(redact_json(payload), ensure_ascii=False).encode("utf-8")
@@ -314,11 +321,19 @@ def main() -> None:
     parser.add_argument("--db", default=os.environ.get("TEMPLATE_CLOUD_DB", "/opt/loom-template-cloud/templates.json"))
     parser.add_argument("--token", default=os.environ.get("TEMPLATE_CLOUD_TOKEN", ""))
     parser.add_argument("--public-base", default=os.environ.get("TEMPLATE_CLOUD_PUBLIC_BASE", ""))
+    parser.add_argument(
+        "--allow-public-upload",
+        action="store_true",
+        default=str(os.environ.get("TEMPLATE_CLOUD_ALLOW_PUBLIC_UPLOAD", "")).strip().lower() in {"1", "true", "yes"},
+    )
     args = parser.parse_args()
     if not args.token:
         raise SystemExit("TEMPLATE_CLOUD_TOKEN is required")
     store = TemplateStore(args.db)
-    httpd = ThreadingHTTPServer((args.host, args.port), make_handler(store, args.token, args.public_base))
+    httpd = ThreadingHTTPServer(
+        (args.host, args.port),
+        make_handler(store, args.token, args.public_base, allow_public_upload=args.allow_public_upload),
+    )
     print(f"loom-template-cloud listening on {args.host}:{args.port}")
     httpd.serve_forever()
 

@@ -18,6 +18,7 @@ Json = Dict[str, Any]
 TemplateUploader = Callable[[str, str, Json, int], Json]
 
 SENSITIVE_KEY_MARKERS = ("token", "secret", "password", "credential", "api_key", "apikey", "authorization")
+DEFAULT_TEMPLATE_SERVER_URL = "https://api.heang.top/api/loom/templates"
 
 
 class AcquisitionTemplateLibrary:
@@ -38,7 +39,7 @@ class AcquisitionTemplateLibrary:
                 "schema": "loom.acquisition_template_library.v1",
                 "updatedAt": state.get("updatedAt") or _now_iso(),
                 "cloud": {
-                    "configured": bool(cloud["url"] and cloud["token"]),
+                    "configured": bool(cloud["url"]),
                     "serverUrl": cloud["url"],
                     "tokenConfigured": bool(cloud["token"]),
                 },
@@ -73,7 +74,7 @@ class AcquisitionTemplateLibrary:
             return {"status": "not_found", "templateId": _clip(template_id, 120)}
         cloud = self._cloud_config()
         now = _now_iso()
-        if not cloud["url"] or not cloud["token"]:
+        if not cloud["url"]:
             template["uploadStatus"] = "pending_upload"
             template["uploadError"] = "template server is not configured"
             template["updatedAt"] = now
@@ -158,8 +159,12 @@ class AcquisitionTemplateLibrary:
         }
 
     def _cloud_config(self) -> Json:
+        if str(os.environ.get("LOOM_TEMPLATE_DISABLE_DEFAULT_CLOUD") or "").strip().lower() in {"1", "true", "yes"}:
+            default_url = ""
+        else:
+            default_url = DEFAULT_TEMPLATE_SERVER_URL
         return {
-            "url": _clip(os.environ.get("LOOM_TEMPLATE_SERVER_URL") or os.environ.get("LOOM_TEMPLATE_CLOUD_URL") or "", 300),
+            "url": _clip(os.environ.get("LOOM_TEMPLATE_SERVER_URL") or os.environ.get("LOOM_TEMPLATE_CLOUD_URL") or default_url, 300),
             "token": str(os.environ.get("LOOM_TEMPLATE_SERVER_TOKEN") or os.environ.get("LOOM_TEMPLATE_CLOUD_TOKEN") or "").strip(),
         }
 
@@ -196,14 +201,16 @@ class AcquisitionTemplateLibrary:
 
 def _post_template(url: str, token: str, payload: Json, timeout: int = 20) -> Json:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "LOOM-Acquisition-Template/1.0",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         url,
         data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-            "User-Agent": "LOOM-Acquisition-Template/1.0",
-        },
+        headers=headers,
         method="POST",
     )
     try:
