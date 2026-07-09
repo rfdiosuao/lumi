@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string[]]$InstallPaths,
     [string]$ProductName = "Luming AI Matrix Acquisition Workbench",
-    [string]$SecretScanScript = (Join-Path $PSScriptRoot "verify-release-secrets.ps1")
+    [string]$SecretScanScript = (Join-Path $PSScriptRoot "verify-release-secrets.ps1"),
+    [string]$LicenseCodeFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -127,6 +128,176 @@ function Wait-BridgeSession {
     throw "Packaged bridge did not become ready within $TimeoutSeconds seconds"
 }
 
+function Invoke-JsonRequest {
+    param(
+        [string]$Uri,
+        [hashtable]$Headers,
+        [string]$Method = "Get",
+        [object]$Body = $null
+    )
+    $request = @{
+        UseBasicParsing = $true
+        Uri = $Uri
+        Headers = $Headers
+        Method = $Method
+        TimeoutSec = 15
+    }
+    if ($null -ne $Body) {
+        $request["ContentType"] = "application/json"
+        $request["Body"] = $Body | ConvertTo-Json -Compress -Depth 8
+    }
+    try {
+        $response = Invoke-WebRequest @request
+    }
+    catch {
+        $status = 0
+        if ($null -ne $_.Exception.Response) {
+            $status = [int]$_.Exception.Response.StatusCode
+        }
+        throw "JSON request failed with HTTP status $status"
+    }
+    return [pscustomobject]@{
+        Status = [int]$response.StatusCode
+        Payload = $response.Content | ConvertFrom-Json
+    }
+}
+
+function Start-PackagedSession {
+    param(
+        [string]$InstallPath,
+        [string]$DataRoot,
+        [string]$SessionDir
+    )
+    $loomExe = Join-Path $InstallPath "LOOM.exe"
+    $pythonExe = Join-Path $InstallPath "_up_\python-runtime\python.exe"
+    New-Item -ItemType Directory -Path $SessionDir -Force | Out-Null
+    $sessionPath = Join-Path $SessionDir "bridge-session.json"
+    if (Test-Path -LiteralPath $sessionPath -PathType Leaf) {
+        Remove-Item -LiteralPath $sessionPath -Force
+    }
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $loomExe
+    $startInfo.WorkingDirectory = $InstallPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $startInfo.EnvironmentVariables["LOCALAPPDATA"] = $DataRoot
+    $startInfo.EnvironmentVariables["LOOM_BRIDGE_SESSION_DIR"] = $SessionDir
+
+    $appProcess = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        $session = Wait-BridgeSession -SessionPath $sessionPath
+        $bridgePid = [int]$session.pid
+        if ([string]$session.impl -ne "fastapi") {
+            throw "Packaged bridge did not start with FastAPI: $($session.impl)"
+        }
+        $bridgeProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$bridgePid" -ErrorAction Stop
+        $bridgeExecutable = Resolve-NormalizedPath ([string]$bridgeProcess.ExecutablePath)
+        $expectedPython = Resolve-NormalizedPath $pythonExe
+        if (-not $bridgeExecutable.Equals($expectedPython, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Bridge used an unexpected Python runtime: $bridgeExecutable"
+        }
+        return [pscustomobject]@{
+            AppProcess = $appProcess
+            BridgePid = $bridgePid
+            Session = $session
+        }
+    }
+    catch {
+        if ($null -ne $appProcess -and -not $appProcess.HasExited) {
+            Stop-OwnedProcess -ProcessId $appProcess.Id -ExpectedRoot $InstallPath
+        }
+        throw
+    }
+}
+
+function Stop-PackagedSession {
+    param(
+        [object]$RunningSession,
+        [string]$InstallPath
+    )
+    if ($null -eq $RunningSession) {
+        return
+    }
+    $appProcess = $RunningSession.AppProcess
+    if ($null -ne $appProcess -and -not $appProcess.HasExited) {
+        Stop-OwnedProcess -ProcessId $appProcess.Id -ExpectedRoot $InstallPath
+    }
+    Start-Sleep -Milliseconds 500
+    if ([int]$RunningSession.BridgePid -gt 0) {
+        Stop-OwnedProcess -ProcessId ([int]$RunningSession.BridgePid) -ExpectedRoot $InstallPath
+    }
+}
+
+function Test-OnlineLicensePersistence {
+    param(
+        [string]$InstallPath,
+        [string]$CaseDataRoot,
+        [string]$LicenseCode
+    )
+    $requiredFeatures = @(
+        "acquisition.workbench",
+        "acquisition.feishu",
+        "matrix.devices",
+        "templates.cloud",
+        "publishing.draft",
+        "diagnostics.export"
+    )
+    $sessionDir = Join-Path $CaseDataRoot "online-license-session"
+    $firstSession = $null
+    $secondSession = $null
+    try {
+        $firstSession = Start-PackagedSession -InstallPath $InstallPath -DataRoot $CaseDataRoot -SessionDir $sessionDir
+        $firstHeaders = @{ "X-Bridge-Token" = [string]$firstSession.Session.token }
+        $activation = Invoke-JsonRequest -Uri "$($firstSession.Session.url)/api/license/activate" -Headers $firstHeaders -Method "Post" -Body @{ code = $LicenseCode }
+        if ($activation.Status -ne 200 -or $null -eq $activation.Payload.license) {
+            throw "Online activation did not return a signed license"
+        }
+        $activatedLicense = $activation.Payload.license
+        $activatedFeatures = @($activatedLicense.features)
+        $missingFeatures = @($requiredFeatures | Where-Object { $_ -notin $activatedFeatures })
+        if ($missingFeatures.Count -gt 0) {
+            throw "Activated license is missing commercial features: $($missingFeatures -join ',')"
+        }
+        foreach ($field in @("plan", "expiresAt", "deviceLimit")) {
+            if ($field -notin $activatedLicense.PSObject.Properties.Name) {
+                throw "Activated license is missing field: $field"
+            }
+        }
+
+        Stop-PackagedSession -RunningSession $firstSession -InstallPath $InstallPath
+        $firstSession = $null
+        $secondSession = Start-PackagedSession -InstallPath $InstallPath -DataRoot $CaseDataRoot -SessionDir $sessionDir
+        $secondHeaders = @{ "X-Bridge-Token" = [string]$secondSession.Session.token }
+        $current = Invoke-JsonRequest -Uri "$($secondSession.Session.url)/api/license/current" -Headers $secondHeaders
+        if ($current.Status -ne 200 -or [string]$current.Payload.status -ne "authorized") {
+            throw "License did not remain authorized after restart"
+        }
+        $persistedFeatures = @($current.Payload.license.features)
+        $missingPersistedFeatures = @($requiredFeatures | Where-Object { $_ -notin $persistedFeatures })
+        if ($missingPersistedFeatures.Count -gt 0) {
+            throw "Persisted license is missing commercial features: $($missingPersistedFeatures -join ',')"
+        }
+        $matrixStatus = Get-HttpStatus -Uri "$($secondSession.Session.url)/api/matrix/status" -Headers $secondHeaders
+        $acquisitionStatus = Get-HttpStatus -Uri "$($secondSession.Session.url)/api/matrix/acquisition" -Headers $secondHeaders
+        if ($matrixStatus -ne 200 -or $acquisitionStatus -ne 200) {
+            throw "Protected endpoints did not open after activation: matrix=$matrixStatus acquisition=$acquisitionStatus"
+        }
+        return [pscustomobject]@{
+            onlineActivation = 200
+            restartAuthorized = $true
+            commercialFeatures = $requiredFeatures.Count
+            authorizedMatrixEndpoint = $matrixStatus
+            authorizedAcquisitionEndpoint = $acquisitionStatus
+        }
+    }
+    finally {
+        Stop-PackagedSession -RunningSession $firstSession -InstallPath $InstallPath
+        Stop-PackagedSession -RunningSession $secondSession -InstallPath $InstallPath
+    }
+}
+
 function Test-InstalledRuntime {
     param(
         [string]$InstallPath,
@@ -234,6 +405,14 @@ $allowedArtifactsRoot = Resolve-NormalizedPath (Join-Path $repoRoot "artifacts")
 $resolvedSmokeRoot = Assert-ChildPath -Parent $allowedArtifactsRoot -Child $SmokeRoot -Label "Smoke root"
 $resolvedInstaller = (Resolve-Path -LiteralPath $Installer).Path
 $resolvedSecretScanScript = (Resolve-Path -LiteralPath $SecretScanScript).Path
+$licenseCode = ""
+if (-not [string]::IsNullOrWhiteSpace($LicenseCodeFile)) {
+    $resolvedLicenseCodeFile = (Resolve-Path -LiteralPath $LicenseCodeFile).Path
+    $licenseCode = (Get-Content -LiteralPath $resolvedLicenseCodeFile -Raw -Encoding UTF8).Trim()
+    if ($licenseCode.Length -lt 8) {
+        throw "License code file is empty or invalid"
+    }
+}
 if ([System.IO.Path]::GetExtension($resolvedInstaller) -ine ".exe") {
     throw "Installer must be an executable"
 }
@@ -293,6 +472,12 @@ try {
         try {
             $caseDataRoot = Join-Path $resolvedSmokeRoot "$caseName-data"
             $result = Test-InstalledRuntime -InstallPath $installPath -CaseName $caseName -CaseDataRoot $caseDataRoot -SecretScanPath $resolvedSecretScanScript
+            if (-not [string]::IsNullOrWhiteSpace($licenseCode)) {
+                $online = Test-OnlineLicensePersistence -InstallPath $installPath -CaseDataRoot $caseDataRoot -LicenseCode $licenseCode
+                foreach ($property in $online.PSObject.Properties) {
+                    $result | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+                }
+            }
             $results.Add($result)
         }
         finally {
@@ -333,3 +518,4 @@ finally {
 }
 
 $results | ConvertTo-Json -Depth 4
+$licenseCode = ""

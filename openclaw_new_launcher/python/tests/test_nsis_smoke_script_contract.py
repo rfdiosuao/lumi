@@ -28,6 +28,12 @@ class NsisSmokeScriptContractTests(unittest.TestCase):
             "verify-release-secrets.ps1",
             "-SecretScanPath $resolvedSecretScanScript",
             "Remove-Item -LiteralPath $sessionPath -Force",
+            "LicenseCodeFile",
+            "Test-OnlineLicensePersistence",
+            "/api/license/activate",
+            'status -ne "authorized"',
+            "commercialFeatures",
+            "authorizedMatrixEndpoint",
         ):
             self.assertIn(marker, source)
 
