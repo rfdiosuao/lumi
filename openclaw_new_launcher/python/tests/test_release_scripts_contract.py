@@ -69,6 +69,20 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn("data\\.openclaw\\launcher\\wire-current.json", source)
         self.assertIn("data\\logs\\bridge-service.log", source)
 
+    def test_secret_scan_ignores_generated_runtimes_but_allows_known_library_examples(self) -> None:
+        source = read_script("verify-release-secrets.ps1")
+
+        self.assertIn("openclaw_new_launcher/(?:node-runtime|python-runtime)", source)
+        self.assertIn("_up_/python-runtime/Lib/site-packages/PIL/ImageFont.py", source)
+        self.assertIn(
+            "_up_/python-runtime/Lib/site-packages/cryptography/hazmat/primitives/serialization/ssh.py",
+            source,
+        )
+        self.assertIn(
+            "_up_/node-runtime/node_modules/npm/node_modules/@npmcli/config/lib/definitions/definitions.js",
+            source,
+        )
+
     def test_portable_package_keeps_scripts_declared_by_package_json(self) -> None:
         build_source = read_script("build-portable.ps1")
         smoke_source = read_script("verify-portable-smoke.ps1")
