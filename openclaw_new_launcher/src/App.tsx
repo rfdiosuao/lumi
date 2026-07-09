@@ -14,6 +14,7 @@ import { getFeatureDefinition } from './features/registry';
 import { renderFeaturePage } from './features/pages';
 import { SetupGate } from './components/SetupGate';
 import { LoomSplash } from './components/brand/LoomSplash';
+import { LicensePaywall } from './components/license/LicensePaywall';
 
 const NAV_PARENT_BY_PAGE: Record<string, string> = {
   models: 'license',
@@ -67,7 +68,7 @@ export default function App() {
     serviceStatus,
     setServiceStatus,
     isAuthorized,
-    isLicenseChecking,
+    licenseGate,
     checkLicense,
   } = useAppStore();
   const appendLog = useLogStore((s) => s.append);
@@ -104,14 +105,20 @@ export default function App() {
     }
   };
 
+  const commercialAccessGranted = Boolean(isAuthorized && licenseGate.authorized);
+
   useEffect(() => {
     checkLicense();
-    refreshApiConfigured();
-  }, [checkLicense, refreshApiConfigured]);
+  }, [checkLicense]);
+
+  useEffect(() => {
+    if (commercialAccessGranted) refreshApiConfigured();
+  }, [commercialAccessGranted, refreshApiConfigured]);
 
   // Reflect an already-running core service when the launcher is reopened, so
   // status and log polling don't require the user to hit "start" again.
   useEffect(() => {
+    if (!commercialAccessGranted) return undefined;
     let cancelled = false;
     processApi.status().then((status) => {
       if (!cancelled && status.running) {
@@ -122,17 +129,21 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [setServiceRunning, setServiceStatus]);
+  }, [commercialAccessGranted, setServiceRunning, setServiceStatus]);
 
   // Keep log polling in sync with service state (covers the service already
   // running on launch, not just the in-session start button).
   useEffect(() => {
+    if (!commercialAccessGranted) {
+      stopLogPolling();
+      return () => stopLogPolling();
+    }
     if (serviceRunning) startLogPolling();
     else stopLogPolling();
     return () => stopLogPolling();
     // startLogPolling/stopLogPolling are stable closures over refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serviceRunning]);
+  }, [commercialAccessGranted, serviceRunning]);
 
   useEffect(() => {
     const resetOffset = () => {
@@ -141,15 +152,6 @@ export default function App() {
     window.addEventListener('openclaw:logs-cleared', resetOffset);
     return () => window.removeEventListener('openclaw:logs-cleared', resetOffset);
   }, []);
-
-  useEffect(() => {
-    const feature = getFeatureDefinition(currentPage);
-    const allowedWithoutLicense =
-      ['license', 'diagnostics'].includes(currentPage) || !feature?.requiresLicense;
-    if (!isLicenseChecking && !isAuthorized && !allowedWithoutLicense) {
-      setCurrentPage('license');
-    }
-  }, [currentPage, isAuthorized, isLicenseChecking, setCurrentPage]);
 
   const handleStop = async () => {
     setServiceStatus('stopping');
@@ -207,7 +209,7 @@ export default function App() {
   };
 
   const currentFeature = getFeatureDefinition(currentPage);
-  const canOpenCurrentPage = !currentFeature?.requiresLicense || isAuthorized || isLicenseChecking;
+  const canOpenCurrentPage = !currentFeature?.requiresLicense || commercialAccessGranted;
   const visiblePage = canOpenCurrentPage ? currentPage : 'license';
   const activeNavPage = NAV_PARENT_BY_PAGE[visiblePage] || visiblePage;
 
@@ -216,20 +218,24 @@ export default function App() {
       <DynamicTitle />
       <div className="flex h-screen w-screen flex-col overflow-hidden bg-surface text-text">
         <WindowTitlebar />
-        <div className="flex min-h-0 flex-1 overflow-hidden bg-surface">
-          <Sidebar
-            activePage={activeNavPage}
-            serviceRunning={serviceRunning}
-            serviceStatus={serviceStatus}
-            isAuthorized={isAuthorized}
-            isApiConfigured={apiConfigured}
-            onNavigate={handleNavigate}
-            onStop={handleStop}
-          />
-          <main className="relative flex-1 overflow-hidden bg-surface">
-            {renderFeaturePage(visiblePage)}
-          </main>
-        </div>
+        {commercialAccessGranted ? (
+          <div data-commercial-app-shell className="flex min-h-0 flex-1 overflow-hidden bg-surface">
+            <Sidebar
+              activePage={activeNavPage}
+              serviceRunning={serviceRunning}
+              serviceStatus={serviceStatus}
+              isAuthorized={isAuthorized}
+              isApiConfigured={apiConfigured}
+              onNavigate={handleNavigate}
+              onStop={handleStop}
+            />
+            <main className="relative flex-1 overflow-hidden bg-surface">
+              {renderFeaturePage(visiblePage)}
+            </main>
+          </div>
+        ) : (
+          <LicensePaywall />
+        )}
 
         <ToastContainer />
         <ConfirmDialogHost />

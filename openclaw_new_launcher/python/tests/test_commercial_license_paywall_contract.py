@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 
 
@@ -10,6 +11,8 @@ GATE_FILE = os.path.join(REPO_ROOT, "src", "components", "license", "licenseGate
 STORE_FILE = os.path.join(REPO_ROOT, "src", "stores", "appStore.ts")
 API_FILE = os.path.join(REPO_ROOT, "src", "services", "api.ts")
 TYPES_FILE = os.path.join(REPO_ROOT, "src", "types", "index.ts")
+PAYWALL_FILE = os.path.join(REPO_ROOT, "src", "components", "license", "LicensePaywall.tsx")
+APP_FILE = os.path.join(REPO_ROOT, "src", "App.tsx")
 
 
 def read_text(path: str) -> str:
@@ -62,6 +65,46 @@ class CommercialLicenseGateStateContractTests(unittest.TestCase):
         self.assertIn("deviceLimit?: number", types_source)
         self.assertIn("status?: string", types_source)
         self.assertIn("code?: string", types_source)
+
+
+class CommercialLicensePaywallUiContractTests(unittest.TestCase):
+    def test_paywall_exposes_activation_identity_diagnostics_and_commercial_links(self) -> None:
+        self.assertTrue(os.path.exists(PAYWALL_FILE), "commercial paywall component is missing")
+        source = read_text(PAYWALL_FILE)
+
+        for marker in (
+            "data-license-paywall",
+            "data-license-status",
+            "data-license-code-input",
+            "data-license-activate",
+            "data-license-install-id",
+            "data-license-copy-install-id",
+            "data-license-diagnostics-export",
+            "data-license-purchase-link",
+            "data-license-support-link",
+        ):
+            self.assertIn(marker, source)
+
+        self.assertIn('type="password"', source)
+        self.assertIn("licenseApi.activate", source)
+        self.assertIn("diagnosticsApi.export", source)
+        self.assertIn("navigator.clipboard.writeText", source)
+        self.assertIn("safeCommercialUrl", source)
+        self.assertNotIn("gatewayAccessToken", source)
+        self.assertNotIn("gatewayToken", source)
+
+    def test_app_renders_no_protected_shell_before_commercial_authorization(self) -> None:
+        source = read_text(APP_FILE)
+
+        self.assertIn("LicensePaywall", source)
+        self.assertIn("commercialAccessGranted", source)
+        self.assertIn("data-commercial-app-shell", source)
+        self.assertRegex(
+            source,
+            re.compile(
+                r"commercialAccessGranted\s*\?\s*\([\s\S]+?data-commercial-app-shell[\s\S]+?\)\s*:\s*\(\s*<LicensePaywall",
+            ),
+        )
 
 
 if __name__ == "__main__":
