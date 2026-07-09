@@ -13,6 +13,12 @@ import {
   persistAppLanguage,
 } from '../i18n/language';
 import { licenseApi } from '../services/api';
+import {
+  CHECKING_LICENSE_GATE,
+  type LicenseGateSnapshot,
+  normalizeLicenseGate,
+  withLicenseCheckTimeout,
+} from '../components/license/licenseGate';
 
 interface AppState {
   currentPage: string;
@@ -26,6 +32,7 @@ interface AppState {
   isAuthorized: boolean;
   isLicenseChecking: boolean;
   licenseInfo: License | null;
+  licenseGate: LicenseGateSnapshot;
   apiConfigured: boolean;
   themeConfig: ThemeConfig | null;
   themeMode: BuiltinThemeMode;
@@ -62,6 +69,7 @@ export const useAppStore = create<AppState>((set) => ({
   isAuthorized: false,
   isLicenseChecking: true,
   licenseInfo: null,
+  licenseGate: CHECKING_LICENSE_GATE,
   apiConfigured: false,
   themeConfig: getBuiltinTheme(initialThemeMode),
   themeMode: initialThemeMode,
@@ -72,12 +80,13 @@ export const useAppStore = create<AppState>((set) => ({
   setServiceRunning: (serviceRunning) => set({ serviceRunning }),
   setServiceStatus: (serviceStatus) => set({ serviceStatus }),
   setPhoneAgentSnapshot: (snapshot) => set((state) => ({ ...state, ...snapshot })),
-  setAuthorized: (isAuthorized) => {
+  setAuthorized: (authorized) => set((state) => {
+    const isAuthorized = Boolean(authorized && state.licenseInfo?.signature);
     if (!isAuthorized) {
       try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }
     }
-    set({ isAuthorized, isLicenseChecking: false });
-  },
+    return { isAuthorized, isLicenseChecking: false };
+  }),
   setLicenseInfo: (licenseInfo) => {
     set({ licenseInfo });
   },
@@ -91,20 +100,32 @@ export const useAppStore = create<AppState>((set) => ({
   setNavItems: (navItems) => set({ navItems }),
   setLicenseChecking: (val: boolean) => set({ isLicenseChecking: val }),
   checkLicense: async () => {
-    set({ isLicenseChecking: true });
+    set({ isLicenseChecking: true, licenseGate: CHECKING_LICENSE_GATE });
     try {
-      const resp = await licenseApi.current();
-      const gatewayProfile = (resp as any).gatewayProfile;
-      if (resp.license && typeof resp.license === 'object') {
-        set({ isAuthorized: true, licenseInfo: resp.license as License, isLicenseChecking: false });
-      } else if (gatewayProfile && typeof gatewayProfile === 'object') {
-        set({ isAuthorized: true, licenseInfo: gatewayProfile as License, isLicenseChecking: false });
-      } else {
-        set({ isAuthorized: false, licenseInfo: null, isLicenseChecking: false });
+      const [response, config] = await withLicenseCheckTimeout(Promise.allSettled([
+        licenseApi.current(),
+        licenseApi.clientConfig(),
+      ]));
+      const current = response.status === 'fulfilled' ? response.value : null;
+      const clientConfig = config.status === 'fulfilled' ? config.value : null;
+      const licenseGate = normalizeLicenseGate({
+        response: current,
+        config: clientConfig,
+        error: response.status === 'rejected' ? response.reason : undefined,
+        configUnavailable: config.status === 'rejected',
+      });
+      set({
+        isAuthorized: licenseGate.authorized,
+        licenseInfo: licenseGate.license,
+        licenseGate,
+        isLicenseChecking: false,
+      });
+      if (!licenseGate.authorized) {
         try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }
       }
-    } catch {
-      set({ isAuthorized: false, licenseInfo: null, isLicenseChecking: false });
+    } catch (error) {
+      const licenseGate = normalizeLicenseGate({ error });
+      set({ isAuthorized: false, licenseInfo: null, licenseGate, isLicenseChecking: false });
       try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }
     }
   },

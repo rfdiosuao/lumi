@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { APP_DISPLAY_NAME } from '../version';
+import type { License } from '../types';
 
 let bridgeStartup: Promise<void> | null = null;
 let bridgeHttpBase = '';
@@ -274,11 +275,44 @@ export const logApi = {
 };
 
 // === License API ===
+export interface LicenseCurrentResponse {
+  license: License | null;
+  gatewayProfile?: object | null;
+  member?: object | null;
+  status?: string;
+  code?: string;
+  reason?: string;
+  message?: string;
+  installId?: string;
+  deviceId?: string;
+  offline?: boolean;
+}
+
+export interface LicenseClientConfig {
+  purchaseUrl?: string;
+  supportUrl?: string;
+  cardSite?: { enabled?: boolean; label?: string; url?: string };
+}
+
+export interface LicenseAuthorizationResponse {
+  authorized: boolean;
+  feature?: string;
+  code?: string;
+  reason?: string;
+}
+
+export interface LicenseActivationResponse {
+  license: License;
+  status?: string;
+  code?: string;
+  message?: string;
+}
+
 export const licenseApi = {
-  current: (): Promise<{ license: object | null; gatewayProfile?: object | null; member?: object | null }> => api('/api/license/current'),
-  clientConfig: (): Promise<{ cardSite?: { enabled?: boolean; label?: string; url?: string } }> => api('/api/license/client-config'),
-  activate: (code: string): Promise<{ license: object }> => api('/api/license/activate', 'POST', { code }),
-  authorized: (feature?: string): Promise<{ authorized: boolean }> => api('/api/license/authorized', 'POST', { feature }),
+  current: (): Promise<LicenseCurrentResponse> => api('/api/license/current'),
+  clientConfig: (): Promise<LicenseClientConfig> => api('/api/license/client-config'),
+  activate: (code: string): Promise<LicenseActivationResponse> => api('/api/license/activate', 'POST', { code }),
+  authorized: (feature?: string): Promise<LicenseAuthorizationResponse> => api('/api/license/authorized', 'POST', { feature }),
 };
 
 // === Media config API ===

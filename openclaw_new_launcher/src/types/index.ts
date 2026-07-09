@@ -9,10 +9,14 @@ export interface License {
   licensee: string;
   edition: string;
   expires: string | null;
+  expiresAt?: string | null;
   features: string[];
   installId: string;
   deviceId?: string;
+  deviceLimit?: number;
   signature: string;
+  status?: string;
+  code?: string;
   memberId?: string;
   plan?: string;
   memberMode?: boolean;
