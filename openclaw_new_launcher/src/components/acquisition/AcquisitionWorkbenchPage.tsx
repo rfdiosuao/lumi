@@ -1,15 +1,17 @@
 import React from 'react';
+import qrcode from 'qrcode-generator';
 import {
   acquisitionApi,
   feishuApi,
+  matrixApi,
   parseErrorText,
-  type AcquisitionDraft,
-  type AcquisitionLead,
   type AcquisitionSnapshot,
-  type AcquisitionTemplateStatus,
   type FeishuStatus,
+  type MatrixDeviceSummary,
+  type MatrixStatusSnapshot,
 } from '../../services/api';
-import { Button, Input, TextArea, showToast } from '../common';
+import { Button, Input, showConfirm, showToast } from '../common';
+import { buildMcpJson, buildOneShotAgentPrompt } from '../agentAccess/agentPrompt';
 
 const EMPTY_SNAPSHOT: AcquisitionSnapshot = {
   schema: 'loom.customer_acquisition.v1',
@@ -40,66 +42,41 @@ const EMPTY_SNAPSHOT: AcquisitionSnapshot = {
   },
 };
 
-const PLATFORM_OPTIONS = [
-  { id: 'douyin', label: '抖音' },
-  { id: 'xiaohongshu', label: '小红书' },
-  { id: 'wechat', label: '微信' },
-  { id: 'manual', label: '手动导入' },
-];
+const EMPTY_MATRIX_STATUS: MatrixStatusSnapshot = {
+  schema: 'loom.matrix.status.v1',
+  devices: [],
+  summary: {
+    total: 0,
+    online: 0,
+    busy: 0,
+    failed: 0,
+  },
+};
 
-const SOURCE_STEPS = [
-  { title: '手动导入', detail: '先接 CSV、评论 JSON、剪贴板线索，保证安全可控。', state: '已接入' },
-  { title: '评论区导入', detail: '下一步接抖音/小红书评论读取，把意向留言沉淀成线索。', state: '待填能力' },
-  { title: '私信会话导入', detail: '只读取和归档会话，不做无确认群发。', state: '待填能力' },
-  { title: '搜索关键词任务', detail: '按行业、城市、痛点关键词生成采集任务。', state: '设计中' },
-];
-
-const FUNNEL_STEPS = [
-  '获客任务',
-  '线索来源',
-  'AI 筛选',
-  '飞书入表',
-  '待确认触达',
-  '日志复盘',
-];
-
-const CAPABILITY_CARDS = [
-  {
-    title: '自动找线索',
-    detail: '从评论、会话、关键词和手动导入里发现潜在客户，把零散信息变成可跟进线索。',
-    metric: '发现',
-  },
-  {
-    title: 'AI 写话术',
-    detail: '根据客户场景生成开场白、评论回复、私信草稿和下一步跟进建议。',
-    metric: '开口',
-  },
-  {
-    title: '沉淀客户池',
-    detail: '把线索、客户阶段、跟进状态和负责人沉淀下来，避免漏跟进。',
-    metric: '管理',
-  },
-  {
-    title: '同步飞书线索表',
-    detail: '自动把本地线索写入飞书，多维表格成为销售团队的统一客户池。',
-    metric: '入表',
-  },
-  {
-    title: '安全触达队列',
-    detail: '真实评论、私信、加微和发布只进入待确认队列，默认不自动发送。',
-    metric: '风控',
-  },
-];
-
-function statusLabel(value: string): string {
+function statusLabel(value?: string): string {
   if (value === 'pending_manual_review') return '待人工确认';
-  if (value === 'approved_pending_manual_send') return '已确认待手动触达';
+  if (value === 'approved_pending_manual_send') return '已确认待人工触达';
+  if (value === 'manual_sent') return '已记录人工触达';
+  if (value === 'manual_send_failed') return '人工触达失败';
+  if (value === 'contacted') return '已触达';
+  if (value === 'replied') return '已回复';
+  if (value === 'no_reply') return '暂无回复';
   if (value === 'qualified') return '已筛选';
   if (value === 'needs_follow_up') return '待跟进';
   if (value === 'pending_sync') return '待同步飞书';
   if (value === 'sync_failed') return '同步失败';
   if (value === 'synced') return '已入飞书';
+  if (value === 'pending_human_confirm') return '等待人工确认';
   return value || '待处理';
+}
+
+function policyLabel(value: string): string {
+  if (value === 'draft_only') return '只生成草稿';
+  if (value === 'manual_confirm') return '人工确认';
+  if (value === 'whitelist') return '白名单';
+  if (value === 'frequency_cap') return '频控';
+  if (value === 'audit_log') return '日志留痕';
+  return value;
 }
 
 function feishuStatusLabel(status?: FeishuStatus): string {
@@ -109,86 +86,103 @@ function feishuStatusLabel(status?: FeishuStatus): string {
   return status.connected ? '已连接' : '待检查';
 }
 
-function latestPendingDraft(snapshot: AcquisitionSnapshot): AcquisitionDraft | null {
-  return [...snapshot.drafts].reverse().find((draft) => draft.status === 'pending_manual_review') || null;
+function formatTime(value?: string): string {
+  if (!value) return '暂无';
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
 }
 
-function latestLead(snapshot: AcquisitionSnapshot): AcquisitionLead | null {
-  return snapshot.leads[snapshot.leads.length - 1] || null;
+function countMatrixDevices(status: MatrixStatusSnapshot) {
+  const devices = status.devices || [];
+  const summary = status.summary || {};
+  const total = summary.total ?? devices.length;
+  const online = summary.online ?? devices.filter((device) => device.online).length;
+  const busy = summary.busy ?? devices.filter((device) => Boolean(device.busy || device.currentTaskId)).length;
+  const failed = summary.failed ?? devices.filter((device) => (device.failureCount || 0) > 0 || device.streamStatus === 'failed').length;
+  return { total, online, busy, failed };
+}
+
+function matrixDeviceStatus(device: MatrixDeviceSummary): string {
+  if ((device.failureCount || 0) > 0 || device.streamStatus === 'failed') return '异常';
+  if (device.busy || device.currentTaskId) return '执行中';
+  if (device.online) return '在线';
+  return '离线';
+}
+
+type FeishuLoginGuideState = { loginUrl?: string; userCode?: string; qrAscii?: string };
+
+function createQrDataUri(value?: string): string {
+  if (!value) return '';
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(value);
+    qr.make();
+    const dataUrl = qr.createDataURL(5, 2);
+    return dataUrl.startsWith('data:image/gif;base64') ? dataUrl : '';
+  } catch {
+    return '';
+  }
+}
+
+async function copyFeishuLoginUrl(value?: string) {
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    showToast('已复制飞书登录链接', 'success');
+  } catch {
+    showToast('复制失败，请手动复制飞书登录链接', 'error');
+  }
+}
+
+async function copyText(value: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    showToast('已复制 AI 接入提示词', 'success');
+  } catch {
+    showToast('复制失败，请手动选中文本复制', 'error');
+  }
 }
 
 export const AcquisitionWorkbenchPage = () => {
   const [snapshot, setSnapshot] = React.useState<AcquisitionSnapshot>(EMPTY_SNAPSHOT);
-  const [topic, setTopic] = React.useState('本地生活商家 AI 私域获客试跑');
-  const [platform, setPlatform] = React.useState('douyin');
-  const [target, setTarget] = React.useState('美业/家政/装修老板，正在找低成本获客方法');
-  const [leadSummary, setLeadSummary] = React.useState('评论区用户询问如何用手机矩阵持续找客户，希望先看一份行业试跑方案。');
-  const [knowledge, setKnowledge] = React.useState('先确认行业、城市、客单价、现在线索来源，再给出低风险试跑路径；不承诺效果，不诱导骚扰。');
-  const [loading, setLoading] = React.useState(false);
-  const [confirmingId, setConfirmingId] = React.useState('');
-  const [feishuBusy, setFeishuBusy] = React.useState('');
-  const [templateBusy, setTemplateBusy] = React.useState('');
-  const [templateStatus, setTemplateStatus] = React.useState<AcquisitionTemplateStatus | null>(null);
+  const [matrixStatus, setMatrixStatus] = React.useState<MatrixStatusSnapshot>(EMPTY_MATRIX_STATUS);
+  const [matrixError, setMatrixError] = React.useState('');
   const [tableUrl, setTableUrl] = React.useState('');
-  const [loginGuide, setLoginGuide] = React.useState<{ loginUrl?: string; userCode?: string; qrAscii?: string } | null>(null);
+  const [loginGuide, setLoginGuide] = React.useState<FeishuLoginGuideState | null>(null);
+  const [feishuBusy, setFeishuBusy] = React.useState('');
+  const agentPrompt = React.useMemo(() => buildOneShotAgentPrompt(buildMcpJson()), []);
 
-  const refreshTemplates = React.useCallback(async () => {
-    try {
-      setTemplateStatus(await acquisitionApi.templates());
-    } catch {
-      setTemplateStatus(null);
+  const refresh = React.useCallback(async () => {
+    const [acquisitionResult, matrixResult] = await Promise.allSettled([
+      acquisitionApi.snapshot(),
+      matrixApi.status(),
+    ]);
+
+    if (acquisitionResult.status === 'fulfilled') {
+      setSnapshot(acquisitionResult.value);
+    } else {
+      showToast(parseErrorText(acquisitionResult.reason) || '读取获客总览失败', 'error');
+    }
+
+    if (matrixResult.status === 'fulfilled') {
+      setMatrixStatus(matrixResult.value);
+      setMatrixError('');
+    } else {
+      setMatrixError(parseErrorText(matrixResult.reason) || '矩阵状态待刷新');
     }
   }, []);
 
-  const refresh = React.useCallback(async () => {
-    try {
-      setSnapshot(await acquisitionApi.snapshot());
-      void refreshTemplates();
-    } catch (error) {
-      showToast(parseErrorText(error) || '读取获客工作台失败', 'error');
-    }
-  }, [refreshTemplates]);
-
   React.useEffect(() => {
     void refresh();
-    void refreshTemplates();
-  }, [refresh, refreshTemplates]);
-
-  const runDemo = async () => {
-    if (!topic.trim() || !leadSummary.trim()) {
-      showToast('请先填写获客任务和线索描述', 'info');
-      return;
-    }
-    setLoading(true);
-    try {
-      const result = await acquisitionApi.runDemo({
-        topic,
-        platform,
-        channel: platform === 'wechat' ? 'wechat' : 'comment',
-        leadSummary: `${target.trim() ? `目标客户：${target.trim()}。` : ''}${leadSummary}`,
-        knowledge,
-      });
-      setSnapshot(result.snapshot);
-      showToast('已生成线索、AI 判断和跟进草稿', 'success');
-    } catch (error) {
-      showToast(parseErrorText(error) || '生成跟进草稿失败', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const confirmDraft = async (draftId: string) => {
-    setConfirmingId(draftId);
-    try {
-      const result = await acquisitionApi.confirmDraft(draftId);
-      setSnapshot(result.snapshot);
-      showToast('草稿已人工确认，仍不会自动发送', 'success');
-    } catch (error) {
-      showToast(parseErrorText(error) || '确认草稿失败', 'error');
-    } finally {
-      setConfirmingId('');
-    }
-  };
+  }, [refresh]);
 
   const refreshFeishu = async () => {
     setFeishuBusy('status');
@@ -210,7 +204,7 @@ export const AcquisitionWorkbenchPage = () => {
       setLoginGuide({ loginUrl: guide.loginUrl || guide.verificationUrl, userCode: guide.userCode, qrAscii: guide.qrAscii });
       showToast('请扫码或打开链接完成飞书登录', 'info');
     } catch (error) {
-      showToast(parseErrorText(error) || '启动飞书扫码登录失败', 'error');
+      showToast(parseErrorText(error) || '启动飞书登录失败', 'error');
     } finally {
       setFeishuBusy('');
     }
@@ -218,7 +212,7 @@ export const AcquisitionWorkbenchPage = () => {
 
   const bindFeishuTable = async () => {
     if (!tableUrl.trim()) {
-      showToast('请粘贴飞书线索表链接', 'info');
+      showToast('请粘贴飞书多维表格链接', 'info');
       return;
     }
     setFeishuBusy('bind');
@@ -229,6 +223,27 @@ export const AcquisitionWorkbenchPage = () => {
       showToast('已绑定飞书线索表', 'success');
     } catch (error) {
       showToast(parseErrorText(error) || '绑定飞书线索表失败', 'error');
+    } finally {
+      setFeishuBusy('');
+    }
+  };
+
+  const createFeishuTable = async () => {
+    setFeishuBusy('create');
+    try {
+      const preview = await feishuApi.createTable(false);
+      const fields = Array.isArray(preview.fields) ? preview.fields.length : 0;
+      const ok = await showConfirm({
+        title: '新建飞书多维表格',
+        message: `将创建并绑定一张新的获客线索表${fields ? `，包含 ${fields} 个字段` : ''}。继续吗？`,
+        confirmText: '确认新建',
+      });
+      if (!ok) return;
+      await feishuApi.createTable(true);
+      await refreshFeishu();
+      showToast('已创建并绑定新的飞书线索表', 'success');
+    } catch (error) {
+      showToast(parseErrorText(error) || '创建飞书线索表失败，请确认已扫码登录且有多维表格权限', 'error');
     } finally {
       setFeishuBusy('');
     }
@@ -260,409 +275,294 @@ export const AcquisitionWorkbenchPage = () => {
     }
   };
 
-  const saveTemplate = async () => {
-    setTemplateBusy('save');
-    try {
-      const result = await acquisitionApi.saveTemplate({
-        name: `${topic || '获客'}模板`,
-        topic,
-        industry: target.split(/[，,、/]/)[0] || '通用获客',
-        platform,
-        platforms: [platform],
-        targetCustomer: target,
-        keywords: [topic, target].filter(Boolean),
-        leadRules: ['询价', '问方案', '问案例', '表达合作意向'],
-        replyStyle: knowledge,
-        knowledge,
-      });
-      setTemplateStatus(result.status || await acquisitionApi.templates());
-      const uploaded = result.template?.uploadStatus === 'uploaded';
-      showToast(uploaded ? '模板已沉淀并自动上传服务器' : '模板已沉淀，服务器未配置时会保留待上传', uploaded ? 'success' : 'info');
-    } catch (error) {
-      showToast(parseErrorText(error) || '沉淀模板失败', 'error');
-    } finally {
-      setTemplateBusy('');
-    }
-  };
-
-  const retryTemplateUpload = async () => {
-    setTemplateBusy('retry');
-    try {
-      const result = await acquisitionApi.retryTemplates();
-      setTemplateStatus((result as { status?: AcquisitionTemplateStatus }).status || await acquisitionApi.templates());
-      showToast('已重试上传待同步模板', 'success');
-    } catch (error) {
-      showToast(parseErrorText(error) || '重试上传模板失败', 'error');
-    } finally {
-      setTemplateBusy('');
-    }
-  };
-
-  const pendingDraft = latestPendingDraft(snapshot);
-  const latestDraft = snapshot.drafts[snapshot.drafts.length - 1] || null;
-  const visibleDraft = pendingDraft || latestDraft;
-  const lead = latestLead(snapshot);
   const feishu = snapshot.integrations?.feishu;
-  const pendingSync = snapshot.stats.pendingSync || feishu?.pendingCount || 0;
-  const templateStats = templateStatus?.stats || {};
-  const latestTemplate = templateStatus?.templates?.[templateStatus.templates.length - 1];
+  const pendingSync = snapshot.stats.pendingSync ?? feishu?.pendingCount ?? 0;
+  const matrixCounts = countMatrixDevices(matrixStatus);
+  const latestAgentRun = snapshot.agentRuns?.[snapshot.agentRuns.length - 1] || null;
+  const latestLead = snapshot.leads[snapshot.leads.length - 1] || null;
+  const latestDraft = snapshot.drafts[snapshot.drafts.length - 1] || null;
+  const latestCustomer = snapshot.customers[snapshot.customers.length - 1] || null;
+  const latestLog = snapshot.logs[snapshot.logs.length - 1] || null;
 
   return (
-    <div data-acquisition-workbench className="h-full overflow-auto bg-[#EEF2F5] text-[#18212A]">
-      <div className="mx-auto flex min-h-full w-full max-w-[1380px] flex-col gap-4 px-5 py-4">
-        <header className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-b border-[#CCD5DD] pb-4">
-          <div className="min-w-0">
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[#0F6B7A]">自动营销工作台 / AI PRIVATE TRAFFIC ACQUISITION</div>
-            <h1 className="mt-1 text-[28px] font-black leading-9 text-[#111827]">多台手机矩阵，自动帮你发现潜在客户</h1>
-            <p className="mt-2 max-w-[900px] text-sm font-semibold leading-6 text-[#5D6875]">
-              适合本地商家和销售团队的 AI 私域获客助手：多台设备统一调度，自动发现线索、AI 判断意向、生成沟通话术、同步飞书线索表，再把真实触达放进人工确认队列。
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {['本地生活', '招商加盟', '房产保险', '短视频获客', '私域运营'].map((item) => (
-                <span key={item} className="rounded-[6px] border border-[#CBD5E1] bg-white px-2.5 py-1 text-[11px] font-black text-[#475569]">{item}</span>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="quiet" onClick={() => void refresh()} className="!rounded-[8px]">刷新</Button>
-            <Button variant="primary" onClick={() => void runDemo()} disabled={loading} className="!rounded-[8px]">
-              {loading ? '生成中...' : '跑一条演示流'}
-            </Button>
-          </div>
-        </header>
-
-        <section data-acquisition-stats className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-          {[
-            ['内容任务', snapshot.stats.contentTasks, '#0F6B7A'],
-            ['线索池', snapshot.stats.leads, '#2563EB'],
-            ['客户池', snapshot.stats.customers, '#4F46E5'],
-            ['待确认草稿', snapshot.stats.draftsPending, '#B45309'],
-            ['飞书待同步', pendingSync, '#BE123C'],
-            ['已确认草稿', snapshot.stats.approvedDrafts, '#047857'],
-          ].map(([label, value, color]) => (
-            <div key={label} className="min-h-[74px] rounded-[8px] border border-[#D5DDE5] bg-white px-3 py-2">
-              <div className="text-xs font-bold text-[#647181]">{label}</div>
-              <div className="mt-1 text-2xl font-black" style={{ color: String(color) }}>{value}</div>
-            </div>
-          ))}
-        </section>
-
-        <section className="grid gap-2 md:grid-cols-5">
-          {CAPABILITY_CARDS.map((item) => (
-            <div key={item.title} className="min-h-[126px] rounded-[8px] border border-[#D5DDE5] bg-white p-3">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-black text-[#111827]">{item.title}</h2>
-                <span className="rounded-[6px] bg-[#E0F2FE] px-2 py-1 text-[11px] font-black text-[#075985]">{item.metric}</span>
+    <div data-acquisition-workbench data-ai-executor-console className="h-full overflow-auto overflow-x-hidden bg-[#F5F7FA] text-[#17202A]">
+      <div className="mx-auto flex min-h-full w-full max-w-[1180px] flex-col gap-4 px-4 py-4">
+        <section
+          data-acquisition-overview
+          data-acquisition-matrix-overview
+          className="rounded-[8px] border border-[#C8D6D9] bg-white p-4 shadow-sm"
+        >
+          <div className="rounded-[8px] border border-[#10464B] bg-[#062A2C] p-4 text-white shadow-[0_18px_50px_rgba(6,42,44,0.16)]">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] font-black tracking-[0.18em] text-[#8AE3D1]">获客总览</div>
+                <h1 className="mt-2 text-[28px] font-black leading-9 sm:text-[34px] sm:leading-10">多台手机矩阵获客总控</h1>
+                <p className="mt-2 max-w-[820px] break-words text-sm font-semibold leading-6 text-[#CFE9E5]">
+                  把手机 Agent、线索判断、AI 跟进草稿、人工确认和飞书沉淀放在同一个执行面。数字来自本机真实状态，没有演示流。
+                </p>
               </div>
-              <p className="mt-2 text-xs font-semibold leading-5 text-[#647181]">{item.detail}</p>
-            </div>
-          ))}
-        </section>
-
-        <section className="grid gap-2 md:grid-cols-6">
-          {FUNNEL_STEPS.map((step, index) => (
-            <div key={step} className="rounded-[8px] border border-[#D5DDE5] bg-white px-3 py-2">
-              <div className="text-[10px] font-black text-[#8A96A3]">STEP {index + 1}</div>
-              <div className="mt-1 truncate text-sm font-black text-[#1F2937]">{step}</div>
-            </div>
-          ))}
-        </section>
-
-        <main className="grid min-h-[620px] grid-cols-1 gap-4 xl:grid-cols-[360px_minmax(420px,1fr)_360px]">
-          <section data-marketing-mission-control className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-            <div className="text-[10px] font-black tracking-[0.18em] text-[#0F6B7A]">MISSION CONTROL</div>
-            <h2 className="mt-1 text-base font-black">获客任务</h2>
-            <div className="mt-4 space-y-3">
-              <label className="block">
-                <span className="text-xs font-bold text-[#5D6875]">任务主题</span>
-                <Input value={topic} onChange={(event) => setTopic(event.target.value)} className="mt-1 !rounded-[8px]" />
-              </label>
-              <label className="block">
-                <span className="text-xs font-bold text-[#5D6875]">目标客户</span>
-                <Input value={target} onChange={(event) => setTarget(event.target.value)} className="mt-1 !rounded-[8px]" />
-              </label>
-              <label className="block">
-                <span className="text-xs font-bold text-[#5D6875]">平台</span>
-                <select
-                  value={platform}
-                  onChange={(event) => setPlatform(event.target.value)}
-                  className="mt-1 w-full rounded-[8px] border border-[#CBD5E1] bg-[#F8FAFC] px-3 py-2 text-sm font-semibold text-[#18212A] outline-none focus:border-[#0F6B7A]"
-                >
-                  {PLATFORM_OPTIONS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="block">
-                <span className="text-xs font-bold text-[#5D6875]">线索发现/导入</span>
-                <TextArea value={leadSummary} rows={4} onChange={(event) => setLeadSummary(event.target.value)} className="mt-1 !rounded-[8px]" />
-              </label>
-              <label className="block">
-                <span className="text-xs font-bold text-[#5D6875]">SOP/知识库回复</span>
-                <TextArea value={knowledge} rows={4} onChange={(event) => setKnowledge(event.target.value)} className="mt-1 !rounded-[8px]" />
-              </label>
-              <Button variant="primary" onClick={() => void runDemo()} disabled={loading} className="w-full !rounded-[8px]">
-                {loading ? '生成中...' : '生成线索与跟进草稿'}
+              <Button variant="quiet" onClick={() => void refresh()} className="w-full !rounded-[8px] !border-[#7BCDC0] !bg-white !text-[#06363A] sm:w-auto">
+                刷新总览
               </Button>
             </div>
-          </section>
 
-          <section className="flex min-h-0 flex-col gap-4">
-            <div className="grid gap-4 lg:grid-cols-2">
-              <section data-lead-source-panel className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-                <h2 className="text-base font-black">线索来源</h2>
-                <div className="mt-3 space-y-2">
-                  {SOURCE_STEPS.map((item) => (
-                    <div key={item.title} className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-black">{item.title}</div>
-                        <span className="rounded-[6px] bg-[#E0F2FE] px-2 py-1 text-[11px] font-black text-[#075985]">{item.state}</span>
-                      </div>
-                      <div className="mt-1 text-xs font-semibold leading-5 text-[#647181]">{item.detail}</div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section data-ai-qualification-panel className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-                <h2 className="text-base font-black">AI 筛选</h2>
-                <div className="mt-3 rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3">
-                  <div className="text-xs font-black text-[#647181]">当前判断</div>
-                  <div className="mt-2 text-sm font-bold leading-6 text-[#1F2937]">
-                    {lead ? lead.summary : '生成演示流后，这里会展示客户需求摘要、意向等级和推荐跟进动作。'}
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {['需求强度', '行业匹配', '可跟进', '需人工确认'].map((tag) => (
-                      <span key={tag} className="rounded-[6px] border border-[#CBD5E1] bg-white px-2 py-1 text-[11px] font-black text-[#475569]">{tag}</span>
-                    ))}
-                  </div>
-                </div>
-                <div className="mt-3 rounded-[8px] border border-[#FDE68A] bg-[#FFFBEB] p-3 text-xs font-bold leading-5 text-[#854D0E]">
-                  AI 只给判断和话术建议，不替用户承诺效果，也不绕过人工确认。
-                </div>
-              </section>
+            <div data-matrix-capability-strip className="mt-4 grid gap-2 md:grid-cols-5">
+              <CapabilityStep label="手机矩阵" value={`${matrixCounts.online}/${matrixCounts.total} 在线`} />
+              <CapabilityStep label="线索发现" value={`${snapshot.stats.leads} 条线索`} />
+              <CapabilityStep label="AI 跟进草稿" value={`${snapshot.stats.draftsPending} 条待确认`} />
+              <CapabilityStep label="人工确认" value="外发前必停" />
+              <CapabilityStep label="飞书沉淀" value={`${pendingSync} 条待同步`} />
             </div>
+          </div>
 
-            <section data-acquisition-lead-pool className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-black">线索池 / 客户池</h2>
-                <span className="rounded-[6px] border border-[#CBD5E1] px-2 py-1 text-[11px] font-black text-[#475569]">
-                  {snapshot.leads.length} leads
-                </span>
-              </div>
-              <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                <LeadColumn
-                  title="潜在线索"
-                  empty="线索会先进入这里，随后再入飞书。"
-                  rows={snapshot.leads.slice(-4).reverse().map((item) => ({
-                    id: item.leadId,
-                    title: item.title,
-                    body: item.summary,
-                    meta: `${statusLabel(item.status)} / ${item.channel || 'manual'} / ${statusLabel(item.syncStatus || '')}`,
-                  }))}
-                />
-                <LeadColumn
-                  title="客户池"
-                  empty="AI 筛选后的客户会沉淀到这里。"
-                  rows={snapshot.customers.slice(-4).reverse().map((item) => ({
-                    id: item.customerId,
-                    title: item.name,
-                    body: item.summary || '',
-                    meta: statusLabel(item.stage),
-                  }))}
-                />
-              </div>
-            </section>
+          <div data-acquisition-stats className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Metric label="线索数" value={snapshot.stats.leads} desc={latestLead?.title || '暂无最新线索'} />
+            <Metric label="客户数" value={snapshot.stats.customers} desc={latestCustomer?.stage ? statusLabel(latestCustomer.stage) : '暂无客户'} />
+            <Metric label="待确认草稿" value={snapshot.stats.draftsPending} desc={latestDraft ? statusLabel(latestDraft.status) : '暂无草稿'} />
+            <Metric label="飞书待同步" value={pendingSync} desc={feishuStatusLabel(feishu)} />
+            <Metric label="设备总数" value={matrixCounts.total} desc={matrixStatus.updatedAt ? `更新 ${formatTime(matrixStatus.updatedAt)}` : '等待接入'} />
+            <Metric label="在线设备" value={matrixCounts.online} desc={matrixError || '可接收矩阵任务'} />
+            <Metric label="执行中设备" value={matrixCounts.busy} desc={latestAgentRun?.deviceId || '暂无执行任务'} />
+            <Metric label="异常设备" value={matrixCounts.failed} desc={matrixError || '矩阵状态待刷新'} tone={matrixCounts.failed > 0 || matrixError ? 'warn' : 'default'} />
+          </div>
 
-            <section data-acquisition-draft-review data-safe-outreach-queue className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-base font-black">待确认触达</h2>
-                  <p className="mt-1 text-xs font-semibold text-[#647181]">评论、私信、微信跟进只生成草稿；人工确认也不会自动发送。</p>
-                </div>
-                {visibleDraft ? <span className="rounded-[6px] bg-[#ECFDF5] px-2 py-1 text-[11px] font-black text-[#047857]">{statusLabel(visibleDraft.status)}</span> : null}
+          <div className="mt-4 grid gap-3 lg:grid-cols-[1.25fr_1fr_1fr]">
+            <section data-matrix-device-summary className="min-h-[160px] rounded-[8px] border border-[#D5DDE5] bg-[#F8FAFC] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-black">矩阵设备</h3>
+                <StatusPill>{matrixError ? '矩阵状态待刷新' : `${matrixCounts.total} 台设备`}</StatusPill>
               </div>
-              {visibleDraft ? (
-                <div className="mt-3">
-                  <div className="min-h-[112px] rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3 text-sm font-semibold leading-6 text-[#1F2937]">
-                    {visibleDraft.body}
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    {visibleDraft.policy.map((item) => (
-                      <span key={item} className="rounded-[6px] border border-[#CBD5E1] bg-white px-2 py-1 text-[11px] font-black text-[#475569]">{policyLabel(item)}</span>
-                    ))}
-                  </div>
-                  <Button
-                    variant="success"
-                    onClick={() => void confirmDraft(visibleDraft.draftId)}
-                    disabled={visibleDraft.status !== 'pending_manual_review' || confirmingId === visibleDraft.draftId}
-                    className="mt-4 !rounded-[8px]"
-                  >
-                    {confirmingId === visibleDraft.draftId ? '确认中...' : '人工确认'}
-                  </Button>
-                </div>
-              ) : (
-                <div className="mt-3 rounded-[8px] border border-dashed border-[#CBD5E1] p-8 text-center text-sm font-bold text-[#647181]">还没有待确认草稿</div>
-              )}
-            </section>
-          </section>
-
-          <aside className="flex min-h-0 flex-col gap-4">
-            <section data-template-cloud-panel className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <h2 className="text-base font-black">云端模板库</h2>
-                  <div className="mt-1 text-xs font-semibold text-[#647181]">
-                    {templateStatus?.cloud?.configured ? '服务器已配置，沉淀后自动上传' : '服务器未配置，模板会先进入待上传'}
-                  </div>
-                </div>
-                <span className="rounded-[6px] bg-[#E0F2FE] px-2 py-1 text-[11px] font-black text-[#075985]">自动上传</span>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {matrixStatus.devices.slice(0, 4).map((device) => (
+                  <MatrixDeviceItem key={device.deviceId} device={device} />
+                ))}
+                {matrixStatus.devices.length === 0 ? <Empty>暂无手机接入，绑定手机后这里会显示真实矩阵状态</Empty> : null}
               </div>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-xs font-bold text-[#475569]">
-                <div className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">总数：{templateStats.total || 0}</div>
-                <div className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">待上传：{templateStats.pendingUpload || 0}</div>
-                <div className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">已上传：{templateStats.uploaded || 0}</div>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button variant="primary" onClick={() => void saveTemplate()} disabled={Boolean(templateBusy)} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">
-                  {templateBusy === 'save' ? '沉淀中...' : '沉淀为模板并上传服务器'}
-                </Button>
-                <Button variant="quiet" onClick={() => void retryTemplateUpload()} disabled={Boolean(templateBusy)} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">
-                  重试待上传
-                </Button>
-              </div>
-              <div className="mt-3 rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3 text-xs font-semibold leading-5 text-[#647181]">
-                {latestTemplate ? (
-                  <>
-                    <div className="font-black text-[#1F2937]">{latestTemplate.name}</div>
-                    <div>状态：{templateUploadLabel(latestTemplate.uploadStatus || '')}</div>
-                    <div className="break-all">服务器：{latestTemplate.remote?.url || templateStatus?.cloud?.serverUrl || '待配置'}</div>
-                  </>
-                ) : (
-                  <div>还没有沉淀模板。跑通一个获客任务后，可以把行业、关键词、筛选规则和话术风格保存成模板。</div>
-                )}
-              </div>
-            </section>
-
-            <section data-feishu-sync-panel data-acquisition-feishu-sync className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <h2 className="text-base font-black">飞书入表 / 连接飞书</h2>
-                  <div className="mt-1 text-xs font-semibold text-[#647181]">状态：{feishuStatusLabel(feishu)}</div>
-                </div>
-                <Button variant="quiet" onClick={() => void refreshFeishu()} disabled={Boolean(feishuBusy)} className="!rounded-[8px] !px-2.5 !py-1.5 !text-xs">
-                  检查
-                </Button>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-[#475569]">
-                <div className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">CLI：{feishu?.cliInstalled ? '已安装' : '未安装'}</div>
-                <div className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">登录：{feishu?.auth?.loggedIn ? '用户已登录' : feishu?.auth?.botReady ? 'Bot 可用' : '待扫码'}</div>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button variant="primary" onClick={() => void startFeishuLogin()} disabled={Boolean(feishuBusy)} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">扫码登录</Button>
-                <Button variant="quiet" onClick={() => void testFeishuWrite()} disabled={Boolean(feishuBusy)} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">测试写入</Button>
-                <Button variant="quiet" onClick={() => void retryFeishuSync()} disabled={Boolean(feishuBusy)} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">重试同步</Button>
-              </div>
-              {loginGuide ? (
-                <div className="mt-3 rounded-[8px] border border-[#BAE6FD] bg-[#F0F9FF] p-2 text-xs font-semibold leading-5 text-[#075985]">
-                  <div className="break-all">登录链接：{loginGuide.loginUrl || '请查看飞书 CLI 输出'}</div>
-                  <div>验证码：{loginGuide.userCode || '无'}</div>
-                  {loginGuide.qrAscii ? <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[9px] leading-3">{loginGuide.qrAscii}</pre> : null}
-                </div>
+              {matrixStatus.devices.length > 4 ? (
+                <div className="mt-2 text-[11px] font-black text-[#0F6B7A]">另有 {matrixStatus.devices.length - 4} 台设备已接入</div>
               ) : null}
-              <label className="mt-3 block">
-                <span className="text-xs font-bold text-[#5D6875]">绑定线索表</span>
-                <Input value={tableUrl} onChange={(event) => setTableUrl(event.target.value)} placeholder="粘贴飞书多维表格链接" className="mt-1 !rounded-[8px]" />
-              </label>
-              <Button variant="success" onClick={() => void bindFeishuTable()} disabled={Boolean(feishuBusy)} className="mt-2 w-full !rounded-[8px] !py-1.5 !text-xs">绑定线索表</Button>
-              <div className="mt-3 space-y-1.5 text-xs font-semibold text-[#647181]">
-                <div>表格：{feishu?.table?.name || feishu?.table?.tableId || '未绑定'}</div>
-                <div>最近同步：{feishu?.lastSync?.syncStatus ? statusLabel(feishu.lastSync.syncStatus) : '暂无'}</div>
-                <div>失败原因：{feishu?.lastSync?.syncError || '无'}</div>
-              </div>
             </section>
+            <OverviewPanel marker="data-acquisition-lead-pool" title="线索池" empty="暂无线索">
+              {latestLead ? (
+                <SummaryItem title={latestLead.title} body={latestLead.summary} meta={`${latestLead.platform || 'unknown'} / ${statusLabel(latestLead.syncStatus)}`} />
+              ) : null}
+            </OverviewPanel>
+            <OverviewPanel marker="data-acquisition-draft-review" title="草稿确认" empty="暂无待确认草稿">
+              {latestDraft ? (
+                <SummaryItem title={statusLabel(latestDraft.status)} body={latestDraft.body} meta="不会自动发送" />
+              ) : null}
+            </OverviewPanel>
+          </div>
 
-            <section className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-              <h2 className="text-base font-black">安全策略</h2>
-              <div className="mt-3 grid gap-2">
-                {snapshot.outboundPolicy.map((item) => (
-                  <div key={item} className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2 text-xs font-black text-[#475569]">
-                    {policyLabel(item)}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 rounded-[8px] border border-[#FECACA] bg-[#FEF2F2] p-3 text-xs font-bold leading-5 text-[#991B1B]">
-                真实外发动作必须人工确认；不做无确认的批量私信、批量评论、批量加好友或自动骚扰式群发。
-              </div>
-            </section>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <OverviewPanel marker="data-followup-log-panel data-acquisition-task-log" title="最近日志" empty="暂无日志">
+              {latestLog ? (
+                <SummaryItem title={latestLog.type || 'event'} body={latestLog.message || ''} meta={formatTime(latestLog.timestamp)} />
+              ) : null}
+            </OverviewPanel>
+            <OverviewPanel marker="data-acquisition-agent-run" title="最近 Agent" empty="等待 AI 接入">
+              {latestAgentRun ? (
+                <SummaryItem title={statusLabel(latestAgentRun.status)} body={latestAgentRun.action || latestAgentRun.platform || ''} meta={latestAgentRun.deviceId || '未指定设备'} />
+              ) : null}
+            </OverviewPanel>
+          </div>
+        </section>
 
-            <section className="rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-              <h2 className="text-base font-black">SOP/知识库</h2>
-              <div className="mt-3 space-y-2">
-                {snapshot.sop.map((item) => (
-                  <div key={item.id} className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3">
-                    <div className="text-sm font-black">{item.title}</div>
-                    <div className="mt-1 text-xs font-semibold leading-5 text-[#647181]">{item.text}</div>
-                  </div>
-                ))}
-              </div>
-            </section>
+        <section
+          data-feishu-bitable-binding
+          data-feishu-sync-panel
+          data-acquisition-feishu-sync
+          className="rounded-[8px] border border-[#D5DDE5] bg-white p-4 shadow-sm"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[11px] font-black tracking-[0.18em] text-[#0F6B7A]">线索沉淀出口</div>
+              <h2 className="mt-1 text-xl font-black">飞书多维表格</h2>
+              <p className="mt-1 max-w-[780px] break-words text-sm font-semibold leading-6 text-[#647181]">
+                绑定后，Codex 写入的线索会同步到飞书多维表格；失败会留在本地队列，方便重试和审计。
+              </p>
+            </div>
+            <StatusPill>飞书同步：{feishuStatusLabel(feishu)}</StatusPill>
+          </div>
 
-            <section data-followup-log-panel data-acquisition-task-log className="min-h-0 flex-1 rounded-[8px] border border-[#D5DDE5] bg-white p-4">
-              <h2 className="text-base font-black">跟进日志</h2>
-              <div className="mt-3 max-h-[320px] space-y-2 overflow-auto">
-                {snapshot.logs.slice(-12).reverse().map((log) => (
-                  <div key={log.logId || `${log.type}-${log.timestamp}`} className="rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">
-                    <div className="text-[11px] font-black text-[#0F6B7A]">{log.type || 'event'}</div>
-                    <div className="mt-1 text-xs font-semibold leading-5 text-[#475569]">{log.message}</div>
-                  </div>
-                ))}
-                {!snapshot.logs.length && <div className="rounded-[8px] border border-dashed border-[#CBD5E1] p-6 text-center text-sm font-bold text-[#647181]">演示流日志会在这里沉淀</div>}
-              </div>
-            </section>
-          </aside>
-        </main>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <Mini label="飞书 CLI" value={feishu?.cliInstalled ? '已安装' : '未安装'} />
+            <Mini label="登录" value={feishu?.auth?.loggedIn ? '用户已登录' : feishu?.auth?.botReady ? 'Bot 可用' : '待扫码'} />
+            <Mini label="表格" value={feishu?.table?.name || feishu?.table?.tableId || '未绑定'} />
+            <Mini label="最近同步" value={statusLabel(feishu?.lastSync?.syncStatus)} />
+            <Mini label="失败原因" value={feishu?.lastSync?.syncError || '无'} />
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button variant="quiet" onClick={() => void refreshFeishu()} disabled={Boolean(feishuBusy)} className="!rounded-[8px]">检查</Button>
+            <Button variant="primary" onClick={() => void startFeishuLogin()} disabled={Boolean(feishuBusy)} className="!rounded-[8px]">扫码登录</Button>
+            <Button variant="success" onClick={() => void createFeishuTable()} disabled={Boolean(feishuBusy)} className="!rounded-[8px]">新建表</Button>
+            <Button variant="quiet" onClick={() => void testFeishuWrite()} disabled={Boolean(feishuBusy)} className="!rounded-[8px]">测试写入</Button>
+            <Button variant="quiet" onClick={() => void retryFeishuSync()} disabled={Boolean(feishuBusy)} className="!rounded-[8px]">重试同步</Button>
+          </div>
+
+          {loginGuide ? (
+            <div data-feishu-login-guide className="mt-4 rounded-[8px] border border-[#BAE6FD] bg-[#F0F9FF] p-3 text-xs font-semibold leading-5 text-[#075985]">
+              <FeishuQrPanel guide={loginGuide} />
+              <div className="break-all">登录链接：{loginGuide.loginUrl || '请查看飞书 CLI 输出'}</div>
+              <div>验证码：{loginGuide.userCode || '无'}</div>
+              {loginGuide.qrAscii ? <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[9px] leading-3">{loginGuide.qrAscii}</pre> : null}
+            </div>
+          ) : null}
+
+          <div className="mt-4 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+            <Input value={tableUrl} onChange={(event) => setTableUrl(event.target.value)} placeholder="粘贴飞书多维表格链接" className="!rounded-[8px]" />
+            <Button variant="success" onClick={() => void bindFeishuTable()} disabled={Boolean(feishuBusy)} className="!rounded-[8px]">绑定线索表</Button>
+          </div>
+        </section>
+
+        <section data-acquisition-agent-prompt className="rounded-[8px] border border-[#D5DDE5] bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[11px] font-black tracking-[0.18em] text-[#0F6B7A]">AI 执行入口</div>
+              <h2 className="mt-1 text-xl font-black">AI 接入提示词</h2>
+              <p className="mt-1 max-w-[780px] break-words text-sm font-semibold leading-6 text-[#647181]">
+                复制给 Codex 或其他 Agent 后，它会读取获客任务，调用手机 Agent，回收线索日志，并把确认后的线索写入飞书。
+              </p>
+            </div>
+            <Button variant="primary" onClick={() => void copyText(agentPrompt)} className="w-full !rounded-[8px] sm:w-auto">
+              复制 AI 接入提示词
+            </Button>
+          </div>
+
+          <details className="mt-4 rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3">
+            <summary className="cursor-pointer text-sm font-black text-[#1F2937]">展开提示词全文</summary>
+            <textarea
+              readOnly
+              value={agentPrompt}
+              rows={12}
+              className="mt-3 w-full resize-y rounded-[8px] border border-[#CBD5E1] bg-white p-3 font-mono text-[11px] leading-5 text-[#334155] outline-none"
+            />
+          </details>
+        </section>
+
+        <footer className="flex flex-wrap items-center gap-2 rounded-[8px] border border-[#D8E0E8] bg-white p-3 text-[11px] font-black text-[#647181]">
+          {snapshot.outboundPolicy.map((item) => <Badge key={item}>{policyLabel(item)}</Badge>)}
+          <span>真实外发必须人工确认；禁止无确认批量私信、评论、加好友、群发或发布。</span>
+        </footer>
       </div>
     </div>
   );
 };
 
-function policyLabel(value: string): string {
-  if (value === 'draft_only') return '只生成草稿';
-  if (value === 'manual_confirm') return '人工确认';
-  if (value === 'whitelist') return '白名单';
-  if (value === 'frequency_cap') return '频控';
-  if (value === 'audit_log') return '日志留痕';
-  return value;
-}
-
-function templateUploadLabel(value: string): string {
-  if (value === 'uploaded') return '已上传';
-  if (value === 'upload_failed') return '上传失败';
-  if (value === 'pending_upload') return '待上传';
-  return value || '待上传';
-}
-
-function LeadColumn({
-  title,
-  empty,
-  rows,
-}: {
-  title: string;
-  empty: string;
-  rows: Array<{ id: string; title: string; body: string; meta: string }>;
-}) {
+function FeishuQrPanel({ guide }: { guide: FeishuLoginGuideState }) {
+  const qrSrc = React.useMemo(() => createQrDataUri(guide.loginUrl), [guide.loginUrl]);
   return (
-    <div className="min-h-[180px] rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3">
-      <div className="text-sm font-black">{title}</div>
-      <div className="mt-2 space-y-2">
-        {rows.map((row) => (
-          <div key={row.id} className="rounded-[8px] border border-[#E1E7EE] bg-white p-3">
-            <div className="truncate text-sm font-black">{row.title}</div>
-            <div className="mt-1 line-clamp-2 text-xs font-semibold leading-5 text-[#647181]">{row.body}</div>
-            <div className="mt-2 text-[11px] font-black text-[#0F6B7A]">{row.meta}</div>
-          </div>
-        ))}
-        {!rows.length ? <div className="rounded-[8px] border border-dashed border-[#CBD5E1] p-5 text-center text-sm font-bold text-[#647181]">{empty}</div> : null}
+    <div className="mb-3 grid gap-3 md:grid-cols-[148px_minmax(0,1fr)]">
+      <div data-feishu-login-qr className="flex min-h-[148px] items-center justify-center rounded-[8px] border border-[#B7DBEA] bg-white p-2">
+        {qrSrc ? (
+          <img src={qrSrc} alt="飞书扫码登录二维码" className="h-[132px] w-[132px]" />
+        ) : guide.qrAscii ? (
+          <pre className="max-h-[132px] max-w-[132px] overflow-hidden whitespace-pre text-[4px] leading-[4px] text-[#0B4A3E]">{guide.qrAscii}</pre>
+        ) : (
+          <div className="px-3 text-center text-xs font-black leading-5 text-[#0F6B7A]">等待飞书二维码</div>
+        )}
+      </div>
+      <div className="min-w-0 rounded-[8px] border border-[#B7DBEA] bg-white/70 p-3">
+        <div className="text-sm font-black text-[#0F3440]">飞书扫码登录</div>
+        <div className="mt-1 text-xs font-semibold leading-5 text-[#48616B]">用飞书 App 扫码，或打开链接后输入验证码。</div>
+        <div className="mt-2 rounded-[6px] bg-[#E6F6FD] px-2 py-1.5 text-xs font-black text-[#075985]">
+          验证码：{guide.userCode || '无'}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button variant="quiet" onClick={() => void copyFeishuLoginUrl(guide.loginUrl)} disabled={!guide.loginUrl} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">
+            复制登录链接
+          </Button>
+          {guide.loginUrl ? (
+            <a className="rounded-[8px] border border-[#0B4A3E]/25 bg-white px-3 py-1.5 text-xs font-black text-[#0B4A3E] hover:bg-[#ECFDF5]" href={guide.loginUrl} target="_blank" rel="noreferrer">
+              打开链接
+            </a>
+          ) : null}
+        </div>
       </div>
     </div>
   );
+}
+
+function Metric({ label, value, desc, tone = 'default' }: { label: string; value: React.ReactNode; desc: React.ReactNode; tone?: 'default' | 'warn' }) {
+  const toneClass = tone === 'warn' ? 'border-[#F4B8B8] bg-[#FFF7F7] text-[#B42318]' : 'border-[#D5DDE5] bg-[#F8FAFC] text-[#0F6B7A]';
+  return (
+    <div className={`min-w-0 rounded-[8px] border p-3 ${toneClass}`}>
+      <div className="text-[11px] font-black text-[#647181]">{label}</div>
+      <div className="mt-1 truncate text-xl font-black">{value}</div>
+      <div className="mt-1 truncate text-xs font-semibold text-[#647181]">{desc}</div>
+    </div>
+  );
+}
+
+function CapabilityStep({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-[8px] border border-[#1E5559] bg-white/10 p-3">
+      <div className="truncate text-sm font-black text-white">{label}</div>
+      <div className="mt-1 truncate text-xs font-bold text-[#A9E8DC]">{value}</div>
+    </div>
+  );
+}
+
+function MatrixDeviceItem({ device }: { device: MatrixDeviceSummary }) {
+  const status = matrixDeviceStatus(device);
+  const statusClass = status === '异常' ? 'text-[#B42318]' : status === '执行中' ? 'text-[#B7791F]' : status === '在线' ? 'text-[#0F6B7A]' : 'text-[#647181]';
+  return (
+    <div className="min-w-0 rounded-[8px] border border-[#E1E7EE] bg-white p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-black text-[#1F2937]">{device.name || device.deviceId}</div>
+          <div className="mt-1 truncate text-[11px] font-bold text-[#647181]">{device.group || device.model || device.deviceId}</div>
+        </div>
+        <span className={`shrink-0 text-xs font-black ${statusClass}`}>{status}</span>
+      </div>
+      <div className="mt-2 line-clamp-2 text-xs font-semibold leading-5 text-[#647181]">
+        {device.currentScreenSummary || device.lastResult || device.currentTaskId || '等待矩阵任务'}
+      </div>
+    </div>
+  );
+}
+
+function OverviewPanel({ marker, title, empty, children }: { marker: string; title: string; empty: string; children: React.ReactNode }) {
+  const markerProps = marker.split(/\s+/).filter(Boolean).reduce<Record<string, string>>((acc, key) => {
+    acc[key] = '';
+    return acc;
+  }, {});
+  return (
+    <section {...markerProps} className="min-h-[160px] rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-3">
+      <h3 className="text-sm font-black">{title}</h3>
+      <div className="mt-2">{children || <Empty>{empty}</Empty>}</div>
+    </section>
+  );
+}
+
+function SummaryItem({ title, body, meta }: { title: string; body?: string; meta: string }) {
+  return (
+    <div className="rounded-[8px] border border-[#E1E7EE] bg-white p-3">
+      <div className="truncate text-sm font-black text-[#1F2937]">{title}</div>
+      <div className="mt-1 line-clamp-2 text-xs font-semibold leading-5 text-[#647181]">{body || '暂无详情'}</div>
+      <div className="mt-2 text-[11px] font-black text-[#0F6B7A]">{meta}</div>
+    </div>
+  );
+}
+
+function Mini({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-[8px] border border-[#E1E7EE] bg-[#F8FAFC] p-2">
+      <div className="text-[11px] font-black text-[#647181]">{label}</div>
+      <div className="mt-1 truncate text-xs font-bold text-[#1F2937]">{value}</div>
+    </div>
+  );
+}
+
+function StatusPill({ children }: { children: React.ReactNode }) {
+  return <span className="rounded-[8px] border border-[#B6D7DD] bg-[#F2FBFC] px-3 py-2 text-xs font-black text-[#0F6B7A]">{children}</span>;
+}
+
+function Badge({ children }: { children: React.ReactNode }) {
+  return <span className="rounded-[6px] border border-[#CBD5E1] bg-white px-2 py-1 text-[11px] font-black text-[#475569]">{children}</span>;
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <div className="rounded-[8px] border border-dashed border-[#CBD5E1] p-5 text-center text-sm font-bold text-[#647181]">{children}</div>;
 }

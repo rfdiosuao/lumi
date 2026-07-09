@@ -213,6 +213,35 @@ def register_matrix_routes(app, ctx) -> None:
         flow = matrix.create_acquisition_demo_flow(body)
         return ctx.fastapi_json({"flow": flow, "snapshot": matrix.acquisition_snapshot()}, 201)
 
+    @app.post("/api/matrix/acquisition/import")
+    async def matrix_acquisition_import(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        matrix = _matrix(ctx)
+        result = matrix.import_acquisition_leads(body)
+        return ctx.fastapi_json({"result": result, "snapshot": matrix.acquisition_snapshot()}, 201)
+
+    @app.post("/api/matrix/acquisition/agent/run")
+    async def matrix_acquisition_agent_run(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        result = _matrix(ctx).run_acquisition_agent_task(body)
+        return ctx.fastapi_json(result, 201)
+
+    @app.post("/api/matrix/acquisition/agent/result")
+    async def matrix_acquisition_agent_result(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        agent_result = body.get("agentResult") if isinstance(body.get("agentResult"), dict) else None
+        if not agent_result:
+            return ctx.fastapi_json({"error": "agentResult is required"}, 400)
+        matrix = _matrix(ctx)
+        ingest = matrix.ingest_acquisition_agent_result(agent_result, body)
+        return ctx.fastapi_json({"ingest": ingest, "snapshot": matrix.acquisition_snapshot()}, 201)
+
     @app.post("/api/matrix/acquisition/draft/confirm")
     async def matrix_acquisition_draft_confirm(request: Request):
         if error := ctx.auth_error(request):
@@ -222,6 +251,18 @@ def register_matrix_routes(app, ctx) -> None:
         if not draft_id:
             return ctx.fastapi_json({"error": "draftId is required"}, 400)
         result = _matrix(ctx).confirm_acquisition_draft(draft_id, body)
+        status = 404 if result.get("error") else 200
+        return ctx.fastapi_json(result, status)
+
+    @app.post("/api/matrix/acquisition/draft/manual-send")
+    async def matrix_acquisition_draft_manual_send(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        body = await ctx.body(request)
+        draft_id = str(body.get("draftId") or body.get("id") or "").strip()
+        if not draft_id:
+            return ctx.fastapi_json({"error": "draftId is required"}, 400)
+        result = _matrix(ctx).record_acquisition_manual_send(draft_id, body)
         status = 404 if result.get("error") else 200
         return ctx.fastapi_json(result, status)
 

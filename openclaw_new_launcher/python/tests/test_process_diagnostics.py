@@ -351,6 +351,44 @@ class ProcessDiagnosticsRepairTests(unittest.TestCase):
         self.assertEqual(checks["uv"]["status"], "warn")
         self.assertTrue(checks["uv"]["repairable"])
 
+    def test_diagnostics_find_git_bash_next_to_custom_git_path(self) -> None:
+        import services.process as process_module
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            git_root = os.path.join(temp_dir, "CustomGit")
+            git_cmd = os.path.join(git_root, "cmd")
+            git_bin = os.path.join(git_root, "bin")
+            os.makedirs(git_cmd)
+            os.makedirs(git_bin)
+            git_exe = os.path.join(git_cmd, "git.exe")
+            bash_exe = os.path.join(git_bin, "bash.exe")
+            with open(git_exe, "wb") as file:
+                file.write(b"git")
+            with open(bash_exe, "wb") as file:
+                file.write(b"bash")
+
+            service = MinimalDiagnosticProcessService(
+                AppPaths(os.path.join(temp_dir, "app")),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+
+            original_which = process_module.shutil.which
+            process_module.shutil.which = (
+                lambda name: git_exe
+                if name in {"git", "git.exe"}
+                else None if name in {"bash", "bash.exe", "uv", "uv.exe"} else original_which(name)
+            )
+            try:
+                checks = {item["id"]: item for item in service.diagnose_environment()["checks"]}
+            finally:
+                process_module.shutil.which = original_which
+
+        self.assertEqual(checks["git"]["status"], "ok")
+        self.assertEqual(checks["git_bash"]["status"], "ok")
+        self.assertIn("CustomGit", checks["git_bash"]["detail"])
+
     def test_portable_integrity_allows_online_package_without_openclaw_runtime_layer(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             required_files = [
@@ -381,6 +419,36 @@ class ProcessDiagnosticsRepairTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "ok")
             self.assertNotIn("openclaw.mjs", result["detail"])
+
+    def test_portable_integrity_accepts_packaged_up_scripts_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            required_files = [
+                os.path.join("_up_", "node-runtime", "node.exe"),
+                "start.js",
+                os.path.join("_up_", "python", "bridge.py"),
+                os.path.join("_up_", "scripts", "openclaw-image-phone.mjs"),
+                os.path.join("_up_", "scripts", "openclaw-phone-video.mjs"),
+                os.path.join("_up_", "scripts", "openclaw-phone-vision.mjs"),
+                os.path.join("_up_", "scripts", "verify-phone-agent.ps1"),
+                os.path.join("_up_", "openclaw-workspace", "AGENTS.md"),
+                os.path.join("_up_", "openclaw-workspace", "SOUL.md"),
+            ]
+            for relative_path in required_files:
+                full_path = os.path.join(temp_dir, relative_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as file:
+                    file.write(b"ok")
+
+            service = TestableProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+
+            result = service._portable_integrity_check()
+
+            self.assertEqual(result["status"], "ok")
 
     def test_repair_runs_bundled_webview2_installer_when_missing(self) -> None:
         calls: list[list[str]] = []

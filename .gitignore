@@ -127,6 +127,8 @@ release/
 /openclaw_new_launcher/data/phone-videos/
 /openclaw_new_launcher/data/phone-test-artifacts/
 /openclaw_new_launcher/redist/platform-tools/
+/openclaw_new_launcher/python-runtime/
+/openclaw_new_launcher/node-runtime/
 /openclaw_new_launcher/*.err
 /openclaw_new_launcher/*.out
 /openclaw_new_launcher/agents/*

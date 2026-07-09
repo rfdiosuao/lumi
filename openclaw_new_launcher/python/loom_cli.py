@@ -142,6 +142,7 @@ def _command_name(argv: list[str]) -> str:
     if len(words) >= 2 and words[0] in {
         "account",
         "agents",
+        "acquisition",
         "diagnostics",
         "jobs",
         "license",
@@ -242,6 +243,8 @@ def _dispatch_command(args: list[str], ctx: CliContext) -> Json:
         return _logs(rest, ctx)
     if command == "agents":
         return _agents(rest, ctx)
+    if command == "acquisition":
+        return _acquisition(rest, ctx)
     if command == "media":
         return _media(rest, ctx)
     if command == "wire":
@@ -284,6 +287,7 @@ def _help_payload() -> Json:
             "agents list|start|install|detect|uninstall|rollback|model-status|model-apply|model-rollback",
             "phone status|screenshot|read|read-screen|events-start|events-status|events-stop|quick-task|run-task|template-task",
             "phone adb-doctor",
+            "acquisition agent-run|agent-result",
             "matrix status|dispatch|watch|cancel|retry|leads|record-lead",
             "integration feishu doctor|status|install|login|bind-table|create-table|test-write|retry-sync",
             "template run",
@@ -390,6 +394,14 @@ def _command_catalog(paths: AppPaths | None = None) -> Json:
                 {"name": "matrix retry", "permission": "control", "endpoint": "POST /api/matrix/retry"},
                 {"name": "template run", "permission": "read/control", "endpoint": "POST /api/matrix/template/run"},
                 {"name": "experience report", "permission": "read", "endpoint": "GET /api/matrix/experience"},
+            ],
+        },
+        {
+            "domain": "acquisition",
+            "summary": "Customer acquisition workbench phone-Agent dry-run and result ingestion.",
+            "commands": [
+                {"name": "acquisition agent-run", "permission": "control", "endpoint": "POST /api/matrix/acquisition/agent/run"},
+                {"name": "acquisition agent-result", "permission": "control", "endpoint": "POST /api/matrix/acquisition/agent/result"},
             ],
         },
         {
@@ -1150,6 +1162,17 @@ def _schedule(args: list[str], ctx: CliContext) -> Json:
     raise CliError("unknown_command", "定时任务命令只开放 list、add、run、cancel。")
 
 
+def _acquisition(args: list[str], ctx: CliContext) -> Json:
+    action = args[0] if args else "agent-run"
+    if action in {"agent-run", "run-agent"}:
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/agent/run", _acquisition_agent_body(args))
+    if action in {"agent-result", "ingest-result"}:
+        _require_permission(ctx, "control")
+        return _bridge_call(ctx, "POST", "/api/matrix/acquisition/agent/result", _acquisition_agent_result_body(args))
+    raise CliError("unknown_command", "Acquisition command supports agent-run and agent-result.")
+
+
 def _matrix(args: list[str], ctx: CliContext) -> Json:
     action = args[0] if args else "status"
     if action == "status":
@@ -1245,6 +1268,117 @@ def _template_save_body(args: list[str]) -> Json:
         "knowledge": _option(args, "--knowledge") or _option(args, "--reply-style") or "",
         "source": "loom_cli",
     }
+
+
+def _acquisition_agent_body(args: list[str]) -> Json:
+    platform = _option(args, "--platform") or "tiktok"
+    device_id = _option(args, "--device-id") or _option(args, "--device") or "phone-1"
+    task_id = _option(args, "--task-id") or f"agent_task_{uuid.uuid4().hex[:10]}"
+    real_run = _flag(args, "--real-run")
+    confirmed = _flag(args, "--confirmed")
+    if real_run and not confirmed:
+        raise CliError("confirmation_required", "acquisition agent-run --real-run requires --confirmed and still stops at human confirmation.")
+    body: Json = {
+        "taskId": task_id,
+        "dryRun": not real_run,
+        "confirmed": confirmed,
+        "platform": platform,
+        "topic": _option(args, "--topic") or f"{platform} 手机 Agent 获客任务",
+        "action": _option(args, "--action") or "discover_leads",
+        "deviceId": device_id,
+        "knowledge": _option(args, "--knowledge") or "",
+        "target": _option(args, "--target") or "",
+        "owner": _option(args, "--owner") or "loom-cli",
+    }
+    body["phoneTaskPreview"] = _acquisition_phone_task_preview(body, device_id)
+    result_json = _option(args, "--agent-result-json")
+    if result_json:
+        try:
+            parsed = json.loads(result_json)
+        except json.JSONDecodeError as exc:
+            raise CliError("invalid_agent_result_json", f"Invalid --agent-result-json: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise CliError("invalid_agent_result_json", "--agent-result-json must be a JSON object.")
+        body["agentResult"] = parsed
+    return body
+
+
+def _acquisition_agent_result_body(args: list[str]) -> Json:
+    result_json = _option(args, "--agent-result-json")
+    if not result_json:
+        raise CliError("missing_agent_result_json", "acquisition agent-result requires --agent-result-json with loom.acquisition.agent_result.v1 payload.")
+    try:
+        parsed = json.loads(result_json)
+    except json.JSONDecodeError as exc:
+        raise CliError("invalid_agent_result_json", f"Invalid --agent-result-json: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise CliError("invalid_agent_result_json", "--agent-result-json must be a JSON object.")
+    platform = _option(args, "--platform") or parsed.get("platform") or "tiktok"
+    device_id = _option(args, "--device-id") or _option(args, "--device") or parsed.get("deviceId") or "phone-1"
+    return {
+        "dryRun": True,
+        "platform": platform,
+        "topic": _option(args, "--topic") or f"{platform} 手机 Agent 获客结果",
+        "action": _option(args, "--action") or parsed.get("action") or "discover_leads",
+        "deviceId": device_id,
+        "knowledge": _option(args, "--knowledge") or "",
+        "target": _option(args, "--target") or "",
+        "owner": _option(args, "--owner") or "loom-cli",
+        "agentResult": parsed,
+    }
+
+
+def _acquisition_phone_task_preview(body: Json, device_id: str) -> Json:
+    platform = body.get("platform") or "tiktok"
+    topic = body.get("topic") or ""
+    prompt = (
+        f"在{platform}执行{topic}。只读取可见公开内容，识别潜在线索，生成跟进草稿；"
+        "如需触达，只能填草稿并停在人工确认页。"
+        f"目标客户：{body.get('target') or ''}。SOP：{body.get('knowledge') or ''}。"
+        "返回 JSON 必须符合 loom.acquisition.agent_result.v1，字段包含 taskId、deviceId、platform、action、status、leads、drafts、logs；"
+        "禁止自动私信、评论、加好友、加微信或发布。"
+    )[:900]
+    payload = {
+        "schema": "loom.acquisition.phone_task.v1",
+        "taskId": body.get("taskId") or f"agent_task_{uuid.uuid4().hex[:10]}",
+        "platform": platform,
+        "action": body.get("action") or "discover_leads",
+        "topic": topic,
+        "mode": "safe",
+        "profile": "fast",
+        "target": {"deviceIds": [device_id]},
+        "resultSchema": "loom.acquisition.agent_result.v1",
+        "stopAt": "human_confirmation",
+        "requiresHumanReview": True,
+        "sendEnabled": False,
+        "allowedActions": ["open_app", "read_public_content", "summarize_leads", "fill_draft", "capture_screenshot"],
+        "forbiddenActions": ["send_dm", "post_comment", "add_friend", "add_wechat", "bulk_outreach", "publish_without_confirmation"],
+        "outboundPolicy": ["draft_only", "manual_confirm", "whitelist", "frequency_cap", "audit_log"],
+        "prompt": prompt,
+    }
+    payload["bridgeDispatch"] = {
+        "method": "POST",
+        "endpoint": "/api/phone/task",
+        "body": {
+            "taskId": payload["taskId"],
+            "prompt": prompt,
+            "mode": "safe",
+            "profile": "fast",
+            "executionLayer": "agent",
+            "target": {"deviceIds": [device_id]},
+            "template": "",
+            "requiresHumanReview": True,
+            "sendEnabled": False,
+            "resultSchema": "loom.acquisition.agent_result.v1",
+            "outboundPolicy": ["draft_only", "manual_confirm", "whitelist", "frequency_cap", "audit_log"],
+            "resultCallback": {
+                "method": "POST",
+                "endpoint": "/api/matrix/acquisition/agent/result",
+                "payloadField": "agentResult",
+            },
+        },
+    }
+    return payload
 
 
 def _experience(args: list[str], ctx: CliContext) -> Json:

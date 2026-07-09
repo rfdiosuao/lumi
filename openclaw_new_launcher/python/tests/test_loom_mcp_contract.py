@@ -15,6 +15,15 @@ if PYTHON_DIR not in sys.path:
 
 
 class LoomMcpContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._audit_dir = tempfile.TemporaryDirectory()
+        self._audit_patch = patch.dict(os.environ, {"LOOM_AUDIT_DIR": self._audit_dir.name})
+        self._audit_patch.start()
+
+    def tearDown(self) -> None:
+        self._audit_patch.stop()
+        self._audit_dir.cleanup()
+
     def test_phase_one_tools_are_safe_and_explicit(self) -> None:
         import loom_mcp
 

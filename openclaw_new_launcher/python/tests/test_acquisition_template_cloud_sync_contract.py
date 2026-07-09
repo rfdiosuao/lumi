@@ -174,21 +174,30 @@ class AcquisitionTemplateCloudSyncContractTests(unittest.TestCase):
 
     def test_ui_contract_exposes_template_cloud_sync(self) -> None:
         page_path = os.path.join(REPO_ROOT, "src", "components", "acquisition", "AcquisitionWorkbenchPage.tsx")
+        prompt_path = os.path.join(REPO_ROOT, "src", "components", "agentAccess", "agentPrompt.ts")
+        public_skill_path = os.path.join(REPO_ROOT, "public", "skills", "luming-acquisition-agent", "SKILL.md")
         api_path = os.path.join(REPO_ROOT, "src", "services", "api.ts")
 
         with open(page_path, "r", encoding="utf-8") as handle:
             page = handle.read()
+        with open(prompt_path, "r", encoding="utf-8") as handle:
+            prompt = handle.read()
+        with open(public_skill_path, "r", encoding="utf-8") as handle:
+            public_skill = handle.read()
         with open(api_path, "r", encoding="utf-8") as handle:
             api = handle.read()
 
+        self.assertIn("data-acquisition-agent-prompt", page)
+        self.assertNotIn("data-template-cloud-panel", page)
         for marker in [
-            "data-template-cloud-panel",
-            "沉淀为模板并上传服务器",
-            "云端模板库",
-            "自动上传",
-            "待上传",
+            "Template Memory",
+            "acquisition template save",
+            "acquisition template list",
+            "acquisition template retry",
+            "queue cloud upload",
         ]:
-            self.assertIn(marker, page)
+            self.assertIn(marker, prompt)
+            self.assertIn(marker, public_skill)
         self.assertIn("saveTemplate", api)
         self.assertIn("/api/matrix/acquisition/templates/save", api)
         self.assertIn("retryTemplates", api)

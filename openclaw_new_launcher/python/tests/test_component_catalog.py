@@ -69,6 +69,17 @@ class ComponentCatalogFallbackTests(unittest.TestCase):
 
             self.assertEqual(default_manifest_path(launcher_dir), parent_manifest)
 
+    def test_default_manifest_path_finds_double_up_tauri_resource_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_dir = os.path.join(temp_dir, "Luming")
+            nested_resource_dir = os.path.join(install_dir, "_up_", "_up_")
+            os.makedirs(nested_resource_dir)
+            manifest = os.path.join(nested_resource_dir, "release-manifest.json")
+            with open(manifest, "w", encoding="utf-8") as file:
+                file.write("{}")
+
+            self.assertEqual(default_manifest_path(install_dir), manifest)
+
     def test_default_manifest_path_finds_repo_manifest_from_tauri_debug_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             debug_dir = os.path.join(

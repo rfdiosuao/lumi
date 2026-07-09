@@ -11,7 +11,7 @@ import type {
   DiagnosticStatus,
 } from '../../services/loomContracts';
 import { loadCachedPreflight, preflightCacheUsable, saveCachedPreflight } from '../../services/startupCache';
-import { buildMcpJson, buildOneShotAgentPrompt } from '../agentAccess/AgentAccessPage';
+import { buildMcpJson, buildOneShotAgentPrompt } from '../agentAccess/agentPrompt';
 import { BusyOverlay, Button, Input, Select, showConfirm, showToast } from '../common';
 import { AgentLogo } from './AgentLogo';
 import { APP_DISPLAY_NAME } from '../../version';
@@ -23,6 +23,12 @@ const PINNED_COMPONENT_IDS = [
   'openclaw-companion',
   'hermes',
 ];
+const AUTO_DETECT_COMPONENT_IDS = new Set([
+  'codex-desktop',
+  'claude-code',
+  'opencode',
+  'openclaw-companion',
+]);
 
 const FALLBACK_COMPONENTS: Record<string, { name: string; description: string; category: string }> = {
   'codex-desktop': { name: 'Codex 桌面端', description: 'OpenAI Codex 桌面应用', category: 'agent' },
@@ -329,8 +335,19 @@ function componentRows(snapshot: ComponentSnapshot | null): ComponentSummary[] {
 }
 
 function manifestInstallLocked(snapshot: ComponentSnapshot | null): boolean {
-  if (!snapshot) return false;
+  if (!snapshot) return true;
   return Boolean(snapshot.installLocked || snapshot.manifestErrorCode === 'manifest_unavailable' || !snapshot.manifest);
+}
+
+function shouldAutoDetectOnFirstOpen(component?: ComponentSummary): boolean {
+  if (!component) return false;
+  return (
+    AUTO_DETECT_COMPONENT_IDS.has(component.id) &&
+    component.status === 'not_installed' &&
+    !component.installedVersion &&
+    !component.errorCode &&
+    !isWorking(component.status)
+  );
 }
 
 const InfoTile: React.FC<{ label: string; value: string }> = ({ label, value }) => (
@@ -465,26 +482,26 @@ const CompactPrerequisitePanel: React.FC<{
       : allReady ? '可以继续安装和启动智能体。' : '缺失项会优先处理，详情可展开查看。';
 
   return (
-    <section className="px-6 py-3">
-      <div className="rounded-[14px] border border-border/80 bg-surface/70 p-4 shadow-[0_12px_30px_rgba(8,35,48,0.05)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="h-full">
+      <div className="flex h-full flex-col rounded-[8px] border border-border/80 bg-surface/70 p-4 shadow-[0_12px_30px_rgba(8,35,48,0.05)]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] ${
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] ${
               allReady ? 'bg-status-success/12 text-status-success' : busy ? 'bg-[#0B4A3E]/10 text-[#0B4A3E]' : 'bg-surface-alt text-text-muted'
             }`}>
               {busy ? <ActivityRing /> : <span className="text-lg font-black">{allReady ? '✓' : '•'}</span>}
             </div>
             <div className="min-w-0">
               <div className="text-[10px] font-black tracking-[0.22em] text-text-subtle">前置环境</div>
-              <h2 className="mt-0.5 text-lg font-black text-text">{title}</h2>
+              <h2 className="mt-0.5 text-base font-black text-text">{title}</h2>
               <p className="mt-1 text-xs text-text-muted">{subtitle}</p>
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-2">
-            <Button variant="quiet" onClick={onRefresh} disabled={loading || repairing}>
+            <Button variant="quiet" onClick={onRefresh} disabled={loading || repairing} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">
               {loading ? '检测中...' : '重新检测'}
             </Button>
-            <Button variant="primary" onClick={onRepair} disabled={loading || repairing || allReady}>
+            <Button variant="primary" onClick={onRepair} disabled={loading || repairing || allReady} className="!rounded-[8px] !px-3 !py-1.5 !text-xs">
               {repairing ? '处理中...' : '一键补齐'}
             </Button>
           </div>
@@ -503,11 +520,11 @@ const CompactPrerequisitePanel: React.FC<{
           </div>
         ) : null}
 
-        <div className="mt-3 grid gap-2 md:grid-cols-5">
+        <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-2">
           {visibleChecks.map((check) => (
-            <div key={check.id} className="rounded-[10px] border border-border/70 bg-surface/60 px-3 py-2.5">
+            <div key={check.id} className="rounded-[8px] border border-border/70 bg-surface/60 px-2.5 py-2">
               <div className="flex items-center justify-between gap-2">
-                <div className="truncate text-sm font-black text-text">{check.label}</div>
+                <div className="truncate text-xs font-black text-text">{check.label}</div>
                 <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${
                   check.status === 'ok' ? 'bg-status-success' : check.status === 'fail' ? 'bg-status-danger' : 'bg-[#0B4A3E]/50'
                 }`} />
@@ -520,7 +537,7 @@ const CompactPrerequisitePanel: React.FC<{
         {checks.some((check) => check.detail) ? (
           <details className="mt-4 text-xs text-text-muted">
             <summary className="cursor-pointer font-bold text-text-subtle">查看检测详情</summary>
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <div className="mt-3 grid gap-2 xl:grid-cols-2">
               {checks.filter((check) => check.detail).map((check) => (
                 <div key={check.id} className="rounded-[10px] border border-border/70 bg-surface/50 p-3">
                   <div className="font-bold text-text">{check.label}</div>
@@ -786,6 +803,7 @@ const AgentModelConfigPanel: React.FC<{
 
 export const AgentInstallerPage: React.FC = () => {
   const cachedPreflight = React.useRef<DiagnosticReport | null>(loadCachedPreflight());
+  const autoDetectAttempted = React.useRef(false);
   const [snapshot, setSnapshot] = React.useState<ComponentSnapshot | null>(null);
   const [selectedId, setSelectedId] = React.useState('');
   const [loading, setLoading] = React.useState(true);
@@ -997,6 +1015,38 @@ export const AgentInstallerPage: React.FC = () => {
     if (!selected || !supportsModelConfig(selected)) return;
     void refreshModelConfig(selected.id);
   }, [refreshModelConfig, selected?.id, selected?.status]);
+
+  React.useEffect(() => {
+    if (autoDetectAttempted.current || loading || installActionsLocked || !snapshot?.manifest) return;
+    const targets = components.filter(shouldAutoDetectOnFirstOpen);
+    if (!targets.length) return;
+    autoDetectAttempted.current = true;
+    void (async () => {
+      for (const component of targets) {
+        try {
+          pushLog(`自动检测 ${component.name}`, 'neutral', component.id);
+          const next = await loomClient.components.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
+          setSnapshot(next);
+          if (supportsModelConfig(component)) {
+            void refreshModelConfig(component.id);
+          }
+        } catch (err: any) {
+          pushLog(loomErrorText(err, `${component.name} 自动检测失败`), 'warning', component.id);
+        } finally {
+          void refreshJobs();
+        }
+      }
+    })();
+  }, [
+    components,
+    installActionsLocked,
+    loading,
+    pushLog,
+    recordJobProgress,
+    refreshJobs,
+    refreshModelConfig,
+    snapshot?.manifest,
+  ]);
 
   const ensurePreflightReady = async (): Promise<DiagnosticReport | null> => {
     const cached = loadCachedPreflight();
@@ -1449,7 +1499,7 @@ export const AgentInstallerPage: React.FC = () => {
       className={`loom-white-page loom-installer-shell h-full bg-app-bg ${pageLocked ? 'overflow-y-hidden' : 'overflow-y-auto'}`}
     >
       <BusyOverlay active={busyOverlayActive} mode={busyOverlayMode} title={busyOverlayTitle} detail={busyOverlayDetail} />
-      <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-6 px-8 py-7">
+      <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-6 px-8 pb-7 pt-10">
         <header className="flex flex-wrap items-end justify-between gap-6">
           <div>
             <div className="text-[11px] font-bold tracking-[0.42em] text-accent">安装</div>
@@ -1476,6 +1526,7 @@ export const AgentInstallerPage: React.FC = () => {
             </div>
           ) : null}
 
+          <div data-agent-install-start-grid className="grid gap-4 border-b border-border/70 px-6 py-4 lg:grid-cols-[minmax(0,1.18fr)_minmax(320px,0.82fr)]">
           <CompactPrerequisitePanel
             report={preflight}
             loading={preflightLoading}
@@ -1486,8 +1537,8 @@ export const AgentInstallerPage: React.FC = () => {
             onRepair={() => void repairPreflight()}
           />
 
-          <section data-agent-access-inline className="border-t border-border/70 px-6 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] border border-[#0B4A3E]/15 bg-[#0B4A3E]/[0.035] px-4 py-3">
+          <section data-agent-access-inline className="h-full">
+            <div className="flex h-full flex-col justify-between gap-4 rounded-[8px] border border-[#0B4A3E]/15 bg-[#0B4A3E]/[0.035] p-4">
               <div className="min-w-0">
                 <div className="text-[10px] font-black tracking-[0.24em] text-accent">AGENT 接入</div>
                 <h2 className="mt-1 text-base font-black text-text">让 Codex / Claude Code 控制 LOOM</h2>
@@ -1495,13 +1546,15 @@ export const AgentInstallerPage: React.FC = () => {
                   一条提示词接入 CLI/MCP，支持安装智能体、生图、生视频、手机矩阵和只读监控。
                 </p>
               </div>
-              <Button variant="quiet" onClick={() => void copyAgentAccessPrompt()}>
+              <Button variant="quiet" onClick={() => void copyAgentAccessPrompt()} className="w-full !rounded-[8px] !px-3 !py-2 !text-xs">
                 复制接入提示词
               </Button>
             </div>
           </section>
 
-          <section className="border-t border-border/70 px-6 py-6">
+          </div>
+
+          <section className="px-6 py-6">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
                 <div className="text-[10px] font-bold tracking-[0.24em] text-text-subtle">可安装智能体</div>

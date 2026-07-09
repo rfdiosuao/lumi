@@ -26,8 +26,8 @@ const WindowButton: React.FC<{
     }}
     className={`flex h-10 w-12 items-center justify-center rounded-none transition-colors ${
       danger
-        ? 'text-text-muted hover:bg-[#E81123] hover:text-white'
-        : 'text-text-muted hover:bg-hover hover:text-text'
+        ? 'text-white/60 hover:bg-[#E81123] hover:text-white'
+        : 'text-white/58 hover:bg-white/[0.07] hover:text-white'
     }`}
   >
     <span className="pointer-events-none flex h-[14px] w-[14px] items-center justify-center">
@@ -63,13 +63,13 @@ export const WindowTitlebar: React.FC = () => {
     <div
       data-tauri-drag-region
       onDoubleClick={toggleMaximize}
-      className="flex h-10 shrink-0 items-stretch border-b border-border bg-surface text-text"
+      className="flex h-10 shrink-0 items-stretch border-b border-[#12343D]/75 bg-app-sidebar text-white"
     >
-      <div data-tauri-drag-region className="flex w-[292px] shrink-0 items-center border-r border-[#12343D]/75 bg-app-sidebar px-3 text-white">
+      <div data-tauri-drag-region className="flex w-[292px] shrink-0 items-center border-r border-[#12343D]/75 px-3 text-white">
         <LoomTitleLockup wordmarkTone="light" />
       </div>
 
-      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-stretch justify-end bg-surface">
+      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-stretch justify-end bg-app-sidebar">
         <div className="flex h-full items-stretch">
           <WindowButton title="最小化" onClick={() => appWindow?.minimize()}>
             <MinimizeGlyph />

@@ -40,6 +40,8 @@ class BusyOverlayContractTests(unittest.TestCase):
         self.assertIn("role=\"status\"", source)
         self.assertIn("aria-live=\"polite\"", source)
         self.assertIn("data-busy-overlay-card", source)
+        self.assertIn("bg-[#FFFCF4]", source)
+        self.assertIn("rounded-[8px]", source)
         self.assertIn("max-h-[min(80vh,420px)]", source)
         self.assertIn("overflow-auto", source)
         self.assertIn("break-words", source)
@@ -53,6 +55,7 @@ class BusyOverlayContractTests(unittest.TestCase):
         self.assertIn("mode = 'blocking'", source)
         self.assertIn("const isCorner = mode === 'corner'", source)
         self.assertIn("pointer-events-none fixed left-", source)
+        self.assertIn("top-14", source)
         self.assertIn("data-busy-overlay-corner-card", source)
 
     def test_install_account_and_phone_pages_use_shared_busy_overlay(self) -> None:

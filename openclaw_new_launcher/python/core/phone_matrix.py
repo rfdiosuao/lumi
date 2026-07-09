@@ -8,6 +8,8 @@ Bridge/APKClaw layer.
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import os
 import re
@@ -292,12 +294,14 @@ class MatrixControlPlane:
                 "leads": state["leads"][-100:],
                 "customers": state["customers"][-100:],
                 "drafts": drafts[-100:],
+                "agentRuns": state.get("agentRuns", [])[-50:],
                 "sop": state["sop"],
                 "logs": state["logs"][-100:],
                 "stats": {
                     "contentTasks": len(state["contentTasks"]),
                     "leads": len(state["leads"]),
                     "customers": len(state["customers"]),
+                    "agentRuns": len(state.get("agentRuns", [])),
                     "draftsPending": sum(1 for item in drafts if item.get("status") == "pending_manual_review"),
                     "approvedDrafts": sum(1 for item in drafts if item.get("status") == "approved_pending_manual_send"),
                     "pendingSync": sum(1 for item in state["leads"] if item.get("syncStatus") in {"pending_sync", "sync_failed"}),
@@ -398,6 +402,255 @@ class MatrixControlPlane:
         self._write_acquisition_state(state)
         return _redact_json({"contentTask": content_task, "lead": lead, "customer": customer, "draft": draft})
 
+    def import_acquisition_leads(self, raw: Json) -> Json:
+        state = self._load_acquisition_state()
+        now = _now_iso()
+        topic = _clip(raw.get("topic") or "真实线索导入", 120)
+        platform = _acquisition_platform(raw.get("platform"))
+        channel = _acquisition_channel(raw.get("channel"))
+        knowledge = _safe_lead_summary(raw.get("knowledge") or "先确认客户需求，再给人工跟进方案。", limit=360)
+        owner = _clip(raw.get("owner") or "", 80)
+        source = _acquisition_source(raw.get("source"))
+        agent_task_id = _clip(raw.get("agentTaskId") or raw.get("taskId"), 80)
+        device_id = _clip(raw.get("deviceId"), 80)
+        action_status = _clip(raw.get("actionStatus") or raw.get("status"), 80)
+        rows = _parse_acquisition_import_rows(raw)
+        existing_keys = {
+            str(item.get("dedupeKey") or "")
+            for item in state["leads"]
+            if isinstance(item, dict) and str(item.get("dedupeKey") or "")
+        }
+        seen: set[str] = set()
+        content_task = {
+            "taskId": f"content_{uuid.uuid4().hex[:10]}",
+            "createdAt": now,
+            "title": topic,
+            "platform": platform,
+            "status": "imported",
+            "assetPlan": ["真实线索导入", "规则意向评分", "飞书线索表写入", "人工确认跟进草稿"],
+        }
+        imported_leads: list[Json] = []
+        imported_customers: list[Json] = []
+        imported_drafts: list[Json] = []
+        duplicate_count = 0
+        sync_ok = 0
+        sync_pending = 0
+        sync_failed = 0
+        feishu = FeishuAcquisitionIntegration(self.paths)
+
+        for row in rows:
+            safe_platform = _acquisition_platform(row.get("platform") or platform)
+            safe_channel = _acquisition_channel(row.get("channel") or channel)
+            title = _clip(row.get("title") or row.get("nickname") or row.get("account") or "潜在线索", 120)
+            summary = _safe_lead_summary(
+                row.get("summary") or row.get("rawContent") or row.get("content") or row.get("description") or title,
+                limit=360,
+            )
+            profile_url = _safe_lead_url(row.get("profileUrl") or row.get("主页链接") or row.get("url"))
+            content_url = _safe_lead_url(row.get("contentUrl") or row.get("内容链接") or "")
+            dedupe_key = _acquisition_dedupe_key(safe_platform, profile_url or content_url, title, summary)
+            if not summary or dedupe_key in existing_keys or dedupe_key in seen:
+                duplicate_count += 1
+                continue
+            seen.add(dedupe_key)
+            qualification = _qualify_acquisition_lead(summary, topic=topic, target=raw.get("target") or raw.get("targetCustomer"))
+            lead = {
+                "leadId": f"lead_{uuid.uuid4().hex[:12]}",
+                "createdAt": now,
+                "updatedAt": now,
+                "source": source,
+                "sourceTask": content_task["title"],
+                "agentTaskId": agent_task_id,
+                "deviceId": device_id,
+                "actionStatus": action_status,
+                "platform": safe_platform,
+                "channel": safe_channel,
+                "status": "qualified" if qualification["score"] >= 50 else "new",
+                "title": title,
+                "nickname": _clip(row.get("nickname") or title, 120),
+                "summary": summary,
+                "rawContent": summary,
+                "profileUrl": profile_url,
+                "contentUrl": content_url,
+                "need": qualification["need"],
+                "intentLevel": qualification["intentLevel"],
+                "intentScore": qualification["score"],
+                "qualificationSource": "rules",
+                "qualificationReasons": qualification["reasons"],
+                "recommendedAction": qualification["recommendedAction"],
+                "owner": owner,
+                "dedupeKey": dedupe_key,
+                "tags": ["real-import", safe_channel, safe_platform, qualification["intentLevel"]],
+            }
+            customer = {
+                "customerId": f"customer_{uuid.uuid4().hex[:12]}",
+                "createdAt": now,
+                "updatedAt": now,
+                "leadId": lead["leadId"],
+                "name": title,
+                "stage": "needs_follow_up" if qualification["score"] >= 50 else "needs_qualification",
+                "summary": summary,
+                "intentLevel": qualification["intentLevel"],
+                "owner": owner,
+                "allowedChannels": [safe_channel],
+            }
+            draft_body = _safe_lead_summary(row.get("draftBody"), limit=500) or _build_acquisition_followup_draft(lead, knowledge)
+            draft = {
+                "draftId": f"draft_{uuid.uuid4().hex[:12]}",
+                "createdAt": now,
+                "updatedAt": now,
+                "leadId": lead["leadId"],
+                "customerId": customer["customerId"],
+                "agentTaskId": agent_task_id,
+                "deviceId": device_id,
+                "channel": safe_channel,
+                "status": "pending_manual_review",
+                "requiresHumanReview": True,
+                "sendEnabled": False,
+                "policy": _acquisition_policy(),
+                "body": draft_body,
+            }
+            sync = feishu.sync_lead({**lead, "draft": draft_body, "logId": lead["leadId"]})
+            lead["syncStatus"] = sync.get("syncStatus") or "pending_sync"
+            lead["syncError"] = sync.get("syncError") or ""
+            lead["feishuRecordId"] = sync.get("recordId") or ""
+            if lead["syncStatus"] == "synced":
+                sync_ok += 1
+            elif lead["syncStatus"] == "sync_failed":
+                sync_failed += 1
+            else:
+                sync_pending += 1
+            imported_leads.append(lead)
+            imported_customers.append(customer)
+            imported_drafts.append(draft)
+
+        if imported_leads:
+            state["contentTasks"].append(content_task)
+            state["leads"].extend(imported_leads)
+            state["customers"].extend(imported_customers)
+            state["drafts"].extend(imported_drafts)
+        state["logs"].extend(
+            [
+                _acquisition_log("lead.imported", f"真实线索导入 {len(imported_leads)} 条，去重 {duplicate_count} 条", now),
+                _acquisition_log("lead.qualified", f"规则评分完成 {len(imported_leads)} 条，等待人工确认草稿", now),
+                _acquisition_log("feishu.sync", f"飞书已同步 {sync_ok} 条，待同步 {sync_pending} 条，失败 {sync_failed} 条", now),
+            ]
+        )
+        state["updatedAt"] = now
+        self._write_acquisition_state(state)
+        return _redact_json(
+            {
+                "imported": len(imported_leads),
+                "duplicates": duplicate_count,
+                "leads": imported_leads,
+                "customers": imported_customers,
+                "drafts": imported_drafts,
+                "contentTask": content_task if imported_leads else None,
+                "summary": f"导入 {len(imported_leads)} 条，去重 {duplicate_count} 条，飞书已同步 {sync_ok} 条，待同步 {sync_pending} 条，失败 {sync_failed} 条",
+            }
+        )
+
+    def run_acquisition_agent_task(self, raw: Json) -> Json:
+        dry_run = _truthy(raw.get("dryRun", True))
+        if not dry_run and not _truthy(raw.get("confirmed")):
+            return _redact_json(
+                {
+                    "error": "acquisition_agent_confirmation_required",
+                    "executed": False,
+                    "message": "Real phone Agent runs require confirmed=true and must still stop at human confirmation.",
+                    "policy": _acquisition_policy(),
+                }
+            )
+        agent_result = raw.get("agentResult") if isinstance(raw.get("agentResult"), dict) else {}
+        if agent_result:
+            ingest = self.ingest_acquisition_agent_result(agent_result, raw)
+        else:
+            ingest = {
+                "imported": 0,
+                "duplicates": 0,
+                "leads": [],
+                "customers": [],
+                "drafts": [],
+                "contentTask": None,
+                "summary": "手机 Agent 任务已生成，等待真实回传入库",
+            }
+        agent_run = {
+            "schema": "loom.acquisition.agent_run.v1",
+            "dryRun": dry_run,
+            "taskId": _clip(agent_result.get("taskId") or raw.get("taskId") or f"agent_task_{uuid.uuid4().hex[:10]}", 80),
+            "deviceId": _clip(agent_result.get("deviceId") or raw.get("deviceId") or raw.get("device") or "phone-1", 80),
+            "platform": _acquisition_platform(agent_result.get("platform") or raw.get("platform")),
+            "action": _clip(agent_result.get("action") or raw.get("action") or "discover_leads", 80),
+            "status": _clip(agent_result.get("status") or "pending_human_confirm", 80),
+            "requiresHumanReview": True,
+            "sendEnabled": False,
+        }
+        agent_run["phoneTask"] = _acquisition_phone_task_payload(raw, agent_run)
+        state = self._load_acquisition_state()
+        state["agentRuns"].append(agent_run)
+        state["logs"].append(
+            _acquisition_log(
+                "agent.task_prepared",
+                f"手机 Agent 获客任务已准备：{agent_run['taskId']} / {agent_run['platform']} / {agent_run['deviceId']}",
+                _now_iso(),
+            )
+        )
+        state["updatedAt"] = _now_iso()
+        self._write_acquisition_state(state)
+        return _redact_json({"agentRun": agent_run, "ingest": ingest, "snapshot": self.acquisition_snapshot()})
+
+    def ingest_acquisition_agent_result(self, agent_result: Json, raw: Json | None = None) -> Json:
+        body = raw if isinstance(raw, dict) else {}
+        task_id = _clip(agent_result.get("taskId") or body.get("taskId") or f"agent_task_{uuid.uuid4().hex[:10]}", 80)
+        device_id = _clip(agent_result.get("deviceId") or body.get("deviceId") or "", 80)
+        platform = _acquisition_platform(agent_result.get("platform") or body.get("platform"))
+        action = _clip(agent_result.get("action") or body.get("action") or "discover_leads", 80)
+        status = _clip(agent_result.get("status") or "pending_human_confirm", 80)
+        drafts = agent_result.get("drafts") if isinstance(agent_result.get("drafts"), list) else []
+        draft = next((item for item in drafts if isinstance(item, dict)), {})
+        policy_clamped = _agent_result_has_unsafe_outbound(agent_result)
+        leads = []
+        for item in agent_result.get("leads") if isinstance(agent_result.get("leads"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            leads.append(
+                {
+                    **item,
+                    "platform": item.get("platform") or platform,
+                    "channel": item.get("channel") or draft.get("channel") or "comment",
+                    "draftBody": item.get("draftBody") or draft.get("body") or "",
+                }
+            )
+        ingest = self.import_acquisition_leads(
+            {
+                "topic": body.get("topic") or f"{platform} 手机 Agent 获客任务",
+                "platform": platform,
+                "channel": draft.get("channel") or body.get("channel") or "comment",
+                "knowledge": body.get("knowledge") or "手机 Agent 已返回线索，后续只生成草稿并等待人工确认。",
+                "target": body.get("target") or "",
+                "owner": body.get("owner") or "phone-agent",
+                "leads": leads,
+                "source": "phone_agent",
+                "agentTaskId": task_id,
+                "deviceId": device_id,
+                "actionStatus": status,
+                "status": status,
+            }
+        )
+        state = self._load_acquisition_state()
+        if policy_clamped:
+            state["logs"].append(
+                _acquisition_log(
+                    "agent.result_policy_clamped",
+                    f"手机 Agent 回传包含外发意图，已强制钳制为草稿/人工确认：{task_id}",
+                    _now_iso(),
+                )
+            )
+        state["logs"].append(_acquisition_log("agent.result_ingested", f"手机 Agent 结果已入库：{task_id} / {action} / {status}", _now_iso()))
+        state["updatedAt"] = _now_iso()
+        self._write_acquisition_state(state)
+        return ingest
+
     def confirm_acquisition_draft(self, draft_id: str, raw: Json | None = None) -> Json:
         state = self._load_acquisition_state()
         body = raw if isinstance(raw, dict) else {}
@@ -412,6 +665,49 @@ class MatrixControlPlane:
             draft["sendEnabled"] = False
             draft["requiresHumanReview"] = True
             state["logs"].append(_acquisition_log("draft.approved", "草稿已人工确认，仍需在白名单和频控下手动发送", now))
+            state["updatedAt"] = now
+            self._write_acquisition_state(state)
+            return _redact_json({"draft": draft, "snapshot": self.acquisition_snapshot()})
+        return {"error": "draft not found", "draftId": safe_id}
+
+    def record_acquisition_manual_send(self, draft_id: str, raw: Json | None = None) -> Json:
+        state = self._load_acquisition_state()
+        body = raw if isinstance(raw, dict) else {}
+        safe_id = _clip(draft_id, 80)
+        now = _now_iso()
+        outcome = _manual_send_outcome(body.get("outcome"))
+        for draft in state["drafts"]:
+            if not isinstance(draft, dict) or draft.get("draftId") != safe_id:
+                continue
+            draft["status"] = "manual_sent" if outcome != "failed" else "manual_send_failed"
+            draft["updatedAt"] = now
+            draft["sendEnabled"] = False
+            draft["requiresHumanReview"] = True
+            draft["manualSend"] = {
+                "outcome": outcome,
+                "operator": _clip(body.get("operator") or "human", 80),
+                "recordedAt": now,
+                "reply": _safe_lead_summary(body.get("reply"), limit=320),
+                "note": _safe_lead_summary(body.get("note"), limit=320),
+                "nextFollowUpAt": _clip(body.get("nextFollowUpAt"), 80),
+            }
+            for customer in state["customers"]:
+                if isinstance(customer, dict) and customer.get("customerId") == draft.get("customerId"):
+                    customer["stage"] = "replied" if draft["manualSend"]["reply"] else ("contact_failed" if outcome == "failed" else "contacted")
+                    customer["lastReply"] = draft["manualSend"]["reply"]
+                    customer["nextFollowUpAt"] = draft["manualSend"]["nextFollowUpAt"]
+                    customer["updatedAt"] = now
+            for lead in state["leads"]:
+                if isinstance(lead, dict) and lead.get("leadId") == draft.get("leadId"):
+                    lead["status"] = "contact_failed" if outcome == "failed" else "contacted"
+                    lead["updatedAt"] = now
+            state["logs"].append(
+                _acquisition_log(
+                    "draft.manual_sent",
+                    f"已记录人工触达：{safe_id} / {outcome}；系统未自动发送评论、私信或加好友。",
+                    now,
+                )
+            )
             state["updatedAt"] = now
             self._write_acquisition_state(state)
             return _redact_json({"draft": draft, "snapshot": self.acquisition_snapshot()})
@@ -819,11 +1115,12 @@ class MatrixControlPlane:
                 "leads": [],
                 "customers": [],
                 "drafts": [],
+                "agentRuns": [],
                 "logs": [],
                 "sop": _default_acquisition_sop(),
             },
         )
-        for key in ("contentTasks", "leads", "customers", "drafts", "logs"):
+        for key in ("contentTasks", "leads", "customers", "drafts", "agentRuns", "logs"):
             if not isinstance(data.get(key), list):
                 data[key] = []
         if not isinstance(data.get("sop"), list):
@@ -837,6 +1134,7 @@ class MatrixControlPlane:
         state["leads"] = state.get("leads", [])[-500:]
         state["customers"] = state.get("customers", [])[-500:]
         state["drafts"] = state.get("drafts", [])[-500:]
+        state["agentRuns"] = state.get("agentRuns", [])[-200:]
         state["logs"] = state.get("logs", [])[-500:]
         self._write_json(self.acquisition_path, state)
 
@@ -978,6 +1276,203 @@ def _needs_confirmation(prompt: str) -> bool:
     return any(marker in str(prompt or "") for marker in OUTREACH_MARKERS)
 
 
+def _parse_acquisition_import_rows(raw: Json) -> list[Json]:
+    rows = raw.get("leads") or raw.get("rows") or raw.get("items")
+    if isinstance(rows, list):
+        return [_normalize_acquisition_row(item) for item in rows if isinstance(item, dict)][:200]
+    summary = _safe_lead_summary(raw.get("leadSummary") or raw.get("summary"), limit=360)
+    if summary:
+        return [_normalize_acquisition_row({"summary": summary, "title": raw.get("title") or raw.get("topic")})]
+    text = str(raw.get("sourceText") or raw.get("text") or "").strip()
+    if not text:
+        return []
+    parsed = _try_parse_acquisition_json_rows(text)
+    if parsed:
+        return parsed[:200]
+    csv_rows = _try_parse_acquisition_csv_rows(text)
+    if csv_rows:
+        return csv_rows[:200]
+    return [
+        _normalize_acquisition_row({"summary": line.strip(), "title": line.strip()[:40]})
+        for line in text.splitlines()
+        if line.strip()
+    ][:200]
+
+
+def _try_parse_acquisition_json_rows(text: str) -> list[Json]:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, dict):
+        rows = data.get("comments") or data.get("leads") or data.get("items") or data.get("rows")
+        if isinstance(rows, list):
+            return [_normalize_acquisition_row(item) for item in rows if isinstance(item, dict)]
+        return [_normalize_acquisition_row(data)]
+    if isinstance(data, list):
+        return [_normalize_acquisition_row(item) for item in data if isinstance(item, dict)]
+    return []
+
+
+def _try_parse_acquisition_csv_rows(text: str) -> list[Json]:
+    sample = text.lstrip("\ufeff")
+    try:
+        reader = csv.DictReader(io.StringIO(sample))
+        if reader.fieldnames and len(reader.fieldnames) > 1:
+            rows = [_normalize_acquisition_row(dict(row)) for row in reader if any(str(value or "").strip() for value in row.values())]
+            if rows:
+                return rows
+        plain_reader = csv.reader(io.StringIO(sample))
+        return [
+            _normalize_acquisition_row({"title": row[0] if row else "", "summary": " ".join(cell for cell in row if cell)})
+            for row in plain_reader
+            if row and any(cell.strip() for cell in row)
+        ]
+    except csv.Error:
+        return []
+
+
+def _normalize_acquisition_row(row: Json) -> Json:
+    def pick(*keys: str) -> str:
+        for key in keys:
+            value = row.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    return {
+        "platform": pick("platform", "平台", "来源平台", "sourcePlatform"),
+        "channel": pick("channel", "渠道", "来源渠道"),
+        "title": pick("title", "客户昵称/账号", "客户昵称", "昵称", "账号", "nickname", "account", "author"),
+        "nickname": pick("nickname", "客户昵称/账号", "客户昵称", "昵称", "账号", "author"),
+        "summary": pick("summary", "线索内容", "原始线索内容", "评论内容", "内容", "comment", "rawContent", "description"),
+        "draftBody": pick("draftBody", "跟进话术草稿", "草稿", "draft", "reply", "body"),
+        "profileUrl": pick("profileUrl", "主页链接", "主页或内容链接", "主页", "profile", "url"),
+        "contentUrl": pick("contentUrl", "内容链接", "作品链接", "noteUrl"),
+    }
+
+
+def _qualify_acquisition_lead(summary: str, *, topic: Any = "", target: Any = "") -> Json:
+    text = f"{summary} {topic or ''} {target or ''}".lower()
+    high_tokens = ["报价", "价格", "预算", "合作", "预约", "方案", "案例", "获客", "加微信", "私域", "线索", "客户"]
+    medium_tokens = ["了解", "咨询", "怎么", "如何", "需要", "想看", "有没有", "可以吗"]
+    score = 30
+    reasons: list[str] = []
+    for token in high_tokens:
+        if token.lower() in text:
+            score += 15
+            reasons.append(f"命中高意向词：{token}")
+    for token in medium_tokens:
+        if token.lower() in text:
+            score += 8
+            reasons.append(f"命中咨询词：{token}")
+    score = max(0, min(score, 100))
+    if score >= 70:
+        level = "high"
+        action = "优先人工确认跟进草稿，并记录行业、城市、预算和时间窗口。"
+    elif score >= 50:
+        level = "medium"
+        action = "进入客户池，先用低压开场白确认场景和需求。"
+    else:
+        level = "low"
+        action = "先保留为线索，等待更多互动信号后再跟进。"
+    return {
+        "score": score,
+        "intentLevel": level,
+        "need": _safe_lead_summary(summary, limit=220),
+        "recommendedAction": action,
+        "reasons": reasons[:6] or ["未命中强意向词，按普通线索保留"],
+    }
+
+
+def _build_acquisition_followup_draft(lead: Json, knowledge: str) -> str:
+    title = _safe_lead_summary(lead.get("nickname") or lead.get("title") or "您好", limit=60)
+    need = _safe_lead_summary(lead.get("need") or lead.get("summary") or "", limit=180)
+    action = _safe_lead_summary(lead.get("recommendedAction") or "先确认需求，再人工跟进。", limit=140)
+    return _safe_lead_summary(
+        f"{title}，看到您提到“{need}”。我先不打扰您做决定，可以根据您的行业和城市整理一版试跑思路：{knowledge} 下一步建议：{action}",
+        limit=500,
+    )
+
+
+def _acquisition_dedupe_key(platform: str, url: str, title: str, summary: str) -> str:
+    source = "|".join([platform, url, title, summary[:160]]).lower()
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:20]
+
+
+def _safe_lead_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if not re.match(r"^https?://", text, flags=re.I):
+        return ""
+    return _safe_lead_summary(text, limit=260)
+
+
+def _acquisition_source(value: Any) -> str:
+    text = str(value or "manual_import").strip().lower()
+    if text in {"manual_import", "phone_agent", "demo_flow", "agent_result", "csv_import"}:
+        return text
+    return "manual_import"
+
+
+def _acquisition_phone_task_payload(raw: Json, agent_run: Json) -> Json:
+    device_id = _clip(agent_run.get("deviceId") or raw.get("deviceId") or raw.get("device") or "phone-1", 80) or "phone-1"
+    platform = _acquisition_platform(agent_run.get("platform") or raw.get("platform"))
+    topic = _clip(raw.get("topic") or f"{platform} 手机 Agent 获客任务", 120)
+    action = _clip(agent_run.get("action") or raw.get("action") or "discover_leads", 80)
+    target = _safe_lead_summary(raw.get("target") or raw.get("targetCustomer") or "", limit=180)
+    knowledge = _safe_lead_summary(raw.get("knowledge") or "", limit=240)
+    prompt = _safe_lead_summary(
+        f"在{platform}执行{topic}。只读取可见公开内容，识别潜在线索，生成跟进草稿；如需触达，只能填草稿并停在人工确认页。目标客户：{target}。SOP：{knowledge}。返回 JSON 必须符合 loom.acquisition.agent_result.v1，字段包含 taskId、deviceId、platform、action、status、leads、drafts、logs；禁止自动私信、评论、加好友、加微信或发布。",
+        limit=900,
+    )
+    payload = {
+        "schema": "loom.acquisition.phone_task.v1",
+        "taskId": agent_run.get("taskId"),
+        "platform": platform,
+        "action": action,
+        "topic": topic,
+        "mode": "safe",
+        "profile": "fast",
+        "target": {"deviceIds": [device_id]},
+        "resultSchema": "loom.acquisition.agent_result.v1",
+        "stopAt": "human_confirmation",
+        "requiresHumanReview": True,
+        "sendEnabled": False,
+        "allowedActions": ["open_app", "read_public_content", "summarize_leads", "fill_draft", "capture_screenshot"],
+        "forbiddenActions": ["send_dm", "post_comment", "add_friend", "add_wechat", "bulk_outreach", "publish_without_confirmation"],
+        "outboundPolicy": _acquisition_policy(),
+        "prompt": prompt,
+    }
+    payload["bridgeDispatch"] = _acquisition_phone_bridge_dispatch(payload, device_id)
+    return payload
+
+
+def _acquisition_phone_bridge_dispatch(phone_task: Json, device_id: str) -> Json:
+    return {
+        "method": "POST",
+        "endpoint": "/api/phone/task",
+        "body": {
+            "taskId": phone_task.get("taskId") or "",
+            "prompt": phone_task.get("prompt") or "",
+            "mode": "safe",
+            "profile": phone_task.get("profile") or "fast",
+            "executionLayer": "agent",
+            "target": {"deviceIds": [device_id]},
+            "template": "",
+            "requiresHumanReview": True,
+            "sendEnabled": False,
+            "resultSchema": "loom.acquisition.agent_result.v1",
+            "outboundPolicy": _acquisition_policy(),
+            "resultCallback": {
+                "method": "POST",
+                "endpoint": "/api/matrix/acquisition/agent/result",
+                "payloadField": "agentResult",
+            },
+        },
+    }
+
 def _mode(value: Any) -> str:
     text = str(value or "safe").strip().lower()
     if text in {"observe", "safe", "full"}:
@@ -1025,20 +1520,77 @@ def _lead_status(value: Any) -> str:
 
 def _acquisition_platform(value: Any) -> str:
     text = str(value or "douyin").strip().lower()
-    if text in {"douyin", "xiaohongshu", "wechat", "bilibili", "kuaishou", "manual"}:
+    aliases = {
+        "抖音": "douyin",
+        "小红书": "xiaohongshu",
+        "微信": "wechat",
+        "视频号": "wechat",
+        "快手": "kuaishou",
+        "海外小红书": "rednote",
+        "小红书海外版": "rednote",
+        "red note": "rednote",
+        "海外版小红书": "rednote",
+    }
+    text = aliases.get(text, text)
+    if text in {"douyin", "xiaohongshu", "wechat", "bilibili", "kuaishou", "tiktok", "rednote", "lemon8", "manual"}:
         return text
     return "manual"
 
 
 def _acquisition_channel(value: Any) -> str:
     text = str(value or "comment").strip().lower()
+    aliases = {
+        "评论": "comment",
+        "评论区": "comment",
+        "私信": "dm",
+        "微信": "wechat",
+        "电话": "phone",
+        "手动": "manual",
+    }
+    text = aliases.get(text, text)
     if text in {"comment", "dm", "wechat", "phone", "manual"}:
         return text
     return "manual"
 
 
+def _manual_send_outcome(value: Any) -> str:
+    text = str(value or "sent").strip().lower()
+    if text in {"sent", "replied", "no_reply", "failed"}:
+        return text
+    aliases = {
+        "已发送": "sent",
+        "已回复": "replied",
+        "无回复": "no_reply",
+        "失败": "failed",
+    }
+    return aliases.get(text, "sent")
+
+
 def _acquisition_policy() -> list[str]:
     return ["draft_only", "manual_confirm", "whitelist", "frequency_cap", "audit_log"]
+
+
+def _agent_result_has_unsafe_outbound(agent_result: Json) -> bool:
+    forbidden = {"send_dm", "post_comment", "add_friend", "add_wechat", "bulk_outreach", "publish_without_confirmation"}
+    if _truthy(agent_result.get("sendEnabled")):
+        return True
+    if str(agent_result.get("status") or "").strip().lower() in {"ready_to_send", "sent", "published", "auto_sent"}:
+        return True
+    actions = agent_result.get("requestedActions")
+    if isinstance(actions, list):
+        for item in actions:
+            if str(item or "").strip().lower() in forbidden:
+                return True
+    drafts = agent_result.get("drafts")
+    if isinstance(drafts, list):
+        for item in drafts:
+            if not isinstance(item, dict):
+                continue
+            if _truthy(item.get("sendEnabled")):
+                return True
+            if item.get("requiresHumanReview") is False:
+                return True
+    return False
 
 
 def _default_acquisition_sop() -> list[Json]:

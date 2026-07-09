@@ -117,6 +117,9 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
             source = handle.read()
 
+        self.assertIn("data-agent-install-start-grid", source)
+        self.assertIn("lg:grid-cols-[minmax(0,1.18fr)_minmax(320px,0.82fr)]", source)
+        self.assertIn("grid-cols-[repeat(auto-fit,minmax(120px,1fr))]", source)
         self.assertIn("data-agent-access-inline", source)
         self.assertIn("copyAgentAccessPrompt", source)
         self.assertIn("buildOneShotAgentPrompt(buildMcpJson())", source)
@@ -196,6 +199,22 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("安装清单未就绪，安装和启动暂不可用", page_source)
         self.assertIn("disabled={controlsLocked || installActionsLocked || !components.length}", page_source)
         self.assertIn("disabled={controlsLocked || installActionsLocked || isWorking(selected.status)}", page_source)
+
+    def test_install_actions_lock_while_manifest_is_loading(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            page_source = handle.read()
+
+        self.assertIn("if (!snapshot) return true", page_source)
+
+    def test_first_open_auto_detects_existing_agents_without_installing(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            page_source = handle.read()
+
+        self.assertIn("AUTO_DETECT_COMPONENT_IDS", page_source)
+        self.assertIn("autoDetectAttempted", page_source)
+        self.assertIn("shouldAutoDetectOnFirstOpen", page_source)
+        self.assertIn("loomClient.components.detect(component.id", page_source)
+        self.assertNotIn("loomClient.components.install(component.id, { confirmed: false", page_source)
 
     def test_first_open_uses_cached_preflight_until_user_refreshes(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:

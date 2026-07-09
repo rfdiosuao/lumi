@@ -12,6 +12,17 @@ import subprocess
 from fastapi import Request
 
 
+def _script_path(ctx, script_name: str) -> str:
+    for root in getattr(ctx.paths, "script_roots", ()) or ():
+        candidate = os.path.join(root, script_name)
+        if os.path.exists(candidate):
+            return candidate
+    scripts_dir = getattr(ctx.paths, "scripts_dir", None)
+    if scripts_dir:
+        return os.path.join(scripts_dir, script_name)
+    return os.path.join(ctx.paths.base_path, "scripts", script_name)
+
+
 CLI_COMMANDS: dict[str, dict[str, object]] = {
     "phone:agent": {
         "title": "手机 Agent",
@@ -197,7 +208,7 @@ def register_cli_routes(app, ctx) -> None:
         if not read_only and not ctx.get_license_mgr().is_authorized():
             return ctx.fastapi_json({"error": "请先登录或完成授权"}, 403)
 
-        script_path = os.path.join(ctx.paths.base_path, "scripts", str(command["script"]))
+        script_path = _script_path(ctx, str(command["script"]))
         if not os.path.exists(script_path):
             return ctx.fastapi_json({"error": "能力脚本缺失"}, 404)
         if not os.path.exists(ctx.paths.node_exe):

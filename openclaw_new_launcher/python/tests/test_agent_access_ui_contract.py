@@ -13,6 +13,14 @@ class AgentAccessUiContractTests(unittest.TestCase):
         with open(page_path, "r", encoding="utf-8") as handle:
             return handle.read()
 
+    def _prompt_module(self) -> str:
+        prompt_path = os.path.join(ROOT, "src", "components", "agentAccess", "agentPrompt.ts")
+        with open(prompt_path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
+    def _page_and_prompt(self) -> str:
+        return self._page() + "\n" + self._prompt_module()
+
     def _public_skill(self) -> str:
         public_skill_path = os.path.join(ROOT, "public", "skills", "loom-command-brain", "SKILL.md")
         with open(public_skill_path, "r", encoding="utf-8") as handle:
@@ -23,6 +31,11 @@ class AgentAccessUiContractTests(unittest.TestCase):
             ROOT, "public", "skills", "loom-command-brain", "references", "WORKFLOWS.md"
         )
         with open(public_workflows_path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
+    def _public_acquisition_skill(self) -> str:
+        public_skill_path = os.path.join(ROOT, "public", "skills", "luming-acquisition-agent", "SKILL.md")
+        with open(public_skill_path, "r", encoding="utf-8") as handle:
             return handle.read()
 
     def test_agent_access_route_is_registered_but_entry_lives_inside_agents(self) -> None:
@@ -45,7 +58,7 @@ class AgentAccessUiContractTests(unittest.TestCase):
         self.assertIn("buildOneShotAgentPrompt(buildMcpJson())", agent_page)
 
     def test_agent_access_page_points_to_mcp_config(self) -> None:
-        page = self._page()
+        page = self._page_and_prompt()
 
         self.assertIn(".mcp.json", page)
         self.assertIn("loom_mcp.py", page)
@@ -54,18 +67,22 @@ class AgentAccessUiContractTests(unittest.TestCase):
         self.assertLess(page.count("<p"), 4)
 
     def test_agent_access_page_exposes_cross_platform_skill_bootstrap(self) -> None:
-        page = self._page()
+        page = self._page_and_prompt()
         public_skill_path = os.path.join(ROOT, "public", "skills", "loom-command-brain", "SKILL.md")
         public_workflows_path = os.path.join(
             ROOT, "public", "skills", "loom-command-brain", "references", "WORKFLOWS.md"
         )
+        public_acquisition_skill_path = os.path.join(ROOT, "public", "skills", "luming-acquisition-agent", "SKILL.md")
 
         self.assertIn("LOOM_COMMAND_BRAIN_SKILL_PATH", page)
         self.assertIn("LOOM_COMMAND_BRAIN_WORKFLOWS_PATH", page)
+        self.assertIn("LUMING_ACQUISITION_SKILL_PATH", page)
         self.assertIn("LOOM_COMMAND_BRAIN_SKILL_URLS", page)
         self.assertIn("LOOM_COMMAND_BRAIN_WORKFLOWS_URLS", page)
+        self.assertIn("LUMING_ACQUISITION_SKILL_URLS", page)
         self.assertIn("/skills/loom-command-brain/SKILL.md", page)
         self.assertIn("/skills/loom-command-brain/references/WORKFLOWS.md", page)
+        self.assertIn("/skills/luming-acquisition-agent/SKILL.md", page)
         self.assertIn("CODEX_HOME", page)
         self.assertIn("LOOM_CLI", page)
         self.assertIn("%USERPROFILE%\\\\.codex", page)
@@ -73,9 +90,10 @@ class AgentAccessUiContractTests(unittest.TestCase):
         self.assertIn("/Applications/LOOM.app/Contents/Resources", page)
         self.assertTrue(os.path.exists(public_skill_path))
         self.assertTrue(os.path.exists(public_workflows_path))
+        self.assertTrue(os.path.exists(public_acquisition_skill_path))
 
     def test_agent_access_page_documents_encoding_and_tool_fallback(self) -> None:
-        page = self._page()
+        page = self._page_and_prompt()
 
         self.assertIn("UTF-8", page)
         self.assertIn("<meta charset=\"UTF-8\">", page)
@@ -85,23 +103,43 @@ class AgentAccessUiContractTests(unittest.TestCase):
         self.assertIn("wire_api = \"chat\"", page)
 
     def test_agent_access_page_exposes_one_shot_bootstrap_prompt(self) -> None:
-        page = self._page()
+        page = self._page_and_prompt()
 
         self.assertIn("buildOneShotAgentPrompt", page)
         self.assertIn("BEGIN_SKILL_URLS", page)
         self.assertIn("END_SKILL_URLS", page)
         self.assertIn("BEGIN_WORKFLOWS_URLS", page)
         self.assertIn("END_WORKFLOWS_URLS", page)
+        self.assertIn("BEGIN_ACQUISITION_SKILL_URLS", page)
+        self.assertIn("END_ACQUISITION_SKILL_URLS", page)
         self.assertIn("BEGIN_SKILL_MD", page)
         self.assertIn("END_SKILL_MD", page)
         self.assertIn("BEGIN_WORKFLOWS_MD", page)
         self.assertIn("END_WORKFLOWS_MD", page)
+        self.assertIn("BEGIN_ACQUISITION_SKILL_MD", page)
+        self.assertIn("END_ACQUISITION_SKILL_MD", page)
         self.assertIn("BEGIN_MCP_JSON", page)
         self.assertIn("END_MCP_JSON", page)
         self.assertIn("data-agent-one-shot-copy", page)
 
+    def test_acquisition_skill_teaches_phone_agent_feishu_and_safety_contract(self) -> None:
+        page = self._page_and_prompt()
+        skill = self._public_acquisition_skill()
+
+        for source in (page, skill):
+            self.assertIn("luming-acquisition-agent", source)
+            self.assertIn("loom.acquisition.agent_result.v1", source)
+            self.assertIn("acquisition agent-run", source)
+            self.assertIn("acquisition agent-result", source)
+            self.assertIn("integration feishu status", source)
+            self.assertIn("Feishu Bitable", source)
+            self.assertIn("draft_only", source)
+            self.assertIn("manual_confirm", source)
+            self.assertIn("batch private messages", source)
+            self.assertIn("requiresHumanReview", source)
+
     def test_agent_access_prompt_mentions_phone_cli_surface(self) -> None:
-        sources = [self._page(), self._public_skill(), self._public_workflows()]
+        sources = [self._page_and_prompt(), self._public_skill(), self._public_workflows()]
 
         for source in sources:
             self.assertIn("phone:agent", source)
@@ -121,7 +159,7 @@ class AgentAccessUiContractTests(unittest.TestCase):
             )
 
     def test_agent_access_skill_text_has_no_mojibake_or_local_dev_paths(self) -> None:
-        sources = [self._page(), self._public_skill(), self._public_workflows()]
+        sources = [self._page_and_prompt(), self._public_skill(), self._public_workflows(), self._public_acquisition_skill()]
         mojibake_markers = [
             "".join(chr(code) for code in codes)
             for codes in (

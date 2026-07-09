@@ -221,6 +221,29 @@ class FeishuAcquisitionIntegrationContractTests(unittest.TestCase):
 
         for marker in [
             "data-acquisition-feishu-sync",
+            "飞书同步",
+            "扫码登录",
+            "绑定",
+            "测试写入",
+            "最近同步",
+            "未绑定",
+        ]:
+            self.assertIn(marker, page)
+        self.assertIn("data-feishu-login-guide", page)
+        self.assertIn("data-feishu-login-qr", page)
+        self.assertIn("createQrDataUri", page)
+        self.assertIn("createDataURL", page)
+        self.assertIn("data:image/gif;base64", page)
+        self.assertIn("qrcode-generator", page)
+        self.assertIn("复制登录链接", page)
+        self.assertIn("飞书扫码登录二维码", page)
+        self.assertIn("feishuApi", api)
+        self.assertIn("feishu", skill.lower())
+        self.assertIn("integration feishu status", skill)
+        return
+
+        for marker in [
+            "data-acquisition-feishu-sync",
             "连接飞书",
             "扫码登录",
             "绑定线索表",

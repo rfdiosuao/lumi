@@ -76,6 +76,7 @@ def default_manifest_path(base_path: str) -> str:
     for _depth in range(8):
         add_candidate(os.path.join(current, "release-manifest.json"))
         add_candidate(os.path.join(current, "_up_", "release-manifest.json"))
+        add_candidate(os.path.join(current, "_up_", "_up_", "release-manifest.json"))
         add_candidate(os.path.join(current, "LOOMFiles", "release-manifest.json"))
 
         parent = os.path.dirname(current)

@@ -1,14 +1,14 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "麓鸣AI矩阵获客工作台",
+  "productName": "Luming AI Matrix Acquisition Workbench",
   "mainBinaryName": "LOOM",
-  "version": "2.1.45",
+  "version": "2.1.55",
   "identifier": "top.heang.loom",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build:node-runtime && npm run build:python-runtime && npm run build"
   },
   "app": {
     "windows": [
@@ -32,8 +32,13 @@
     "active": true,
     "targets": "all",
     "resources": [
+      "../../release-manifest.json",
+      "../../release-public-key.txt",
       "../.mcp.json",
       "../python/**/*",
+      "../python-runtime/**/*",
+      "../node-runtime/**/*",
+      "../public/skills/**/*",
       "../data/themes/**/*",
       "../scripts/**/*",
       "../openclaw-workspace/**/*",

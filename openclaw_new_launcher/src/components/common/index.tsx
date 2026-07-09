@@ -300,7 +300,7 @@ export const BusyOverlay: React.FC<{
       aria-live="polite"
       className={
         isCorner
-          ? 'pointer-events-none fixed left-[calc(var(--sidebar-width,88px)+16px)] top-4 z-[99940] flex max-w-[min(360px,calc(100vw-2rem))] items-start'
+          ? 'pointer-events-none fixed left-[calc(var(--sidebar-width,88px)+16px)] top-14 z-[99940] flex max-w-[min(360px,calc(100vw-2rem))] items-start'
           : 'pointer-events-auto fixed inset-0 z-[99940] flex items-center justify-center bg-[#071916]/64 px-6'
       }
     >
@@ -318,7 +318,7 @@ export const BusyOverlay: React.FC<{
       ) : (
         <div
           data-busy-overlay-card
-          className="flex min-w-[260px] max-w-[360px] max-h-[min(80vh,420px)] flex-col items-center overflow-auto rounded-[18px] border border-[#0B4A3E]/18 bg-surface/98 px-6 py-5 text-center shadow-[0_24px_72px_rgba(5,35,29,0.22)]"
+          className="flex min-w-[280px] max-w-[420px] max-h-[min(80vh,420px)] flex-col items-center overflow-auto rounded-[8px] border border-[#0B4A3E]/28 bg-[#FFFCF4] px-6 py-5 text-center shadow-[0_26px_74px_rgba(5,35,29,0.34)]"
         >
           <span className="loom-busy-ring" aria-hidden="true" />
           <div className="mt-4 text-base font-black text-text">{title}</div>

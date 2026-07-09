@@ -128,6 +128,10 @@ class AppPaths:
     def find_node_dir(self) -> str:
         candidates = [os.path.join(root, "node") for root in self.payload_roots]
         candidates.insert(0, os.path.join(self.base_path, "SystemData", ".core", "node"))
+        candidates.insert(1, os.path.join(self.base_path, "_up_", "node-runtime"))
+        candidates.insert(2, os.path.join(self.base_path, "node-runtime"))
+        candidates.insert(3, os.path.join(self.npm_root, "_up_", "node-runtime"))
+        candidates.insert(4, os.path.join(self.npm_root, "node-runtime"))
         for path in candidates:
             if any(os.path.exists(os.path.join(path, name)) for name in self.node_binary_names()):
                 return path

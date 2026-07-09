@@ -312,6 +312,22 @@ class OpenClawProcessService:
                     return candidate
             return ""
 
+        def git_bash_candidates_from_git(git_exe: str | None) -> list[str]:
+            if not git_exe:
+                return []
+            git_dir = os.path.dirname(os.path.abspath(git_exe))
+            roots = [git_dir]
+            if os.path.basename(git_dir).lower() in {"cmd", "bin"}:
+                roots.insert(0, os.path.dirname(git_dir))
+            candidates: list[str] = []
+            for root in roots:
+                candidates.extend([
+                    os.path.join(root, "bin", "bash.exe"),
+                    os.path.join(root, "usr", "bin", "bash.exe"),
+                    os.path.join(root, "bash.exe"),
+                ])
+            return candidates
+
         file_check("base_path", "安装目录", self.paths.base_path)
         checks.append(self._storage_health_check(write_test=True))
         tool_check("node", "Node.js 运行时", self.paths.node_exe, ("node.exe", "node"), repairable=True)
@@ -335,6 +351,7 @@ class OpenClawProcessService:
             "repairable": not bool(git_path),
         })
         git_bash_path = first_existing([
+            *git_bash_candidates_from_git(git_path),
             os.path.join(self.paths.base_path, "Git", "bin", "bash.exe"),
             os.path.join(self.paths.base_path, "Git", "usr", "bin", "bash.exe"),
             os.path.join(self.paths.base_path, "git", "bin", "bash.exe"),
@@ -877,11 +894,11 @@ class OpenClawProcessService:
             },
             "paths": {
                 "generatedImages": self.paths.generated_images_dir,
-                "scripts": os.path.join(self.paths.base_path, "scripts"),
-                "imageToPhoneCli": os.path.join(self.paths.base_path, "scripts", "openclaw-image-phone.mjs"),
-                "phoneVerifier": os.path.join(self.paths.base_path, "scripts", "verify-phone-agent.ps1"),
-                "phoneFleetCli": os.path.join(self.paths.base_path, "scripts", "openclaw-phone-fleet.mjs"),
-                "desktopAgentCli": os.path.join(self.paths.base_path, "scripts", "openclaw-desktop-agent.mjs"),
+                "scripts": self.paths.scripts_dir,
+                "imageToPhoneCli": os.path.join(self.paths.scripts_dir, "openclaw-image-phone.mjs"),
+                "phoneVerifier": os.path.join(self.paths.scripts_dir, "verify-phone-agent.ps1"),
+                "phoneFleetCli": os.path.join(self.paths.scripts_dir, "openclaw-phone-fleet.mjs"),
+                "desktopAgentCli": os.path.join(self.paths.scripts_dir, "openclaw-desktop-agent.mjs"),
             },
             "capabilities": {
                 "imageGeneration": {
@@ -1735,18 +1752,27 @@ class OpenClawProcessService:
             }
 
     def _portable_integrity_check(self) -> dict:
-        required = [
-            "start.js",
-            os.path.join("_up_", "python", "bridge.py"),
-            os.path.join("scripts", "openclaw-image-phone.mjs"),
-            os.path.join("scripts", "openclaw-phone-video.mjs"),
-            os.path.join("scripts", "openclaw-phone-vision.mjs"),
-            os.path.join("scripts", "verify-phone-agent.ps1"),
-            os.path.join("data", ".openclaw", "workspace", "AGENTS.md"),
-            os.path.join("data", ".openclaw", "workspace", "SOUL.md"),
+        def first_existing(candidates: list[str]) -> str:
+            return next((path for path in candidates if os.path.exists(path)), candidates[0])
+
+        workspace_template_roots = [
+            self.paths.openclaw_workspace,
+            self.paths.openclaw_workspace_template,
+            os.path.join(self.paths.base_path, "_up_", "openclaw-workspace"),
+            os.path.join(self.paths.base_path, "_up_", "data", ".openclaw", "workspace"),
         ]
-        node_exists = any(os.path.exists(os.path.join(self.paths.base_path, "node", name)) for name in self.paths.node_binary_names())
-        missing = [item for item in required if not os.path.exists(os.path.join(self.paths.base_path, item))]
+
+        required = [
+            ("bridge.py", os.path.join(self.paths.python_dir, "bridge.py")),
+            ("openclaw-image-phone.mjs", os.path.join(self.paths.scripts_dir, "openclaw-image-phone.mjs")),
+            ("openclaw-phone-video.mjs", os.path.join(self.paths.scripts_dir, "openclaw-phone-video.mjs")),
+            ("openclaw-phone-vision.mjs", os.path.join(self.paths.scripts_dir, "openclaw-phone-vision.mjs")),
+            ("verify-phone-agent.ps1", os.path.join(self.paths.scripts_dir, "verify-phone-agent.ps1")),
+            ("AGENTS.md", first_existing([os.path.join(root, "AGENTS.md") for root in workspace_template_roots])),
+            ("SOUL.md", first_existing([os.path.join(root, "SOUL.md") for root in workspace_template_roots])),
+        ]
+        node_exists = os.path.exists(self.paths.node_exe)
+        missing = [label for label, path in required if not os.path.exists(path)]
         if not node_exists:
             missing.append(os.path.join("node", "node.exe"))
 
@@ -1845,7 +1871,7 @@ class OpenClawProcessService:
             ("OpenClaw start.js", self.paths.find_file("start.js", ("back", "backup", ""))),
             ("OpenClaw core", self.paths.openclaw_mjs),
             ("Bridge", os.path.join(self.paths.base_path, "_up_", "python", "bridge.py")),
-            ("Phone Agent CLI", os.path.join(self.paths.base_path, "scripts", "openclaw-phone-agent.mjs")),
+            ("Phone Agent CLI", os.path.join(self.paths.scripts_dir, "openclaw-phone-agent.mjs")),
         ]
         missing: list[str] = []
         unreadable: list[str] = []

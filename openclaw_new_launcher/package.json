@@ -1,10 +1,12 @@
 {
   "name": "loom-launcher",
-  "version": "2.1.45",
+  "version": "2.1.55",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "build:node-runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-node-runtime.ps1",
+    "build:python-runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-python-runtime.ps1",
     "build": "tsc && vite build",
     "verify:phone": "powershell -ExecutionPolicy Bypass -File scripts/verify-phone-agent.ps1",
     "phone:image": "node scripts/openclaw-image-phone.mjs",
@@ -44,6 +46,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
+    "@types/qrcode-generator": "^0.0.16",
+    "qrcode-generator": "^2.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.0"

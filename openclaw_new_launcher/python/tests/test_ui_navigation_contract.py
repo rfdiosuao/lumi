@@ -8,6 +8,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 REGISTRY_FILE = os.path.join(REPO_ROOT, "src", "features", "registry.ts")
 MATRIX_PAGE = os.path.join(REPO_ROOT, "src", "components", "matrix", "MatrixWorkbenchPage.tsx")
 CAPABILITIES_PAGE = os.path.join(REPO_ROOT, "src", "components", "capabilities", "CapabilityCenterPage.tsx")
+SIDEBAR_FILE = os.path.join(REPO_ROOT, "src", "components", "sidebar", "Sidebar.tsx")
+TITLEBAR_FILE = os.path.join(REPO_ROOT, "src", "components", "window", "WindowTitlebar.tsx")
 
 
 class UiNavigationContractTests(unittest.TestCase):
@@ -49,6 +51,24 @@ class UiNavigationContractTests(unittest.TestCase):
         self.assertNotIn("视频生成", source)
         self.assertNotIn("CLI 自动化", source)
         self.assertNotIn("Agent 接入", source)
+
+    def test_shell_distinguishes_acquisition_and_workbench_icons_and_uses_dark_titlebar(self) -> None:
+        with open(SIDEBAR_FILE, "r", encoding="utf-8") as handle:
+            sidebar = handle.read()
+        with open(TITLEBAR_FILE, "r", encoding="utf-8") as handle:
+            titlebar = handle.read()
+
+        self.assertIn("if (key === 'acquisition') return 'target';", sidebar)
+        self.assertIn("if (key === 'workbench') return 'matrix';", sidebar)
+        self.assertIn("'target'", sidebar)
+        self.assertIn("name === 'target'", sidebar)
+        self.assertIn("bg-app-sidebar text-white", titlebar)
+        self.assertIn("flex min-w-0 flex-1 items-stretch justify-end bg-app-sidebar", titlebar)
+        self.assertIn("text-white/58 hover:bg-white/[0.07] hover:text-white", titlebar)
+        self.assertIn("text-white/60 hover:bg-[#E81123] hover:text-white", titlebar)
+        self.assertNotIn("flex-1 items-stretch justify-end bg-surface", titlebar)
+        self.assertNotIn("text-text-muted", titlebar)
+        self.assertNotIn("hover:bg-hover", titlebar)
 
 
 if __name__ == "__main__":

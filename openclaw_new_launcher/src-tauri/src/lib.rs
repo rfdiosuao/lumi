@@ -271,12 +271,17 @@ fn bridge_python_exe(py_path: &std::path::Path) -> std::path::PathBuf {
 
 fn is_packaged_bridge(py_path: &std::path::Path) -> bool {
     let mut saw_up = false;
+    let mut saw_resources = false;
     for component in py_path.components() {
         let text = component.as_os_str().to_string_lossy();
         if saw_up && text.eq_ignore_ascii_case("python") {
             return true;
         }
+        if saw_resources && text.eq_ignore_ascii_case("python") {
+            return true;
+        }
         saw_up = text.eq_ignore_ascii_case("_up_");
+        saw_resources = text.eq_ignore_ascii_case("resources");
     }
     false
 }
@@ -293,9 +298,9 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     }
 
     let python_exe = bridge_python_exe(py_path);
-    if is_packaged_bridge(py_path) && !is_bare_command(&python_exe) && !python_exe.exists() {
+    if is_packaged_bridge(py_path) && (is_bare_command(&python_exe) || !python_exe.exists()) {
         let message = format!(
-            "Python 运行时未就绪：未找到 {}。请重新解压在线包，确认首启运行时下载完成，或改用包含 Python 运行时的新版在线包。",
+            "Python runtime missing: packaged Bridge requires bundled python-runtime. Expected {}. Please install a build that includes python-runtime.",
             python_exe.display()
         );
         set_bridge_startup_error(message.clone());

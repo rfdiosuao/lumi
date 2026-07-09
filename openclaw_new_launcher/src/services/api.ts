@@ -967,6 +967,11 @@ export interface AcquisitionLead {
   platform?: string;
   channel?: string;
   status: string;
+  need?: string;
+  intentLevel?: string;
+  intentScore?: number;
+  qualificationSource?: string;
+  recommendedAction?: string;
   syncStatus?: 'pending_sync' | 'sync_failed' | 'synced' | string;
   syncError?: string;
   feishuRecordId?: string;
@@ -992,6 +997,51 @@ export interface AcquisitionDraft {
   requiresHumanReview: boolean;
   sendEnabled: boolean;
   policy: string[];
+  manualSend?: {
+    outcome?: string;
+    operator?: string;
+    recordedAt?: string;
+    reply?: string;
+    note?: string;
+    nextFollowUpAt?: string;
+  };
+}
+
+export interface AcquisitionAgentRun {
+  schema?: string;
+  dryRun?: boolean;
+  taskId?: string;
+  deviceId?: string;
+  platform?: string;
+  action?: string;
+  status?: string;
+  requiresHumanReview?: boolean;
+  sendEnabled?: boolean;
+  phoneTask?: {
+    schema?: string;
+    taskId?: string;
+    stopAt?: string;
+    resultSchema?: string;
+    allowedActions?: string[];
+    forbiddenActions?: string[];
+    outboundPolicy?: string[];
+    bridgeDispatch?: {
+      method?: string;
+      endpoint?: string;
+      body?: {
+        taskId?: string;
+        mode?: PhoneTaskMode | string;
+        prompt?: string;
+        target?: { deviceIds?: string[]; groups?: string[] };
+        executionLayer?: string;
+        resultCallback?: {
+          method?: string;
+          endpoint?: string;
+          payloadField?: string;
+        };
+      };
+    };
+  };
 }
 
 export interface AcquisitionSnapshot {
@@ -1001,12 +1051,14 @@ export interface AcquisitionSnapshot {
   leads: AcquisitionLead[];
   customers: AcquisitionCustomer[];
   drafts: AcquisitionDraft[];
+  agentRuns?: AcquisitionAgentRun[];
   sop: Array<{ id: string; title: string; text: string }>;
   logs: Array<{ logId?: string; timestamp?: string; type?: string; message?: string }>;
   stats: {
     contentTasks: number;
     leads: number;
     customers: number;
+    agentRuns?: number;
     draftsPending: number;
     approvedDrafts: number;
     pendingSync?: number;
@@ -1063,8 +1115,47 @@ export const acquisitionApi = {
     knowledge: string;
   }): Promise<{ flow: Record<string, unknown>; snapshot: AcquisitionSnapshot }> =>
     api('/api/matrix/acquisition/demo', 'POST', params),
+  importLeads: (params: {
+    topic: string;
+    platform: string;
+    channel: string;
+    sourceText: string;
+    knowledge: string;
+    target?: string;
+    owner?: string;
+  }): Promise<{ result: Record<string, unknown>; snapshot: AcquisitionSnapshot }> =>
+    api('/api/matrix/acquisition/import', 'POST', params),
+  runAgent: (params: {
+    dryRun?: boolean;
+    topic: string;
+    platform: string;
+    action?: string;
+    deviceId?: string;
+    knowledge?: string;
+    target?: string;
+  }): Promise<{ agentRun: Record<string, unknown>; ingest: Record<string, unknown>; snapshot: AcquisitionSnapshot }> =>
+    api('/api/matrix/acquisition/agent/run', 'POST', params),
+  ingestAgentResult: (params: {
+    topic?: string;
+    platform?: string;
+    action?: string;
+    deviceId?: string;
+    knowledge?: string;
+    target?: string;
+    owner?: string;
+    agentResult: Record<string, unknown>;
+  }): Promise<{ ingest: Record<string, unknown>; snapshot: AcquisitionSnapshot }> =>
+    api('/api/matrix/acquisition/agent/result', 'POST', params),
   confirmDraft: (draftId: string): Promise<{ draft: AcquisitionDraft; snapshot: AcquisitionSnapshot }> =>
     api('/api/matrix/acquisition/draft/confirm', 'POST', { draftId, operator: 'launcher-user' }),
+  recordManualSend: (params: {
+    draftId: string;
+    outcome?: 'sent' | 'replied' | 'no_reply' | 'failed' | string;
+    reply?: string;
+    note?: string;
+    nextFollowUpAt?: string;
+  }): Promise<{ draft: AcquisitionDraft; snapshot: AcquisitionSnapshot }> =>
+    api('/api/matrix/acquisition/draft/manual-send', 'POST', { ...params, operator: 'launcher-user' }),
   templates: (): Promise<AcquisitionTemplateStatus> => api('/api/matrix/acquisition/templates'),
   saveTemplate: (params: {
     name?: string;

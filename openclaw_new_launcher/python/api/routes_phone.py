@@ -169,6 +169,13 @@ def _public_store(store: dict) -> dict:
 
 
 def _script_path(ctx, script_name: str) -> str:
+    for root in getattr(ctx.paths, "script_roots", ()) or ():
+        candidate = os.path.join(root, script_name)
+        if os.path.exists(candidate):
+            return candidate
+    scripts_dir = getattr(ctx.paths, "scripts_dir", None)
+    if scripts_dir:
+        return os.path.join(scripts_dir, script_name)
     return os.path.join(ctx.paths.base_path, "scripts", script_name)
 
 
