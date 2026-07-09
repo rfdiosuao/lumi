@@ -185,11 +185,124 @@ fn path_check(id: &str, label: &str, path: &std::path::Path, required: bool) -> 
 }
 
 fn protected_feature(path: &str) -> Option<&'static str> {
-    match path.trim_start_matches('/').split('?').next().unwrap_or("") {
-        "api/process/start" => Some("openclaw"),
-        "api/image/generate" => Some("image"),
-        "api/video/generate" => Some("video"),
-        _ => None,
+    const RULES: [(&str, &str); 10] = [
+        ("api/matrix/acquisition/feishu", "acquisition.feishu"),
+        ("api/matrix/acquisition/templates", "templates.cloud"),
+        ("api/matrix/acquisition", "acquisition.workbench"),
+        ("api/publishing/draft", "publishing.draft"),
+        ("api/publishing", "publishing.draft"),
+        ("api/matrix", "matrix.devices"),
+        ("api/phone", "matrix.devices"),
+        ("api/image/generate", "image"),
+        ("api/video/generate", "video"),
+        ("api/process/start", "openclaw"),
+    ];
+
+    let normalized = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('/')
+        .trim_end_matches('/');
+    for (prefix, feature) in RULES {
+        if normalized == prefix
+            || normalized
+                .strip_prefix(prefix)
+                .map(|rest| rest.starts_with('/'))
+                .unwrap_or(false)
+        {
+            return Some(feature);
+        }
+    }
+    None
+}
+
+fn protected_feature_for_request(path: &str, body: Option<&str>) -> Option<&'static str> {
+    if let Some(feature) = protected_feature(path) {
+        return Some(feature);
+    }
+    let normalized = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .trim_matches('/');
+    if normalized != "api/cli/run" {
+        return None;
+    }
+    let command = serde_json::from_str::<serde_json::Value>(body?)
+        .ok()?
+        .get("command")?
+        .as_str()?
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(
+        command.as_str(),
+        "phone:publish" | "loom:phone:publish" | "openclaw:phone:publish"
+    ) {
+        return Some("publishing.draft");
+    }
+    None
+}
+
+#[cfg(test)]
+mod commercial_feature_path_tests {
+    use super::protected_feature_for_request;
+
+    #[test]
+    fn maps_commercial_routes_with_longest_prefix_precedence() {
+        let cases = [
+            ("/api/matrix/acquisition/feishu/status", Some("acquisition.feishu")),
+            ("/api/matrix/acquisition/templates/upload", Some("templates.cloud")),
+            ("/api/matrix/acquisition/agent/result", Some("acquisition.workbench")),
+            ("/api/matrix/status", Some("matrix.devices")),
+            ("/api/phone/task", Some("matrix.devices")),
+            ("/api/publishing/draft", Some("publishing.draft")),
+            ("/api/process/start", Some("openclaw")),
+            ("/api/image/generate/submit", Some("image")),
+            ("/api/video/generate", Some("video")),
+        ];
+
+        for (path, expected) in cases {
+            assert_eq!(protected_feature_for_request(path, None), expected, "path={path}");
+        }
+    }
+
+    #[test]
+    fn leaves_activation_diagnostics_and_namespace_lookalikes_public() {
+        for path in [
+            "/api/license/current",
+            "/api/license/client-config",
+            "/api/license/activate",
+            "/api/system/info",
+            "/api/diagnostics/export",
+            "/api/matrixevil/status",
+            "/api/phonebook/task",
+        ] {
+            assert_eq!(protected_feature_for_request(path, None), None, "path={path}");
+        }
+        assert_eq!(
+            protected_feature_for_request("/api/matrix/acquisitionevil", None),
+            Some("matrix.devices")
+        );
+    }
+
+    #[test]
+    fn gates_only_publish_commands_on_the_shared_cli_endpoint() {
+        let publish = r#"{"command":"phone:publish","confirmed":true}"#;
+        let read = r#"{"command":"phone:agent","args":["history"]}"#;
+
+        assert_eq!(
+            protected_feature_for_request("/api/cli/run", Some(publish)),
+            Some("publishing.draft")
+        );
+        assert_eq!(
+            protected_feature_for_request("/api/cli/run", Some(read)),
+            None
+        );
+        assert_eq!(
+            protected_feature_for_request("/api/cli/run", Some("not-json")),
+            None
+        );
     }
 }
 
@@ -605,7 +718,7 @@ async fn proxy_request(
     method: String,
     body: Option<String>,
 ) -> Result<String, String> {
-    if let Some(feature) = protected_feature(&path) {
+    if let Some(feature) = protected_feature_for_request(&path, body.as_deref()) {
         let base_dir = portable_base_dir()?;
         license::ensure_authorized(&base_dir, Some(feature))?;
     }
