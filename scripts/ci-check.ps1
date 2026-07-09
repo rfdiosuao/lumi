@@ -121,6 +121,15 @@ if (-not $SkipPython) {
             Pop-Location
         }
     }
+
+    Invoke-Step "Python launcher unit tests" {
+        Push-Location $LauncherDir
+        try {
+            Invoke-Native python -m unittest discover -s python\tests -p "test_*.py"
+        } finally {
+            Pop-Location
+        }
+    }
 }
 
 if (-not $SkipDistSelftest) {

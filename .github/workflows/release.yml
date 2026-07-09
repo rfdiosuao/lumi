@@ -54,7 +54,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: openclaw_ui_integration/package-lock.json
+          cache-dependency-path: openclaw_new_launcher/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -72,14 +72,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            openclaw_ui_integration/src-tauri/target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_ui_integration/src-tauri/Cargo.lock') }}
+            openclaw_new_launcher/src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_new_launcher/src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-release-
             ${{ runner.os }}-cargo-
 
       - name: Install frontend dependencies
-        working-directory: openclaw_ui_integration
+        working-directory: openclaw_new_launcher
         run: npm ci
 
       - name: Verify source text
@@ -94,15 +94,15 @@ jobs:
         run: powershell -ExecutionPolicy Bypass -File scripts\download-webview2-runtime.ps1
 
       - name: Build frontend
-        working-directory: openclaw_ui_integration
+        working-directory: openclaw_new_launcher
         run: npm run build
 
       - name: Check Rust
-        working-directory: openclaw_ui_integration/src-tauri
+        working-directory: openclaw_new_launcher/src-tauri
         run: cargo check
 
       - name: Build Tauri bundles
-        working-directory: openclaw_ui_integration
+        working-directory: openclaw_new_launcher
         run: npm run tauri -- build
 
       - name: Prepare portable seed
@@ -116,9 +116,9 @@ jobs:
           New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
           New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
 
-          $downloadArgs = @("release", "download", "--repo", $env:GITHUB_REPOSITORY, "--pattern", "OpenClaw-Portable-*.zip", "--dir", $downloadDir)
+          $downloadArgs = @("release", "download", "--repo", $env:GITHUB_REPOSITORY, "--pattern", "*Portable-*.zip", "--dir", $downloadDir)
           if (-not [string]::IsNullOrWhiteSpace($env:PORTABLE_SEED_TAG)) {
-            $downloadArgs = @("release", "download", $env:PORTABLE_SEED_TAG, "--repo", $env:GITHUB_REPOSITORY, "--pattern", "OpenClaw-Portable-*.zip", "--dir", $downloadDir)
+            $downloadArgs = @("release", "download", $env:PORTABLE_SEED_TAG, "--repo", $env:GITHUB_REPOSITORY, "--pattern", "*Portable-*.zip", "--dir", $downloadDir)
           }
 
           gh @downloadArgs
@@ -128,11 +128,11 @@ jobs:
             return
           }
 
-          $seedZip = Get-ChildItem -LiteralPath $downloadDir -File -Filter "OpenClaw-Portable-*.zip" |
+          $seedZip = Get-ChildItem -LiteralPath $downloadDir -File -Filter "*Portable-*.zip" |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
           if (-not $seedZip) {
-            Write-Warning "No OpenClaw-Portable-*.zip seed was downloaded. The portable build will bootstrap runtime dependencies instead."
+            Write-Warning "No portable seed was downloaded. The portable build will bootstrap runtime dependencies instead."
             "PORTABLE_SEED_DIR=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             return
           }
@@ -144,6 +144,8 @@ jobs:
           $seedCandidates += Get-Item -LiteralPath $extractDir
           $seedDir = $seedCandidates |
             Where-Object {
+              (Test-Path -LiteralPath (Join-Path $_.FullName "LOOM.exe")) -or
+              (Test-Path -LiteralPath (Join-Path $_.FullName "LOOMFiles")) -or
               (Test-Path -LiteralPath (Join-Path $_.FullName "OpenClaw.exe")) -or
               (Test-Path -LiteralPath (Join-Path $_.FullName "OpenClawFiles")) -or
               (Test-Path -LiteralPath (Join-Path $_.FullName "node\node.exe"))
@@ -164,7 +166,7 @@ jobs:
           PHONE_AGENT_APK_URL: ${{ inputs.phone_agent_apk_url || vars.PHONE_AGENT_APK_URL || '' }}
           PHONE_AGENT_APK_SHA256: ${{ vars.PHONE_AGENT_APK_SHA256 || '' }}
         run: |
-          $apkPath = Join-Path $PWD "openclaw_ui_integration\AgentPhone_latest.apk"
+          $apkPath = Join-Path $PWD "openclaw_new_launcher\AgentPhone_latest.apk"
           if (-not [string]::IsNullOrWhiteSpace($env:PHONE_AGENT_APK_URL)) {
             Write-Host "Downloading AgentPhone_latest.apk from configured URL..."
             Invoke-WebRequest -Uri $env:PHONE_AGENT_APK_URL -OutFile $apkPath
@@ -190,11 +192,11 @@ jobs:
           $tag = $env:RELEASE_TAG
           $version = $tag -replace '^v', ''
           $date = Get-Date -Format "yyyy.MM.dd"
-          $packageName = "OpenClaw-Portable-$tag-$date"
+          $packageName = "LOOM-Portable-$tag-$date"
 
           $args = @(
             "-ExecutionPolicy", "Bypass",
-            "-File", "openclaw_ui_integration\scripts\build-portable-ui-integration.ps1",
+            "-File", "scripts\build-portable.ps1",
             "-Version", $version,
             "-PackageName", $packageName,
             "-SeedPortableDir", $env:PORTABLE_SEED_DIR,
@@ -215,7 +217,7 @@ jobs:
           $artifactDir = Join-Path $PWD "ci_artifacts"
           New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
 
-          $bundleDir = Join-Path $PWD "openclaw_ui_integration\src-tauri\target\release\bundle"
+          $bundleDir = Join-Path $PWD "openclaw_new_launcher\src-tauri\target\release\bundle"
           if (-not (Test-Path -LiteralPath $bundleDir)) {
             throw "Tauri bundle output not found: $bundleDir"
           }
@@ -226,7 +228,7 @@ jobs:
               Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $artifactDir $_.Name) -Force
             }
 
-          Get-ChildItem -LiteralPath (Join-Path $PWD "release") -File -Filter "OpenClaw-Portable-*.zip*" |
+          Get-ChildItem -LiteralPath (Join-Path $PWD "release") -File -Filter "LOOM-Portable-*.zip*" |
             ForEach-Object {
               Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $artifactDir $_.Name) -Force
             }
@@ -275,7 +277,7 @@ jobs:
             "",
             "使用说明：",
             "- 普通安装优先下载安装包。",
-            "- U 盘免安装交付请下载 ``OpenClaw-Portable-*.zip``，解压后运行 ``OpenClaw.exe``。",
+            "- U 盘免安装交付请下载 ``LOOM-Portable-*.zip``，解压后运行 ``LOOM.exe``。",
             "- 下载后建议对照 ``.sha256.txt`` 校验文件完整性。"
           ) -join "`n"
           Set-Content -LiteralPath $bodyPath -Value $body -Encoding UTF8
@@ -323,7 +325,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: openclaw_ui_integration/package-lock.json
+          cache-dependency-path: openclaw_new_launcher/package-lock.json
 
       - name: Setup Rust
         run: |
@@ -336,21 +338,21 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            openclaw_ui_integration/src-tauri/target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_ui_integration/src-tauri/Cargo.lock') }}
+            openclaw_new_launcher/src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('openclaw_new_launcher/src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-release-
             ${{ runner.os }}-cargo-
 
       - name: Install frontend dependencies
-        working-directory: openclaw_ui_integration
+        working-directory: openclaw_new_launcher
         run: npm ci
 
       - name: Verify version consistency
         env:
           RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
         run: |
-          version="$(node -p "require('./openclaw_ui_integration/package.json').version")"
+          version="$(node -p "require('./openclaw_new_launcher/package.json').version")"
           expected="v${version}"
           if [ "$RELEASE_TAG" != "$expected" ]; then
             echo "Release tag mismatch: $RELEASE_TAG, expected $expected"
@@ -359,23 +361,23 @@ jobs:
           echo "Version consistency check passed: $version"
 
       - name: Build frontend
-        working-directory: openclaw_ui_integration
+        working-directory: openclaw_new_launcher
         run: npm run build
 
       - name: Check Rust
-        working-directory: openclaw_ui_integration/src-tauri
+        working-directory: openclaw_new_launcher/src-tauri
         run: cargo check
 
       - name: Build macOS bundles
-        working-directory: openclaw_ui_integration
+        working-directory: openclaw_new_launcher
         run: npm run tauri -- build --bundles app,dmg
 
       - name: Collect macOS release assets
         run: |
           set -euo pipefail
           artifact_dir="$PWD/ci_artifacts"
-          bundle_dir="$PWD/openclaw_ui_integration/src-tauri/target/release/bundle"
-          version="$(node -p "require('./openclaw_ui_integration/package.json').version")"
+          bundle_dir="$PWD/openclaw_new_launcher/src-tauri/target/release/bundle"
+          version="$(node -p "require('./openclaw_new_launcher/package.json').version")"
           mkdir -p "$artifact_dir"
 
           dmg_path="$(find "$bundle_dir" -type f -name "*.dmg" | head -n 1 || true)"
@@ -432,7 +434,7 @@ jobs:
             echo ""
             echo "Windows:"
             echo "- Use the installer assets for normal installation."
-            echo "- Use \`OpenClaw-Portable-*.zip\` for portable USB-style delivery."
+            echo "- Use \`LOOM-Portable-*.zip\` for portable USB-style delivery."
             echo ""
             echo "macOS:"
             echo "- Use \`OpenClaw-macOS-*.dmg\` for normal installation."
