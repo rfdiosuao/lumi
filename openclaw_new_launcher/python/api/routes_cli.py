@@ -11,6 +11,8 @@ import os
 import subprocess
 from fastapi import Request
 
+from core.feature_access import feature_for_cli_command
+
 
 def _script_path(ctx, script_name: str) -> str:
     for root in getattr(ctx.paths, "script_roots", ()) or ():
@@ -186,6 +188,9 @@ def register_cli_routes(app, ctx) -> None:
         command = CLI_COMMANDS.get(command_id)
         if not command:
             return ctx.fastapi_json({"error": "未知能力命令"}, 400)
+        if feature_for_cli_command(command_id):
+            if error := ctx.protected_error("/api/publishing/draft"):
+                return error
 
         try:
             args = _normalize_args(body.get("args") or [])

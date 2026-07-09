@@ -26,6 +26,7 @@ if _python_dir not in sys.path:
 from core.paths import AppPaths
 from core.storage import read_json, write_json, update_json
 from core.license_manager import LicenseManager
+from core.feature_access import commercial_feature_denial
 from core.member_manager import MemberManager
 from core.newapi_account_manager import NewApiAccountManager
 from core.openclaw_model_sync import sync_openclaw_models
@@ -78,14 +79,6 @@ _wire_svc: WireService | None = None
 
 DEFAULT_OPENCLAW_TEXT_MODEL = "qwen3.7-plus"
 MANAGED_ACCOUNT_SOURCES = {"newapi_account", "heang_account"}
-
-PROTECTED_PATHS = {
-    "/api/process/start",
-    "/api/image/generate",
-    "/api/image/generate/submit",
-    "/api/video/generate",
-    "/api/video/generate/submit",
-}
 
 def _get_license_mgr() -> LicenseManager:
     global _license_mgr
@@ -753,8 +746,9 @@ def _fastapi_auth_error(request):
 
 
 def _fastapi_protected_error(path: str):
-    if path in PROTECTED_PATHS and not _get_license_mgr().is_authorized():
-        return _fastapi_json({"error": "需要有效的许可证才能使用此功能"}, 403)
+    denial = commercial_feature_denial(path, _get_license_mgr())
+    if denial:
+        return _fastapi_json(denial, 403)
     return None
 
 

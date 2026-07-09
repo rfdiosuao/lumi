@@ -531,22 +531,7 @@ class LicenseManager:
             if feature and feature not in license_data.get("features", []):
                 return False
             return True
-
-        gateway_profile = self.current_gateway_profile()
-        if not isinstance(gateway_profile, dict):
-            return False
-        expires = str(gateway_profile.get("expiresAt") or "").strip()
-        if expires:
-            try:
-                if date.fromisoformat(expires[:10]) < date.today():
-                    return False
-            except ValueError:
-                pass
-        if feature:
-            features = gateway_profile.get("features")
-            if isinstance(features, list) and feature not in features:
-                return False
-        return True
+        return False
 
     def verify(self, license_data: dict[str, Any]) -> bool:
         try:

@@ -30,6 +30,12 @@ from api.routes_wire import register_wire_routes
 def register_fastapi_routes(app, ctx) -> None:
     """Register all native FastAPI endpoints."""
 
+    @app.middleware("http")
+    async def commercial_feature_guard(request: Request, call_next):
+        if error := ctx.protected_error(request.url.path):
+            return error
+        return await call_next(request)
+
     @app.exception_handler(Exception)
     async def unhandled_exception(request: Request, exc: Exception):
         ctx.append_log(f"[Bridge Error] {request.url.path}: {exc}\n{traceback.format_exc()}\n")
