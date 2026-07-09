@@ -26,7 +26,9 @@ LICENSE_PUBLIC_KEY_B64 = "njEIf3io24DAXRYVp37p2gIT5u2KZaWoGvBPD0JlTZ4="
 
 
 class LicenseError(RuntimeError):
-    pass
+    def __init__(self, message: str, code: str = "LICENSE_ACTIVATION_FAILED"):
+        super().__init__(message)
+        self.code = code
 
 
 class LicenseManager:
@@ -390,8 +392,8 @@ class LicenseManager:
             "missing": missing,
         }
 
-    def diagnose(self) -> dict[str, Any]:
-        gateway_profile = self.current_gateway_profile()
+    def diagnose(self, include_gateway_profile: bool = True) -> dict[str, Any]:
+        gateway_profile = self.current_gateway_profile() if include_gateway_profile else None
         if gateway_profile:
             expires = str(gateway_profile.get("expiresAt") or "").strip()
             if expires:
@@ -582,13 +584,15 @@ class LicenseManager:
                 last_error = error
                 if error.code in (404, 405):
                     continue
-                raise LicenseError(self._read_error(error)) from error
+                message, code = self._read_error(error)
+                raise LicenseError(message, code) from error
             except Exception as error:
                 last_error = error
                 continue
         if not isinstance(data, dict):
             if isinstance(last_error, urllib.error.HTTPError):
-                raise LicenseError(self._read_error(last_error)) from last_error
+                message, code = self._read_error(last_error)
+                raise LicenseError(message, code) from last_error
             raise LicenseError(f"无法连接授权服务器：{last_error}") from last_error
         license_data = data.get("license") if isinstance(data.get("license"), dict) else data.get("member")
         if not isinstance(license_data, dict) or not self.verify(license_data):
@@ -668,9 +672,12 @@ class LicenseManager:
                 if clean and clean not in model_ids:
                     model_ids.append(clean)
         return model_ids
-    def _read_error(self, error: urllib.error.HTTPError) -> str:
+    def _read_error(self, error: urllib.error.HTTPError) -> tuple[str, str]:
         try:
             data = json.loads(error.read().decode("utf-8"))
-            return data.get("error", f"授权失败：HTTP {error.code}")
+            return (
+                str(data.get("error") or f"授权失败：HTTP {error.code}"),
+                str(data.get("code") or "LICENSE_ACTIVATION_FAILED"),
+            )
         except Exception:
-            return f"授权失败：HTTP {error.code}"
+            return f"授权失败：HTTP {error.code}", "LICENSE_ACTIVATION_FAILED"

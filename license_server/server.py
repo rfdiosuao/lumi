@@ -49,7 +49,18 @@ ADMIN_TOKEN_FILE = os.environ.get("LICENSE_ADMIN_TOKEN_FILE", os.path.join(BASE_
 LOGO_FILE = os.environ.get("LICENSE_LOGO_FILE", os.path.join(BASE_DIR, "logo.ico"))
 HOST = os.environ.get("LICENSE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("LICENSE_PORT", "18791"))
-DEFAULT_FEATURES = ["openclaw", "image", "video", "storyboard"]
+COMMERCIAL_FEATURES = [
+    "acquisition.workbench",
+    "acquisition.feishu",
+    "matrix.devices",
+    "templates.cloud",
+    "publishing.draft",
+    "diagnostics.export",
+]
+DEFAULT_FEATURES = ["openclaw", "image", "video", "storyboard", *COMMERCIAL_FEATURES]
+VIP_DEFAULT_FEATURES = [*DEFAULT_FEATURES, "phoneAgent", "desktopAgent"]
+PUBLIC_COMMERCIAL_URL = os.environ.get("LICENSE_PUBLIC_URL", "https://license.heang.top/").strip()
+PUBLIC_SUPPORT_URL = os.environ.get("LICENSE_SUPPORT_URL", PUBLIC_COMMERCIAL_URL).strip()
 DEFAULT_GATEWAY_BASE_URL = os.environ.get("MEMBER_GATEWAY_BASE_URL", "").strip().rstrip("/")
 DEFAULT_GATEWAY_IMAGE_BASE_URL = os.environ.get("MEMBER_GATEWAY_IMAGE_BASE_URL", "").strip().rstrip("/")
 DEFAULT_GATEWAY_VIDEO_BASE_URL = os.environ.get("MEMBER_GATEWAY_VIDEO_BASE_URL", "").strip().rstrip("/")
@@ -68,6 +79,7 @@ DEFAULT_PUBLIC_SETTINGS = {
     "cardSiteEnabled": True,
     "cardSiteLabel": "购买授权码",
     "cardSiteUrl": "",
+    "supportUrl": PUBLIC_SUPPORT_URL,
 }
 PUBLISH_RELAY_TOKEN = (
     os.environ.get("OPENCLAW_PUBLISH_RELAY_TOKEN")
@@ -1278,13 +1290,32 @@ def seed_default_settings(conn: sqlite3.Connection) -> None:
 def seed_default_plans(conn: sqlite3.Connection) -> None:
     existing = conn.execute("select count(*) from plans").fetchone()[0]
     if existing:
+        for plan_key in ("monthly", "quarterly", "yearly", "vip_monthly"):
+            row = conn.execute(
+                "select features_json from plans where plan_key = ?",
+                (plan_key,),
+            ).fetchone()
+            if not row:
+                continue
+            try:
+                current = json.loads(row["features_json"])
+            except (TypeError, json.JSONDecodeError):
+                current = []
+            if not isinstance(current, list):
+                current = []
+            merged = list(dict.fromkeys([*(str(item) for item in current if str(item)), *COMMERCIAL_FEATURES]))
+            if merged != current:
+                conn.execute(
+                    "update plans set features_json = ?, updated_at = ? where plan_key = ?",
+                    (json.dumps(merged, ensure_ascii=False), utc_now(), plan_key),
+                )
         return
     now = utc_now()
     defaults = [
         ("monthly", "月卡", 31, DEFAULT_FEATURES, {"image": 100, "video": 20}, DEFAULT_GATEWAY_IMAGE_MODEL, DEFAULT_GATEWAY_VIDEO_MODEL),
         ("quarterly", "季卡", 93, DEFAULT_FEATURES, {"image": 300, "video": 60}, DEFAULT_GATEWAY_IMAGE_MODEL, DEFAULT_GATEWAY_VIDEO_MODEL),
         ("yearly", "年卡", 366, DEFAULT_FEATURES, {"image": 1200, "video": 240}, DEFAULT_GATEWAY_IMAGE_MODEL, DEFAULT_GATEWAY_VIDEO_MODEL),
-        ("vip_monthly", "VIP 月卡", 31, ["openclaw", "image", "video", "storyboard", "phoneAgent", "desktopAgent"], {"image": 300, "video": 80, "phoneAgent": True, "desktopAgent": True}, DEFAULT_GATEWAY_IMAGE_MODEL, DEFAULT_GATEWAY_VIDEO_MODEL),
+        ("vip_monthly", "VIP 月卡", 31, VIP_DEFAULT_FEATURES, {"image": 300, "video": 80, "phoneAgent": True, "desktopAgent": True}, DEFAULT_GATEWAY_IMAGE_MODEL, DEFAULT_GATEWAY_VIDEO_MODEL),
     ]
     for plan_key, display_name, duration_days, features, quotas, gateway_image_model, gateway_video_model in defaults:
         conn.execute(
@@ -2239,17 +2270,21 @@ def public_settings() -> dict[str, Any]:
     settings["cardSiteEnabled"] = bool(settings.get("cardSiteEnabled"))
     settings["cardSiteLabel"] = str(settings.get("cardSiteLabel") or "购买授权码").strip() or "购买授权码"
     settings["cardSiteUrl"] = str(settings.get("cardSiteUrl") or "").strip()
+    settings["supportUrl"] = str(settings.get("supportUrl") or PUBLIC_SUPPORT_URL).strip() or PUBLIC_SUPPORT_URL
     return settings
 
 
 def client_public_config() -> dict[str, Any]:
     settings = public_settings()
     enabled = bool(settings.get("cardSiteEnabled")) and bool(settings.get("cardSiteUrl"))
+    card_url = str(settings.get("cardSiteUrl") or "").strip() if enabled else ""
     return {
+        "purchaseUrl": card_url or PUBLIC_COMMERCIAL_URL,
+        "supportUrl": str(settings.get("supportUrl") or PUBLIC_SUPPORT_URL).strip() or PUBLIC_SUPPORT_URL,
         "cardSite": {
             "enabled": enabled,
             "label": settings.get("cardSiteLabel") or "购买授权码",
-            "url": settings.get("cardSiteUrl") if enabled else "",
+            "url": card_url,
         }
     }
 
@@ -2265,6 +2300,8 @@ def update_public_settings(body: dict[str, Any]) -> dict[str, Any]:
         if card_site_url and not card_site_url.lower().startswith(("http://", "https://")):
             raise ActivationError("发卡网站链接必须以 http:// 或 https:// 开头")
         settings["cardSiteUrl"] = card_site_url
+    if "supportUrl" in body:
+        settings["supportUrl"] = validate_gateway_url(str(body.get("supportUrl") or ""), "客服链接") or PUBLIC_SUPPORT_URL
     with connect() as conn:
         conn.execute(
             """
@@ -3120,10 +3157,13 @@ def build_signed_license(
         "licenseId": license_id or secrets.token_hex(12),
         "licensee": code_row["licensee"],
         "edition": code_row["edition"],
+        "plan": str(code_row["plan"] or code_row["edition"] or "monthly").strip(),
         "features": json.loads(code_row["features_json"]),
         "expires": code_row["expires"],
+        "expiresAt": code_row["expires"],
         "installId": install_id,
         "deviceId": device_id,
+        "deviceLimit": int(code_row["max_activations"] or 1),
         "activatedAt": activated_at or utc_now(),
         "activationCodeLabel": code_label,
         "activationCodeLast8": code_last8,
@@ -4303,7 +4343,7 @@ class Handler(BaseHTTPRequestHandler):
                 license_data = activate_code(body)
                 self.send_json(200, member_response(license_data))
             except ActivationError as error:
-                self.send_json(error.status, {"error": str(error)})
+                self.send_json(error.status, {"error": str(error), "code": error.code})
             except Exception as error:
                 self.send_json(500, {"error": f"server error: {error}"})
             return
@@ -4315,7 +4355,7 @@ class Handler(BaseHTTPRequestHandler):
             license_data = activate_code(body)
             self.send_json(200, {"license": license_data})
         except ActivationError as error:
-            self.send_json(error.status, {"error": str(error)})
+            self.send_json(error.status, {"error": str(error), "code": error.code})
         except Exception as error:
             self.send_json(500, {"error": f"server error: {error}"})
 
@@ -4375,9 +4415,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class ActivationError(RuntimeError):
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400, code: str = "REQUEST_INVALID"):
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 def activate_code(body: dict[str, Any]) -> dict[str, Any]:
@@ -4385,21 +4426,29 @@ def activate_code(body: dict[str, Any]) -> dict[str, Any]:
     install_id = str(body.get("installId", "")).strip()
     device_id = str(body.get("deviceId", "")).strip()
     if not code or not install_id:
-        raise ActivationError("缺少授权码或安装 ID")
+        raise ActivationError("缺少授权码或安装 ID", 400, "LICENSE_INVALID_REQUEST")
 
     hashed = code_hash(code)
     with connect() as conn:
         code_row = conn.execute("select * from codes where code_hash = ?", (hashed,)).fetchone()
         if not code_row:
-            raise ActivationError("授权码不存在", 404)
+            raise ActivationError("授权码不存在", 404, "LICENSE_INVALID")
         if code_row["disabled"]:
-            raise ActivationError("授权码已停用", 403)
+            raise ActivationError("授权码已停用", 403, "LICENSE_DISABLED")
+        try:
+            if date.fromisoformat(str(code_row["expires"])) < date.today():
+                raise ActivationError("授权码已过期", 403, "LICENSE_EXPIRED")
+        except ValueError as error:
+            raise ActivationError("授权码到期日期无效", 500, "LICENSE_DATA_INVALID") from error
         existing = conn.execute("select * from activations where code_hash = ? and install_id = ?", (hashed, install_id)).fetchone()
         if existing:
+            existing_device = str(existing["device_id"] or "").strip()
+            if existing_device and device_id and existing_device != device_id:
+                raise ActivationError("授权码绑定设备与当前设备不匹配", 403, "DEVICE_MISMATCH")
             conn.execute("delete from activations where code_hash = ? and install_id = ?", (hashed, install_id))
         used_count = conn.execute("select count(*) as count from activations where code_hash = ?", (hashed,)).fetchone()["count"]
         if used_count >= code_row["max_activations"]:
-            raise ActivationError("授权码已被其他设备激活", 403)
+            raise ActivationError("授权码已被其他设备激活", 403, "DEVICE_MISMATCH")
         license_data = build_signed_license(code_row, install_id, device_id)
         conn.execute(
             """

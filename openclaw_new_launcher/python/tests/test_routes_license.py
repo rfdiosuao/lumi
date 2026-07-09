@@ -36,14 +36,36 @@ class LicenseRoutePublicSafetyTests(unittest.TestCase):
         self.assertEqual(payload["gatewayProfile"]["apiKeyMasked"], "sk-l****cret")
         self.assertEqual(payload["member"]["memberTokenMasked"], "memb****oken")
 
+    def test_current_route_exposes_commercial_status_and_local_machine_ids(self) -> None:
+        app = FastAPI()
+        register_license_routes(app, _context())
+        client = TestClient(app)
+
+        payload = client.get("/api/license/current").json()
+
+        self.assertEqual(payload["status"], "authorized")
+        self.assertEqual(payload["code"], "AUTHORIZED")
+        self.assertEqual(payload["installId"], "install-route-test")
+        self.assertEqual(payload["deviceId"], "device-route-test")
+        self.assertEqual(payload["license"]["plan"], "team_monthly")
+
 
 def _context() -> SimpleNamespace:
     license_mgr = SimpleNamespace(
         current_license=lambda: {
             "licensee": "LOOM Tester",
+            "signature": "signed-test-value",
+            "plan": "team_monthly",
             "gateway": {"apiKey": "sk-live-test-secret"},
             "memberToken": "member-secret-token",
         },
+        diagnose=lambda include_gateway_profile=True: {
+            "ok": True,
+            "code": "ok",
+            "message": "authorized",
+        },
+        get_install_id=lambda: "install-route-test",
+        device_id=lambda: "device-route-test",
         current_gateway_profile=lambda: {
             "baseUrl": "https://api.heang.top/v1",
             "apiKey": "sk-live-test-secret",

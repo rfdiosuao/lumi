@@ -38,6 +38,8 @@ def load_server(temp_dir: Path):
     os.environ["MEMBER_GATEWAY_IMAGE_TOKEN"] = ""
     os.environ["MEMBER_GATEWAY_VIDEO_TOKEN"] = ""
     os.environ["OPENCLAW_PUBLISH_RELAY_TOKEN"] = "test-relay-token"
+    os.environ["LICENSE_PUBLIC_URL"] = "https://license.heang.top/"
+    os.environ["LICENSE_SUPPORT_URL"] = "https://license.heang.top/"
 
     module_name = f"openclaw_license_server_test_{next(tempfile._get_candidate_names())}"
     spec = importlib.util.spec_from_file_location(module_name, SERVER_PATH)
@@ -150,6 +152,8 @@ class LicenseServerFlowTests(unittest.TestCase):
         self.assertEqual(
             client_config,
             {
+                "purchaseUrl": "https://shop.example.com/cdk",
+                "supportUrl": "https://license.heang.top/",
                 "cardSite": {
                     "enabled": True,
                     "label": "Buy license",
@@ -157,6 +161,140 @@ class LicenseServerFlowTests(unittest.TestCase):
                 }
             },
         )
+
+    def test_commercial_features_are_available_to_new_default_plans(self) -> None:
+        commercial = {
+            "acquisition.workbench",
+            "acquisition.feishu",
+            "matrix.devices",
+            "templates.cloud",
+            "publishing.draft",
+            "diagnostics.export",
+        }
+
+        self.assertTrue(commercial.issubset(set(self.server.DEFAULT_FEATURES)))
+        plans = {item["planKey"]: item for item in self.server.get_plan_rows()}
+        for plan_key in ("monthly", "quarterly", "yearly", "vip_monthly"):
+            self.assertTrue(commercial.issubset(set(plans[plan_key]["features"])), plan_key)
+
+    def test_default_plan_migration_does_not_widen_already_issued_codes(self) -> None:
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Legacy Customer",
+            edition="legacy",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            plan="monthly",
+        )[0]
+        with self.server.connect() as conn:
+            conn.execute(
+                "update plans set features_json = ? where plan_key = ?",
+                ('["openclaw","image","video","storyboard"]', "monthly"),
+            )
+            conn.commit()
+        with self.server.connect() as conn:
+            self.server.seed_default_plans(conn)
+            conn.commit()
+
+        plans = {item["planKey"]: item for item in self.server.get_plan_rows()}
+        self.assertTrue(
+            set(self.server.COMMERCIAL_FEATURES).issubset(set(plans["monthly"]["features"]))
+        )
+        rows = self.server.get_code_rows()
+        issued = next(item for item in rows if item["fullCode"] == code)
+        self.assertEqual(issued["features"], ["openclaw"])
+
+    def test_signed_commercial_license_contains_display_and_device_limit_fields(self) -> None:
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Commercial Customer",
+            edition="team",
+            features=list(self.server.DEFAULT_FEATURES),
+            expires=self.expires(),
+            max_activations=3,
+            member_mode=False,
+            plan="team_monthly",
+        )[0]
+
+        license_data = self.server.activate_code(
+            {"code": code, "installId": "install-commercial", "deviceId": "device-commercial"}
+        )
+
+        self.assertEqual(license_data["licensee"], "Commercial Customer")
+        self.assertEqual(license_data["edition"], "team")
+        self.assertEqual(license_data["plan"], "team_monthly")
+        self.assertEqual(license_data["expiresAt"], license_data["expires"])
+        self.assertEqual(license_data["deviceLimit"], 3)
+        self.assertEqual(license_data["installId"], "install-commercial")
+        self.assertEqual(license_data["deviceId"], "device-commercial")
+        self.assertTrue(set(self.server.DEFAULT_FEATURES).issubset(set(license_data["features"])))
+
+    def test_activation_http_errors_expose_stable_public_codes(self) -> None:
+        invalid = self.request_json(
+            "POST",
+            "/activate",
+            payload={"code": "OC-NOT-FOUND", "installId": "install-invalid", "deviceId": "device-invalid"},
+            expected_status=404,
+        )
+        self.assertEqual(invalid["code"], "LICENSE_INVALID")
+
+        disabled_code = self.server.create_code_records(
+            count=1,
+            licensee="Disabled Customer",
+            edition="team",
+            features=list(self.server.DEFAULT_FEATURES),
+            expires=self.expires(),
+            max_activations=1,
+        )[0]
+        with self.server.connect() as conn:
+            conn.execute(
+                "update codes set disabled = 1 where code_hash = ?",
+                (self.server.code_hash(disabled_code),),
+            )
+            conn.commit()
+        disabled = self.request_json(
+            "POST",
+            "/api/member/activate",
+            payload={"code": disabled_code, "installId": "install-disabled", "deviceId": "device-disabled"},
+            expected_status=403,
+        )
+        self.assertEqual(disabled["code"], "LICENSE_DISABLED")
+
+        expired_code = self.server.create_code_records(
+            count=1,
+            licensee="Expired Customer",
+            edition="team",
+            features=list(self.server.DEFAULT_FEATURES),
+            expires=(date.today() - timedelta(days=1)).isoformat(),
+            max_activations=1,
+        )[0]
+        expired = self.request_json(
+            "POST",
+            "/activate",
+            payload={"code": expired_code, "installId": "install-expired", "deviceId": "device-expired"},
+            expected_status=403,
+        )
+        self.assertEqual(expired["code"], "LICENSE_EXPIRED")
+
+        bound_code = self.server.create_code_records(
+            count=1,
+            licensee="Bound Customer",
+            edition="team",
+            features=list(self.server.DEFAULT_FEATURES),
+            expires=self.expires(),
+            max_activations=1,
+        )[0]
+        self.server.activate_code(
+            {"code": bound_code, "installId": "install-first", "deviceId": "device-first"}
+        )
+        mismatch = self.request_json(
+            "POST",
+            "/activate",
+            payload={"code": bound_code, "installId": "install-second", "deviceId": "device-second"},
+            expected_status=403,
+        )
+        self.assertEqual(mismatch["code"], "DEVICE_MISMATCH")
 
     def test_merchant_cannot_update_public_settings(self) -> None:
         from http.server import ThreadingHTTPServer
