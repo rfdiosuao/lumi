@@ -19,6 +19,7 @@ import {
   normalizeLicenseGate,
   withLicenseCheckTimeout,
 } from '../components/license/licenseGate';
+import { getDevLicenseFixture } from '../components/license/licenseVisualFixture';
 
 interface AppState {
   currentPage: string;
@@ -100,6 +101,16 @@ export const useAppStore = create<AppState>((set) => ({
   setNavItems: (navItems) => set({ navItems }),
   setLicenseChecking: (val: boolean) => set({ isLicenseChecking: val }),
   checkLicense: async () => {
+    const fixture = getDevLicenseFixture();
+    if (fixture) {
+      set({
+        isAuthorized: fixture.authorized,
+        licenseInfo: fixture.license,
+        licenseGate: fixture,
+        isLicenseChecking: false,
+      });
+      return;
+    }
     set({ isLicenseChecking: true, licenseGate: CHECKING_LICENSE_GATE });
     try {
       const [response, config] = await withLicenseCheckTimeout(Promise.allSettled([

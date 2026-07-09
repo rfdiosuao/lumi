@@ -219,19 +219,36 @@ export default function App() {
       <div className="flex h-screen w-screen flex-col overflow-hidden bg-surface text-text">
         <WindowTitlebar />
         {commercialAccessGranted ? (
-          <div data-commercial-app-shell className="flex min-h-0 flex-1 overflow-hidden bg-surface">
-            <Sidebar
-              activePage={activeNavPage}
-              serviceRunning={serviceRunning}
-              serviceStatus={serviceStatus}
-              isAuthorized={isAuthorized}
-              isApiConfigured={apiConfigured}
-              onNavigate={handleNavigate}
-              onStop={handleStop}
-            />
-            <main className="relative flex-1 overflow-hidden bg-surface">
-              {renderFeaturePage(visiblePage)}
-            </main>
+          <div data-commercial-app-shell className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface">
+            {licenseGate.status === 'offline_grace' ? (
+              <div
+                data-license-offline-banner
+                className="flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#c7a75d] bg-[#fff5d8] px-4 py-2 text-[12px] font-bold text-[#6a4d0b]"
+              >
+                <span>本机签名授权有效，授权服务暂时离线；网络恢复后请重新检查。</span>
+                <button
+                  type="button"
+                  onClick={() => checkLicense()}
+                  className="h-7 border border-[#9b7927] bg-white px-3 text-[11px] font-black text-[#6a4d0b] hover:bg-[#fffaf0]"
+                >
+                  重新检查
+                </button>
+              </div>
+            ) : null}
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <Sidebar
+                activePage={activeNavPage}
+                serviceRunning={serviceRunning}
+                serviceStatus={serviceStatus}
+                isAuthorized={isAuthorized}
+                isApiConfigured={apiConfigured}
+                onNavigate={handleNavigate}
+                onStop={handleStop}
+              />
+              <main className="relative flex-1 overflow-hidden bg-surface">
+                {renderFeaturePage(visiblePage)}
+              </main>
+            </div>
           </div>
         ) : (
           <LicensePaywall />

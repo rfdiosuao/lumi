@@ -12,6 +12,7 @@ STORE_FILE = os.path.join(REPO_ROOT, "src", "stores", "appStore.ts")
 API_FILE = os.path.join(REPO_ROOT, "src", "services", "api.ts")
 TYPES_FILE = os.path.join(REPO_ROOT, "src", "types", "index.ts")
 PAYWALL_FILE = os.path.join(REPO_ROOT, "src", "components", "license", "LicensePaywall.tsx")
+VISUAL_FIXTURE_FILE = os.path.join(REPO_ROOT, "src", "components", "license", "licenseVisualFixture.ts")
 APP_FILE = os.path.join(REPO_ROOT, "src", "App.tsx")
 
 
@@ -68,6 +69,16 @@ class CommercialLicenseGateStateContractTests(unittest.TestCase):
 
 
 class CommercialLicensePaywallUiContractTests(unittest.TestCase):
+    def test_visual_state_fixture_is_strictly_development_only(self) -> None:
+        self.assertTrue(os.path.exists(VISUAL_FIXTURE_FILE), "license visual fixture is missing")
+        source = read_text(VISUAL_FIXTURE_FILE)
+        store_source = read_text(STORE_FILE)
+
+        self.assertIn("import.meta.env.DEV", source)
+        self.assertIn("licenseState", source)
+        self.assertIn("getDevLicenseFixture", source)
+        self.assertIn("getDevLicenseFixture", store_source)
+
     def test_paywall_exposes_activation_identity_diagnostics_and_commercial_links(self) -> None:
         self.assertTrue(os.path.exists(PAYWALL_FILE), "commercial paywall component is missing")
         source = read_text(PAYWALL_FILE)
@@ -99,6 +110,8 @@ class CommercialLicensePaywallUiContractTests(unittest.TestCase):
         self.assertIn("LicensePaywall", source)
         self.assertIn("commercialAccessGranted", source)
         self.assertIn("data-commercial-app-shell", source)
+        self.assertIn("data-license-offline-banner", source)
+        self.assertIn("licenseGate.status === 'offline_grace'", source)
         self.assertRegex(
             source,
             re.compile(
