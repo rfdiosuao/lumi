@@ -209,11 +209,25 @@ class ComponentInstaller:
 
         self._mark(component, "configuring", job_id=job_id, on_progress=on_progress, message=f"配置 {component.name}")
         silent_installer_ran = False
+        managed_codex_entry = None
         managed_codex_version = None
         if component.component_id == "codex-desktop":
-            managed_entry = self._managed_codex_entry(install_path)
-            if managed_entry:
-                managed_codex_version = self._detect_installed_version(component, install_path, entry_path=managed_entry)
+            managed_codex_entry = self._managed_codex_entry(install_path)
+            if managed_codex_entry:
+                managed_codex_version = self._detect_installed_version(component, install_path, entry_path=managed_codex_entry)
+                if not managed_codex_version:
+                    self._restore_previous_after_failed_health(install_path, previous)
+                    self.state_store.mark(
+                        component.component_id,
+                        "health_failed",
+                        version=component.version,
+                        job_id=job_id,
+                        previous_version=previous.version if previous else None,
+                        error_message="managed Codex version check failed",
+                    )
+                    if on_progress:
+                        on_progress("检测失败：managed Codex version check failed", "danger")
+                    raise ComponentInstallError(f"health check failed for {component.component_id}: managed Codex version check failed")
         if component.archive_type == "installer" and getattr(component, "installer_args", ()):
             try:
                 if on_progress:

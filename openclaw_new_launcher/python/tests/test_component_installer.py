@@ -924,9 +924,68 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             with self.assertRaises(ComponentInstallError):
                 installer.install(component, job_id="job_failed_managed_codex")
 
-            self.assertEqual(installer.state_store.load()[component.component_id].status, "config_failed")
+            self.assertEqual(installer.state_store.load()[component.component_id].status, "health_failed")
             self.assertEqual(calls[0], [vendor_entry, "--version"])
-            self.assertEqual(sum("install" in command for command in calls), 3)
+            self.assertEqual(len(calls), 1)
+
+    def test_install_rejects_failed_managed_codex_probe_even_if_legacy_fallback_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_entry = os.path.join(temp_dir, "external", "codex.cmd")
+            component_v1 = make_payload_component(version="0.130.0", payload=b"codex v1")
+            vendor_relative_path = "package/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+            payload_v2 = make_tgz_payload({vendor_relative_path: b"codex v2"})
+            component_v2 = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=len(payload_v2),
+                sha256=hashlib.sha256(payload_v2).hexdigest(),
+                urls=("https://download.example.invalid/codex-v2.tgz",),
+                install_path=component_v1.install_path,
+                entry=None,
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+                external_paths=(external_entry,),
+            )
+            payloads = {
+                component_v1.urls[0]: b"codex v1",
+                component_v2.urls[0]: payload_v2,
+            }
+            vendor_entry = os.path.join(temp_dir, *component_v2.install_path.split("/"), *vendor_relative_path.split("/"))
+            calls: list[list[str]] = []
+
+            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                if command == [vendor_entry, "--version"]:
+                    return FakeCompletedProcess(returncode=1, stdout="codex-cli 0.142.3\n")
+                if "install" in command:
+                    os.makedirs(os.path.dirname(external_entry), exist_ok=True)
+                    with open(external_entry, "wb") as handle:
+                        handle.write(b"codex")
+                    return FakeCompletedProcess(returncode=0)
+                return FakeCompletedProcess(returncode=0)
+
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=lambda url, _timeout: payloads[url],
+                installer_runner=runner,
+            )
+
+            installer.install(component_v1, job_id="job_v1")
+            with self.assertRaisesRegex(Exception, "health check failed"):
+                installer.install(component_v2, job_id="job_failed_managed_codex_restore")
+
+            failed = store.load()[component_v2.component_id]
+            self.assertEqual(failed.status, "health_failed")
+            self.assertEqual(failed.previous_version, "0.130.0")
+            self.assertEqual(calls, [[vendor_entry, "--version"]])
+            installed_file = os.path.join(temp_dir, component_v2.install_path, "Codex-Installer.exe")
+            with open(installed_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"codex v1")
 
     def test_detect_rejects_managed_codex_with_failed_version_probe(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
