@@ -2199,6 +2199,16 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://api.heang.top")
             self.assertEqual(env["ANTHROPIC_MODEL"], "qwen3.7-plus")
 
+    def test_codex_launcher_environment_creates_managed_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build_env = getattr(component_installer_module, "build_agent_launcher_environment", lambda *_args, **_kwargs: {})
+
+            env = build_env(temp_dir, "codex-desktop")
+
+            expected_home = os.path.join(temp_dir, "data", ".codex")
+            self.assertEqual(env["CODEX_HOME"], expected_home)
+            self.assertTrue(os.path.isdir(expected_home))
+
     def test_agent_launcher_environment_does_not_inject_phone_model_as_desktop_model(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = AppPaths(temp_dir)

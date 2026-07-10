@@ -39,7 +39,7 @@ class ReleaseSourceOfTruthTests(unittest.TestCase):
         self.assertIn('python\\tests', source)
         self.assertIn('test_*.py', source)
 
-    def test_all_authoritative_version_files_are_2_1_56(self) -> None:
+    def test_all_authoritative_version_files_are_2_1_57(self) -> None:
         with open(os.path.join(LAUNCHER_ROOT, "package.json"), "r", encoding="utf-8") as handle:
             package = json.load(handle)
         with open(os.path.join(LAUNCHER_ROOT, "package-lock.json"), "r", encoding="utf-8") as handle:
@@ -49,12 +49,12 @@ class ReleaseSourceOfTruthTests(unittest.TestCase):
         cargo_toml = read_text(os.path.join(LAUNCHER_ROOT, "src-tauri", "Cargo.toml"))
         cargo_lock = read_text(os.path.join(LAUNCHER_ROOT, "src-tauri", "Cargo.lock"))
 
-        self.assertEqual(package["version"], "2.1.56")
-        self.assertEqual(package_lock["version"], "2.1.56")
-        self.assertEqual(package_lock["packages"][""]["version"], "2.1.56")
-        self.assertEqual(tauri["version"], "2.1.56")
-        self.assertRegex(cargo_toml, r'(?ms)^\[package\].*?^version\s*=\s*"2\.1\.56"')
-        self.assertRegex(cargo_lock, r'(?s)\[\[package\]\]\s*name\s*=\s*"app"\s*version\s*=\s*"2\.1\.56"')
+        self.assertEqual(package["version"], "2.1.57")
+        self.assertEqual(package_lock["version"], "2.1.57")
+        self.assertEqual(package_lock["packages"][""]["version"], "2.1.57")
+        self.assertEqual(tauri["version"], "2.1.57")
+        self.assertRegex(cargo_toml, r'(?ms)^\[package\].*?^version\s*=\s*"2\.1\.57"')
+        self.assertRegex(cargo_lock, r'(?s)\[\[package\]\]\s*name\s*=\s*"app"\s*version\s*=\s*"2\.1\.57"')
 
 
 if __name__ == "__main__":

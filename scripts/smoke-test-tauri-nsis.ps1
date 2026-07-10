@@ -32,20 +32,44 @@ function Assert-ChildPath {
     return $childPath
 }
 
+function ConvertTo-CommandLineArgument {
+    param([AllowEmptyString()][string]$Argument)
+
+    if ($null -eq $Argument -or $Argument.Length -eq 0) {
+        return '""'
+    }
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    # Follow the Windows CommandLineToArgvW escaping rules: double slashes
+    # before quotes, escape the quote, and double trailing slashes.
+    $escaped = [regex]::Replace($Argument, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
+}
+
 function Invoke-ProcessAndWait {
     param(
         [string]$FilePath,
-        [string[]]$Arguments,
+        [string[]]$Arguments = @(),
+        [string]$RawArguments = "",
         [string]$StandardOutputPath = "",
         [string]$StandardErrorPath = ""
     )
+    $quotedArguments = ($Arguments | ForEach-Object {
+        ConvertTo-CommandLineArgument -Argument ([string]$_)
+    }) -join " "
+    if (-not [string]::IsNullOrWhiteSpace($RawArguments)) {
+        $quotedArguments = $RawArguments
+    }
     $startParameters = @{
         FilePath = $FilePath
-        ArgumentList = $Arguments
         PassThru = $true
         Wait = $true
         WindowStyle = "Hidden"
     }
+    $startParameters["ArgumentList"] = $quotedArguments
     if (-not [string]::IsNullOrWhiteSpace($StandardOutputPath)) {
         $startParameters["RedirectStandardOutput"] = $StandardOutputPath
     }
@@ -468,7 +492,8 @@ try {
     $caseIndex = 0
     foreach ($installPath in $resolvedInstallPaths) {
         $caseName = "case-$caseIndex"
-        Invoke-ProcessAndWait -FilePath $resolvedInstaller -Arguments @("/S", "/D=$installPath")
+        # NSIS requires /D= to be the final, unquoted remainder of its command line.
+        Invoke-ProcessAndWait -FilePath $resolvedInstaller -RawArguments "/S /D=$installPath"
         try {
             $caseDataRoot = Join-Path $resolvedSmokeRoot "$caseName-data"
             $result = Test-InstalledRuntime -InstallPath $installPath -CaseName $caseName -CaseDataRoot $caseDataRoot -SecretScanPath $resolvedSecretScanScript

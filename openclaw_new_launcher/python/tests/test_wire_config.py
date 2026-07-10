@@ -586,6 +586,31 @@ class WireServiceTests(unittest.TestCase):
             self.assertFalse(status["userConfigSynchronized"])
             self.assertIn("simulated locked user profile", status["userConfigWarning"])
 
+    def test_codex_managed_config_survives_user_environment_registry_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+
+            with (
+                mock.patch("core.wire_config._should_persist_user_env", return_value=True),
+                mock.patch("core.wire_config._write_user_env_var", side_effect=PermissionError("simulated registry policy block")),
+            ):
+                result = service.sync_custom_provider(
+                    provider="OpenAI compatible",
+                    base_url="https://third.example/v1",
+                    api_key="sk-test-token-not-real",
+                    text_model="gpt-4o",
+                    targets=("codex",),
+                )
+
+            target = result["syncResults"][0]
+            self.assertTrue(target["ok"])
+            status = service.agent_model_config_status("codex-desktop")
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["status"], "configured_with_warning")
+            self.assertFalse(status["environmentSynchronized"])
+            self.assertIn("simulated registry policy block", status["environmentWarning"])
+
     def test_openclaw_model_sync_rejects_phone_only_model_list(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = AppPaths(temp_dir)

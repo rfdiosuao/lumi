@@ -30,6 +30,8 @@ class NsisSmokeScriptContractTests(unittest.TestCase):
             "Remove-Item -LiteralPath $sessionPath -Force",
             "LicenseCodeFile",
             "Test-OnlineLicensePersistence",
+            "ConvertTo-CommandLineArgument",
+            "$quotedArguments",
             "/api/license/activate",
             'status -ne "authorized"',
             "commercialFeatures",
@@ -43,6 +45,16 @@ class NsisSmokeScriptContractTests(unittest.TestCase):
 
         self.assertNotIn("ConvertTo-Json $session", source)
         self.assertNotIn("Write-Output $session.token", source)
+
+    def test_smoke_script_quotes_process_arguments_for_space_paths(self) -> None:
+        with open(SCRIPT_PATH, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("function ConvertTo-CommandLineArgument", source)
+        self.assertIn('$quotedArguments = ($Arguments | ForEach-Object', source)
+        self.assertIn('$startParameters["ArgumentList"] = $quotedArguments', source)
+        self.assertIn('[string]$RawArguments = ""', source)
+        self.assertIn('-RawArguments "/S /D=$installPath"', source)
 
 
 if __name__ == "__main__":

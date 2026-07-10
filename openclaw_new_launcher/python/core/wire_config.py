@@ -295,6 +295,10 @@ class WireService:
             elif user_config_path and not os.path.isfile(user_config_path):
                 user_config_warning = "用户 Codex 配置未同步；LOOM 专用配置仍可正常使用"
         user_config_synchronized = component_id != "codex-desktop" or (not user_config_warning and user_config_matches)
+        environment_warning = _pick_text(metadata.get("environmentWarning"))
+        environment_synchronized = component_id != "codex-desktop" or not environment_warning
+        optional_warnings = [warning for warning in (user_config_warning, environment_warning) if warning]
+        optional_warning_message = "；".join(optional_warnings)
         configured = bool(
             os.path.isfile(config_path)
             and metadata.get("configured")
@@ -307,9 +311,9 @@ class WireService:
         elif invalid_model:
             status = "unconfigured"
             message = "检测到手机/图像/视频模型被写入桌面 Agent，请重新写入文本模型配置"
-        elif configured and component_id == "codex-desktop" and not user_config_synchronized:
+        elif configured and component_id == "codex-desktop" and (not user_config_synchronized or not environment_synchronized):
             status = "configured_with_warning"
-            message = user_config_warning
+            message = optional_warning_message
         elif configured:
             status = "configured"
             message = "模型配置已写入"
@@ -330,6 +334,8 @@ class WireService:
             "userInvalidModel": user_actual_raw_model if invalid_user_model else "",
             "userConfigSynchronized": user_config_synchronized,
             "userConfigWarning": user_config_warning,
+            "environmentSynchronized": environment_synchronized,
+            "environmentWarning": environment_warning,
             "provider": _pick_text(wire.get("provider")) if isinstance(wire, dict) else "",
             "baseUrl": _pick_text(wire.get("baseUrl")) if isinstance(wire, dict) else "",
             "managedBy": _wire_managed_by(wire) if isinstance(wire, dict) else "",
@@ -367,6 +373,7 @@ class WireService:
         user_config_path = ""
         user_backup_path = ""
         user_config_warning = ""
+        environment_warning = ""
         if component_id == "codex-desktop":
             user_config_path = _user_codex_config_path(self.paths)
             existing_user_config = _read_text(user_config_path) if os.path.isfile(user_config_path) else ""
@@ -382,6 +389,15 @@ class WireService:
             except Exception as exc:
                 user_config_warning = _redact_secret_text(str(exc)) or "用户 Codex 配置写入失败"
                 self.append_log(f"[Wire] optional Codex user config sync failed: {user_config_warning}\n")
+        if component_id == "codex-desktop":
+            try:
+                _persist_agent_env_key(self.paths, "LOOM_CODEX_API_KEY", api_key)
+            except Exception as exc:
+                environment_warning = _redact_secret_text(str(exc)) or "Codex 用户环境变量写入失败"
+                self.append_log(f"[Wire] optional Codex user environment sync failed: {environment_warning}\n")
+        elif component_id == "claude-code":
+            _persist_agent_env_key(self.paths, "LOOM_CLAUDE_API_KEY", api_key)
+
         metadata = {
             "componentId": component_id,
             "configured": True,
@@ -395,13 +411,11 @@ class WireService:
             "userBackupPath": user_backup_path or self._agent_config_metadata(component_id).get("userBackupPath") or "",
             "userConfigSynchronized": not bool(user_config_warning),
             "userConfigWarning": user_config_warning,
+            "environmentSynchronized": not bool(environment_warning),
+            "environmentWarning": environment_warning,
             "updatedAt": _iso_now(),
         }
         write_json(self._agent_config_metadata_path(component_id), metadata)
-        if component_id == "codex-desktop":
-            _persist_agent_env_key(self.paths, "LOOM_CODEX_API_KEY", api_key)
-        elif component_id == "claude-code":
-            _persist_agent_env_key(self.paths, "LOOM_CLAUDE_API_KEY", api_key)
         return self.agent_model_config_status(component_id)
 
     def rollback_agent_model_config(self, component_id: str) -> dict[str, Any]:

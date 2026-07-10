@@ -1684,7 +1684,9 @@ def build_agent_launcher_environment(base_path: str | None, component_id: str | 
             env["LOOM_OPENCODE_API_KEY"] = api_key
     elif component_id == "codex-desktop":
         wire = _agent_wire_from_root(root)
-        env["CODEX_HOME"] = os.path.join(root, "data", ".codex")
+        codex_home = os.path.join(root, "data", ".codex")
+        os.makedirs(codex_home, exist_ok=True)
+        env["CODEX_HOME"] = codex_home
         _inject_openai_compatible_env(env, wire, key_name="LOOM_CODEX_API_KEY")
     elif component_id == "claude-code":
         wire = _agent_wire_from_root(root)
