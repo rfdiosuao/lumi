@@ -304,7 +304,7 @@ class AgentInstallerPageContractTests(unittest.TestCase):
             page_source = handle.read()
 
         self.assertIn("COMPONENT_REQUIRED_PREREQ_IDS", page_source)
-        self.assertIn("'codex-desktop': new Set(['python_runtime', 'data_dir'])", page_source)
+        self.assertIn("'codex-desktop': new Set(['python_runtime'])", page_source)
         self.assertIn("requiredPrerequisiteIdsForComponent", page_source)
         self.assertIn("ensurePreflightReady(component.id)", page_source)
         self.assertIn("repairMissingPrerequisites(report, componentId)", page_source)

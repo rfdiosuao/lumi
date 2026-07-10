@@ -34,7 +34,7 @@ const FALLBACK_COMPONENTS: Record<string, { name: string; description: string; c
 
 const PREREQ_IDS = ['python_runtime', 'node', 'npm', 'git', 'git_bash', 'uv', 'webview2', 'data_dir'];
 const COMPONENT_REQUIRED_PREREQ_IDS: Record<string, Set<string>> = {
-  'codex-desktop': new Set(['python_runtime', 'data_dir']),
+  'codex-desktop': new Set(['python_runtime']),
   'claude-code': new Set(['python_runtime', 'node', 'data_dir']),
   opencode: new Set(['python_runtime', 'data_dir']),
   'openclaw-companion': new Set(['python_runtime', 'node', 'data_dir']),
