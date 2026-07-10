@@ -8,10 +8,16 @@ import unittest
 LAUNCHER_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REPO_ROOT = os.path.dirname(LAUNCHER_ROOT)
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts")
+LAUNCHER_SCRIPTS_DIR = os.path.join(LAUNCHER_ROOT, "scripts")
 
 
 def read_script(name: str) -> str:
     with open(os.path.join(SCRIPTS_DIR, name), "r", encoding="utf-8-sig") as handle:
+        return handle.read()
+
+
+def read_launcher_script(name: str) -> str:
+    with open(os.path.join(LAUNCHER_SCRIPTS_DIR, name), "r", encoding="utf-8-sig") as handle:
         return handle.read()
 
 
@@ -88,6 +94,40 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn("Assert-OutputPathAvailable -Path $onlineOutputPath", source)
         self.assertIn("Assert-OutputPathAvailable -Path $completeOutputPath", source)
         self.assertIn("Test-Path -LiteralPath $Path", source)
+
+    def test_measure_installer_performance_script_reports_budgets_and_readiness(self) -> None:
+        source = read_launcher_script("measure-installer-performance.ps1")
+
+        self.assertIn("PrerequisiteBudgetMs", source)
+        self.assertIn("CodexBudgetMs", source)
+        self.assertIn("ValidateOnly", source)
+        self.assertIn("Simulate", source)
+        self.assertIn('"prerequisiteMs"', source)
+        self.assertIn('"codexDetectMs"', source)
+        self.assertIn('"appxCalls"', source)
+        self.assertIn('"npmCalls"', source)
+        self.assertIn('"onlineReadiness"', source)
+        self.assertIn('"completeReadiness"', source)
+        self.assertIn("diagnose_prerequisites()", source)
+        self.assertIn("installer.detect(codex_component", source)
+
+    def test_measure_installer_performance_script_validate_only_checks_dual_nsis_readiness(self) -> None:
+        source = read_launcher_script("measure-installer-performance.ps1")
+
+        self.assertIn('if ($ValidateOnly) {', source)
+        self.assertIn("build-dual-nsis.ps1", source)
+        self.assertIn("-ValidateOnly", source)
+        self.assertIn("dual-nsis-validateonly-failed", source)
+        self.assertIn("Resolve-CodexPackagePath", source)
+
+    def test_measure_installer_performance_script_avoids_real_release_side_effects(self) -> None:
+        source = read_launcher_script("measure-installer-performance.ps1")
+
+        self.assertNotIn("publish-gitee-release.ps1", source)
+        self.assertNotIn("verify-newapi-account.ps1", source)
+        self.assertNotIn("Invoke-WebRequest", source)
+        self.assertNotIn("Start-BitsTransfer", source)
+        self.assertNotIn("upload", source.lower())
 
     def test_online_installer_requires_package_inputs_instead_of_old_defaults(self) -> None:
         source = read_script("build-online-exe-installer.ps1")
