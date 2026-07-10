@@ -27,7 +27,7 @@ class BusyOverlayContractTests(unittest.TestCase):
         self.assertIn("document.body", source)
         self.assertIn("data-busy-overlay", source)
         self.assertIn("data-busy-overlay-mode={mode}", source)
-        self.assertIn("fixed inset-0", source)
+        self.assertIn("fixed bottom-0 left-0 right-0 top-10", source)
         self.assertIn("z-[99940]", source)
         self.assertIn("pointer-events-auto", source)
         self.assertNotIn("backdrop-blur", source)

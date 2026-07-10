@@ -301,7 +301,7 @@ export const BusyOverlay: React.FC<{
       className={
         isCorner
           ? 'pointer-events-none fixed left-[calc(var(--sidebar-width,88px)+16px)] top-14 z-[99940] flex max-w-[min(360px,calc(100vw-2rem))] items-start'
-          : 'pointer-events-auto fixed inset-0 z-[99940] flex items-center justify-center bg-[#071916]/64 px-6'
+          : 'pointer-events-auto fixed bottom-0 left-0 right-0 top-10 z-[99940] flex items-center justify-center bg-[#071916]/64 px-6'
       }
     >
       {isCorner ? (

@@ -20,7 +20,7 @@ class AgentInstallerPageContractTests(unittest.TestCase):
 
         self.assertIn("loomClient", source)
         self.assertIn("loomClient.components.status()", source)
-        self.assertIn("loomClient.diagnostics.run()", source)
+        self.assertIn("loomClient.diagnostics.prerequisites()", source)
         self.assertIn("loomClient.jobs.list(20)", source)
         self.assertIn("loomClient.process.status()", source)
         self.assertIn("loomClient.process.waitForReady", source)
@@ -96,22 +96,23 @@ class AgentInstallerPageContractTests(unittest.TestCase):
             source = handle.read()
 
         self.assertIn("confirmPreflightRepair", source)
-        self.assertIn("loomClient.diagnostics.repair({ confirmed: true })", source)
+        self.assertIn("loomClient.diagnostics.repairPrerequisites()", source)
         self.assertIn("loomClient.components.install(component.id, { confirmed: true", source)
 
     def test_preflight_detection_uses_corner_busy_state_without_locking_page_scroll(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
             source = handle.read()
 
+        self.assertIn("data-installer-nonblocking", source)
         self.assertIn("data-agent-page-locked", source)
         self.assertIn("preflightBusy", source)
         self.assertIn("blockingBusy", source)
-        self.assertIn("const pageLocked = blockingBusy", source)
-        self.assertIn("const controlsLocked = blockingBusy", source)
-        self.assertIn("const busyOverlayMode = preflightBusy && !blockingBusy ? 'corner' : 'blocking'", source)
-        self.assertIn("overflow-y-hidden", source)
+        self.assertIn("const pageLocked = loading", source)
+        self.assertIn("const controlsLocked = loading", source)
+        self.assertIn("const busyOverlayMode = (preflightBusy || componentJobBusy || Boolean(modelConfigBusy)) && !blockingBusy ? 'corner' : 'blocking'", source)
         self.assertIn("aria-busy={busyOverlayActive}", source)
-        self.assertIn("pageLocked ? 'overflow-y-hidden' : 'overflow-y-auto'", source)
+        self.assertIn("overflow-y-auto", source)
+        self.assertNotIn("overflow-y-hidden", source)
 
     def test_agent_access_copy_is_embedded_in_installer_page(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
@@ -206,15 +207,35 @@ class AgentInstallerPageContractTests(unittest.TestCase):
 
         self.assertIn("if (!snapshot) return true", page_source)
 
-    def test_first_open_auto_detects_existing_agents_without_installing(self) -> None:
+    def test_first_open_does_not_run_sequential_auto_detect_scan(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
             page_source = handle.read()
 
-        self.assertIn("AUTO_DETECT_COMPONENT_IDS", page_source)
-        self.assertIn("autoDetectAttempted", page_source)
-        self.assertIn("shouldAutoDetectOnFirstOpen", page_source)
-        self.assertIn("loomClient.components.detect(component.id", page_source)
+        self.assertNotIn("AUTO_DETECT_COMPONENT_IDS", page_source)
+        self.assertNotIn("autoDetectAttempted", page_source)
+        self.assertNotIn("shouldAutoDetectOnFirstOpen", page_source)
+        self.assertNotIn("for (const component of targets)", page_source)
         self.assertNotIn("loomClient.components.install(component.id, { confirmed: false", page_source)
+
+    def test_preflight_uses_quick_prerequisite_api_and_scoped_repair(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            page_source = handle.read()
+
+        self.assertIn("loomClient.diagnostics.prerequisites()", page_source)
+        self.assertIn("loomClient.diagnostics.repairPrerequisites()", page_source)
+        self.assertNotIn("loomClient.diagnostics.run()", page_source)
+        self.assertNotIn("loomClient.diagnostics.repair({ confirmed: true })", page_source)
+
+    def test_job_polling_and_component_actions_are_scoped_to_active_component_jobs(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            page_source = handle.read()
+
+        self.assertIn("data-installer-active-job", page_source)
+        self.assertIn("activeJobComponentIds", page_source)
+        self.assertIn("const componentJobBusy = activeJobComponentIds.size > 0", page_source)
+        self.assertIn("const selectedBusy = Boolean(selected && activeJobComponentIds.has(selected.id))", page_source)
+        self.assertIn("if (!jobs.some((job) => job.status === 'running' || job.status === 'queued')) return undefined;", page_source)
+        self.assertIn("setSelectedId(component.id)", page_source)
 
     def test_first_open_uses_cached_preflight_until_user_refreshes(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
@@ -230,6 +251,8 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("if (reusablePreflight)", page_source)
         self.assertIn("refreshPreflight({ preferCache: true })", page_source)
         self.assertIn("refreshPreflight({ force: true })", page_source)
+        self.assertIn("measuredAt", page_source)
+        self.assertIn("totalMs", page_source)
         self.assertIn("LOOM_PREFLIGHT_CACHE_KEY", cache_source)
         self.assertIn("STARTUP_CACHE_TTL_MS", cache_source)
         self.assertIn("PREFLIGHT_NON_OK_CACHE_TTL_MS", cache_source)

@@ -61,9 +61,10 @@ export const WindowTitlebar: React.FC = () => {
 
   return (
     <div
+      data-window-drag-above-overlays
       data-tauri-drag-region
       onDoubleClick={toggleMaximize}
-      className="flex h-10 shrink-0 items-stretch border-b border-[#12343D]/75 bg-app-sidebar text-white"
+      className="relative z-[100000] flex h-10 shrink-0 items-stretch border-b border-[#12343D]/75 bg-app-sidebar text-white"
     >
       <div data-tauri-drag-region className="flex w-[292px] shrink-0 items-center border-r border-[#12343D]/75 px-3 text-white">
         <LoomTitleLockup wordmarkTone="light" />

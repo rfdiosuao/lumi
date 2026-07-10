@@ -23,12 +23,6 @@ const PINNED_COMPONENT_IDS = [
   'openclaw-companion',
   'hermes',
 ];
-const AUTO_DETECT_COMPONENT_IDS = new Set([
-  'codex-desktop',
-  'claude-code',
-  'opencode',
-  'openclaw-companion',
-]);
 
 const FALLBACK_COMPONENTS: Record<string, { name: string; description: string; category: string }> = {
   'codex-desktop': { name: 'Codex 桌面端', description: 'OpenAI Codex 桌面应用', category: 'agent' },
@@ -263,6 +257,27 @@ function toneClass(tone: string): string {
   return 'text-text-muted';
 }
 
+function extractJobComponentId(job?: BridgeJob): string {
+  if (!job) return '';
+  const progress = job.progress as Record<string, unknown> | undefined;
+  if (typeof progress?.componentId === 'string') return progress.componentId;
+  if (typeof progress?.targetComponentId === 'string') return progress.targetComponentId;
+  if (typeof progress?.component === 'string') return progress.component;
+  return '';
+}
+
+function isActiveJobStatus(status: string): boolean {
+  return status === 'queued' || status === 'running';
+}
+
+function parseProgressValue(message: string): number | null {
+  const match = message.match(/(\d{1,3})(?:\.\d+)?%/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, value));
+}
+
 function jobHistoryEntries(jobs: BridgeJob[], selectedId: string): InstallLogEntry[] {
   return jobs.flatMap((job) => {
     const componentId = typeof (job.progress as any)?.componentId === 'string' ? (job.progress as any).componentId : undefined;
@@ -337,17 +352,6 @@ function componentRows(snapshot: ComponentSnapshot | null): ComponentSummary[] {
 function manifestInstallLocked(snapshot: ComponentSnapshot | null): boolean {
   if (!snapshot) return true;
   return Boolean(snapshot.installLocked || snapshot.manifestErrorCode === 'manifest_unavailable' || !snapshot.manifest);
-}
-
-function shouldAutoDetectOnFirstOpen(component?: ComponentSummary): boolean {
-  if (!component) return false;
-  return (
-    AUTO_DETECT_COMPONENT_IDS.has(component.id) &&
-    component.status === 'not_installed' &&
-    !component.installedVersion &&
-    !component.errorCode &&
-    !isWorking(component.status)
-  );
 }
 
 const InfoTile: React.FC<{ label: string; value: string }> = ({ label, value }) => (
@@ -468,6 +472,7 @@ const CompactPrerequisitePanel: React.FC<{
   const pct = checks.length ? Math.round((ready / total) * 100) : 0;
   const allReady = checks.length > 0 && summary.ready === summary.total;
   const busy = loading || repairing;
+  const timing = report?.timing;
   const title = !checks.length
     ? '准备检测前置环境'
     : summary.failed
@@ -518,6 +523,16 @@ const CompactPrerequisitePanel: React.FC<{
           <div className="mt-4 rounded-[12px] border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-sm text-status-danger">
             {error}
           </div>
+        ) : null}
+
+        {timing ? (
+          <details className="mt-3 rounded-[10px] border border-border/70 bg-surface-alt/35 px-3 py-2 text-xs text-text-subtle">
+            <summary className="cursor-pointer font-bold">检测耗时</summary>
+            <div className="mt-2 space-y-1 font-mono">
+              <div>totalMs: {timing.totalMs}</div>
+              <div>measuredAt: {timing.measuredAt}</div>
+            </div>
+          </details>
         ) : null}
 
         <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-2">
@@ -803,7 +818,6 @@ const AgentModelConfigPanel: React.FC<{
 
 export const AgentInstallerPage: React.FC = () => {
   const cachedPreflight = React.useRef<DiagnosticReport | null>(loadCachedPreflight());
-  const autoDetectAttempted = React.useRef(false);
   const [snapshot, setSnapshot] = React.useState<ComponentSnapshot | null>(null);
   const [selectedId, setSelectedId] = React.useState('');
   const [loading, setLoading] = React.useState(true);
@@ -872,20 +886,17 @@ export const AgentInstallerPage: React.FC = () => {
   }, []);
 
   const refreshPreflight = React.useCallback(async (options: { preferCache?: boolean; force?: boolean } = {}) => {
-    if (options.preferCache && !options.force) {
-      const cached = loadCachedPreflight();
-      if (cached) {
-        cachedPreflight.current = cached;
-        setPreflight(cached);
-        setPreflightError('');
-        setPreflightLoading(false);
-        return;
-      }
+    const cached = options.force ? null : loadCachedPreflight();
+    if (options.preferCache && cached) {
+      cachedPreflight.current = cached;
+      setPreflight(cached);
+      setPreflightError('');
     }
     setPreflightLoading(true);
     setPreflightError('');
     try {
-      const report = await loomClient.diagnostics.run();
+      const report = await loomClient.diagnostics.prerequisites();
+      cachedPreflight.current = report;
       setPreflight(report);
       saveCachedPreflight(report);
     } catch (err: any) {
@@ -931,7 +942,7 @@ export const AgentInstallerPage: React.FC = () => {
     setPreflightRepairing(true);
     setPreflightError('');
     try {
-      const next = await loomClient.diagnostics.repair({ confirmed: true });
+      const next = await loomClient.diagnostics.repairPrerequisites();
       setPreflight(next.diagnostics);
       saveCachedPreflight(next.diagnostics);
       const hasFailedAction = next.actions.some((action) => action.status === 'fail');
@@ -963,7 +974,7 @@ export const AgentInstallerPage: React.FC = () => {
     setPreflightRepairing(true);
     setPreflightError('');
     try {
-      const repaired = await loomClient.diagnostics.repair({ confirmed: true });
+      const repaired = await loomClient.diagnostics.repairPrerequisites();
       const report = repaired.diagnostics;
       setPreflight(report);
       saveCachedPreflight(report);
@@ -990,6 +1001,25 @@ export const AgentInstallerPage: React.FC = () => {
   }, [components, selectedId]);
 
   const selected = components.find((item) => item.id === selectedId) || components[0];
+  const activeJobComponentIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    jobs.forEach((job) => {
+      const componentId = extractJobComponentId(job);
+      if (componentId && isActiveJobStatus(String(job.status || ''))) {
+        ids.add(componentId);
+      }
+    });
+    if (busyId) ids.add(busyId);
+    if (modelConfigBusy) ids.add(modelConfigBusy);
+    return ids;
+  }, [busyId, jobs, modelConfigBusy]);
+  const selectedBusy = Boolean(selected && activeJobComponentIds.has(selected.id));
+  const selectedActiveJob = React.useMemo(() => {
+    if (!selected) return null;
+    return jobs.find((job) => extractJobComponentId(job) === selected.id && isActiveJobStatus(String(job.status || ''))) || null;
+  }, [jobs, selected]);
+  const selectedJobMessage = selectedActiveJob?.progress?.message || selectedActiveJob?.message || '';
+  const selectedJobProgress = parseProgressValue(selectedJobMessage);
   const selectedModelConfig = selected ? modelConfigs[selected.id] : undefined;
   const selectedModelDraft = selected ? (modelDrafts[selected.id] || selectedModelConfig?.model || selectedModelConfig?.availableModels?.[0] || '') : '';
   const readyCount = components.filter((item) => item.status === 'ready' || item.status === 'started').length;
@@ -1004,12 +1034,12 @@ export const AgentInstallerPage: React.FC = () => {
   const hiddenLogCount = hiddenLogEntries.length;
 
   React.useEffect(() => {
-    if (!busyId) return undefined;
+    if (!jobs.some((job) => job.status === 'running' || job.status === 'queued')) return undefined;
     const timer = window.setInterval(() => {
       void refreshJobs();
     }, 2500);
     return () => window.clearInterval(timer);
-  }, [busyId, refreshJobs]);
+  }, [jobs, refreshJobs]);
 
   React.useEffect(() => {
     if (!selected || !supportsModelConfig(selected)) return;
@@ -1017,12 +1047,9 @@ export const AgentInstallerPage: React.FC = () => {
   }, [refreshModelConfig, selected?.id, selected?.status]);
 
   React.useEffect(() => {
-    if (autoDetectAttempted.current || loading || installActionsLocked || !snapshot?.manifest) return;
-    const targets = components.filter(shouldAutoDetectOnFirstOpen);
-    if (!targets.length) return;
-    autoDetectAttempted.current = true;
+    return;
     void (async () => {
-      for (const component of targets) {
+      for (const component of []) {
         try {
           pushLog(`自动检测 ${component.name}`, 'neutral', component.id);
           const next = await loomClient.components.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
@@ -1061,7 +1088,7 @@ export const AgentInstallerPage: React.FC = () => {
       setPreflightLoading(true);
       setPreflightError('');
       try {
-        report = await loomClient.diagnostics.run();
+        report = await loomClient.diagnostics.prerequisites();
         setPreflight(report);
         saveCachedPreflight(report);
       } catch (err: any) {
@@ -1155,7 +1182,7 @@ export const AgentInstallerPage: React.FC = () => {
       showToast(message, 'error');
       await refresh();
       try {
-        const report = await loomClient.diagnostics.run();
+        const report = await loomClient.diagnostics.prerequisites();
         setPreflight(report);
         saveCachedPreflight(report);
       } catch {
@@ -1462,11 +1489,12 @@ export const AgentInstallerPage: React.FC = () => {
       ? components.find((item) => item.id === modelConfigBusy)?.name || ''
       : '';
   const preflightBusy = preflightLoading || preflightRepairing;
-  const blockingBusy = loading || Boolean(busyId) || Boolean(modelConfigBusy);
-  const busyOverlayActive = blockingBusy || preflightBusy;
-  const pageLocked = blockingBusy;
-  const controlsLocked = blockingBusy;
-  const busyOverlayMode = preflightBusy && !blockingBusy ? 'corner' : 'blocking';
+  const componentJobBusy = activeJobComponentIds.size > 0;
+  const blockingBusy = loading;
+  const busyOverlayActive = blockingBusy || preflightBusy || componentJobBusy || Boolean(modelConfigBusy);
+  const pageLocked = loading;
+  const controlsLocked = loading;
+  const busyOverlayMode = (preflightBusy || componentJobBusy || Boolean(modelConfigBusy)) && !blockingBusy ? 'corner' : 'blocking';
   const busyOverlayTitle = modelConfigBusy
     ? '正在写入模型配置'
     : preflightRepairing
@@ -1493,10 +1521,12 @@ export const AgentInstallerPage: React.FC = () => {
   return (
     <div
       data-agent-page-scroll
+      data-installer-nonblocking
+      data-installer-active-job={selectedBusy ? selected?.id : undefined}
       data-white-label-layout="installer"
       data-agent-page-locked={pageLocked ? 'true' : undefined}
       aria-busy={busyOverlayActive}
-      className={`loom-white-page loom-installer-shell h-full bg-app-bg ${pageLocked ? 'overflow-y-hidden' : 'overflow-y-auto'}`}
+      className="loom-white-page loom-installer-shell h-full overflow-y-auto bg-app-bg"
     >
       <BusyOverlay active={busyOverlayActive} mode={busyOverlayMode} title={busyOverlayTitle} detail={busyOverlayDetail} />
       <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-6 px-8 pb-7 pt-10">
