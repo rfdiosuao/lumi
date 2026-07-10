@@ -33,6 +33,27 @@ class FakeCompletedProcess:
     stderr: str = ""
 
 
+class FakeHTTPResponse:
+    def __init__(self, body: bytes, *, status: int = 200, headers: dict[str, str] | None = None):
+        self._body = body
+        self._cursor = 0
+        self.status = status
+        self.headers = headers or {}
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = len(self._body) - self._cursor
+        chunk = self._body[self._cursor : self._cursor + size]
+        self._cursor += len(chunk)
+        return chunk
+
+    def __enter__(self) -> "FakeHTTPResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
 def make_component(component_id: str = "codex-desktop") -> ReleaseComponent:
     return ReleaseComponent(
         component_id=component_id,
@@ -233,6 +254,134 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(failed.status, "download_failed")
             self.assertIn("network unavailable", failed.error_message or "")
             self.assertEqual(attempts, 3)
+
+    def test_verified_cache_hit_avoids_fetcher(self) -> None:
+        payload = b"codex cached payload"
+        component = make_payload_component(version="1.0.0", payload=payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=lambda _url, _timeout: self.fail("verified cache should avoid fetcher"),
+            )
+            cache_path = installer._verified_cache_path(component)
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            with open(cache_path, "wb") as handle:
+                handle.write(payload)
+
+            state = installer.install(component, job_id="job_cache_hit")
+
+            self.assertEqual(state.status, "manual_install_required")
+            installed_file = os.path.join(temp_dir, "agents", component.component_id, "Codex-Installer.exe")
+            with open(installed_file, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
+
+    def test_invalid_verified_cache_is_discarded_and_refetched(self) -> None:
+        payload = b"codex fresh payload"
+        component = make_payload_component(version="1.0.0", payload=payload)
+        fetch_calls = 0
+
+        def fetcher(_url: str, _timeout: float) -> bytes:
+            nonlocal fetch_calls
+            fetch_calls += 1
+            return payload
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(base_path=temp_dir, state_store=store, fetcher=fetcher)
+            cache_path = installer._verified_cache_path(component)
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            with open(cache_path, "wb") as handle:
+                handle.write(payload[:5])
+
+            installer.install(component, job_id="job_cache_refetch")
+
+            self.assertEqual(fetch_calls, 1)
+            installed_file = os.path.join(temp_dir, "agents", component.component_id, "Codex-Installer.exe")
+            with open(installed_file, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
+
+    def test_stream_download_reports_percent_and_size(self) -> None:
+        payload = (b"0123456789" * 10)
+        component = make_payload_component(version="1.0.0", payload=payload)
+        progress: list[tuple[str, str]] = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(base_path=temp_dir, state_store=store)
+
+            with mock.patch.object(
+                component_installer_module,
+                "urlopen",
+                return_value=FakeHTTPResponse(payload, headers={"Content-Length": str(len(payload))}),
+            ):
+                state = installer.install(
+                    component,
+                    job_id="job_stream_progress",
+                    on_progress=lambda message, tone: progress.append((message, tone)),
+                )
+
+            self.assertEqual(state.status, "manual_install_required")
+            download_messages = [message for message, _tone in progress if "下载 Codex" in message]
+            self.assertTrue(any("%" in message and "/" in message for message in download_messages))
+            self.assertTrue(any("100%" in message for message in download_messages))
+
+    def test_partial_download_uses_range_and_appends(self) -> None:
+        payload = b"prefix-suffix"
+        prefix = b"prefix-"
+        suffix = payload[len(prefix) :]
+        component = make_payload_component(version="1.0.0", payload=payload)
+        requests: list[object] = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(base_path=temp_dir, state_store=store)
+            partial_path = installer._verified_cache_path(component) + ".part"
+            os.makedirs(os.path.dirname(partial_path), exist_ok=True)
+            with open(partial_path, "wb") as handle:
+                handle.write(prefix)
+
+            def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+                requests.append(request)
+                return FakeHTTPResponse(suffix, status=206, headers={"Content-Length": str(len(suffix))})
+
+            with mock.patch.object(component_installer_module, "urlopen", side_effect=fake_urlopen):
+                installer.install(component, job_id="job_resume_append")
+
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(requests[0].headers.get("Range"), f"bytes={len(prefix)}-")
+            installed_file = os.path.join(temp_dir, "agents", component.component_id, "Codex-Installer.exe")
+            with open(installed_file, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
+
+    def test_server_ignoring_range_restarts_without_duplicate_bytes(self) -> None:
+        payload = b"fresh-payload"
+        prefix = b"stale-"
+        component = make_payload_component(version="1.0.0", payload=payload)
+        requests: list[object] = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(base_path=temp_dir, state_store=store)
+            partial_path = installer._verified_cache_path(component) + ".part"
+            os.makedirs(os.path.dirname(partial_path), exist_ok=True)
+            with open(partial_path, "wb") as handle:
+                handle.write(prefix)
+
+            def fake_urlopen(request: object, timeout: float) -> FakeHTTPResponse:
+                requests.append(request)
+                return FakeHTTPResponse(payload, status=200, headers={"Content-Length": str(len(payload))})
+
+            with mock.patch.object(component_installer_module, "urlopen", side_effect=fake_urlopen):
+                installer.install(component, job_id="job_resume_restart")
+
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(requests[0].headers.get("Range"), f"bytes={len(prefix)}-")
+            installed_file = os.path.join(temp_dir, "agents", component.component_id, "Codex-Installer.exe")
+            with open(installed_file, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
 
     def test_tgz_component_extracts_archive_entries(self) -> None:
         payload = make_tgz_payload(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import os
 import re
@@ -23,6 +22,7 @@ from core.secret_store import unprotect_secret
 
 
 ComponentFetcher = Callable[[str, float], bytes]
+StreamFetcherProgress = Callable[[str], None]
 ComponentHealthChecker = Callable[[ReleaseComponent, str], None]
 ComponentLauncher = Callable[[str, str], dict]
 ComponentInstallerRunner = Callable[[List[str], str, int], subprocess.CompletedProcess]
@@ -55,6 +55,9 @@ KNOWN_NPM_PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
 RETRY_DELAYS_SECONDS = (0.0, 0.8, 1.6)
 EXTERNAL_ENTRY_CACHE_TTL_SECONDS = 30.0
 VERSION_DETECT_TIMEOUT_MS = 5000
+DOWNLOAD_CHUNK_SIZE = 64 * 1024
+DOWNLOAD_PROGRESS_PERCENT_STEP = 5
+DOWNLOAD_PROGRESS_INTERVAL_SECONDS = 2.0
 _EXTERNAL_ENTRY_CACHE: dict[tuple[object, ...], tuple[float, str | None]] = {}
 CODEX_DESKTOP_PACKAGE_NAME = "OpenAI.Codex"
 CODEX_DESKTOP_APP_ID = "App"
@@ -144,6 +147,7 @@ class ComponentInstaller:
         self.base_path = os.path.abspath(base_path)
         self.state_store = state_store
         self.fetcher = fetcher or _default_fetcher
+        self._uses_default_fetcher = fetcher is None
         self.health_checker = health_checker or _default_health_checker
         self.launcher = launcher or self._default_launcher
         self._custom_launcher = launcher is not None
@@ -168,7 +172,7 @@ class ComponentInstaller:
             return self._simulate_install(component, job_id=job_id, on_progress=on_progress)
         self._mark(component, "downloading", job_id=job_id, on_progress=on_progress, message=f"下载 {component.name}")
         try:
-            package = self._download(component, on_progress=on_progress)
+            package_path = self._download_to_cache(component, on_progress=on_progress)
         except Exception as exc:
             self.state_store.mark(component.component_id, "download_failed", version=component.version, job_id=job_id, error_message=str(exc))
             if on_progress:
@@ -176,7 +180,7 @@ class ComponentInstaller:
             raise ComponentInstallError(f"download failed for {component.component_id}: {exc}") from exc
 
         self._mark(component, "verifying", job_id=job_id, on_progress=on_progress, message=f"校验 {component.name}")
-        digest = hashlib.sha256(package).hexdigest()
+        digest = _sha256_file(package_path)
         if digest.lower() != component.sha256.lower():
             self.state_store.mark(
                 component.component_id,
@@ -197,7 +201,7 @@ class ComponentInstaller:
         os.makedirs(staging_path, exist_ok=True)
 
         try:
-            self._extract(component, package, staging_path)
+            self._extract(component, package_path, staging_path)
             self._assert_entry_exists(component, staging_path)
             previous = self._swap(component, staging_path, install_path, previous_version=existing_version)
         except Exception as exc:
@@ -477,14 +481,51 @@ class ComponentInstaller:
             on_progress(f"{component.name} 已卸载", "ok")
         return state
 
-    def _download(self, component: ReleaseComponent, *, on_progress: ProgressCallback | None = None) -> bytes:
+    def _verified_cache_path(self, component: ReleaseComponent) -> str:
+        safe_version = re.sub(r"[^0-9A-Za-z._-]+", "_", component.version)
+        name = f"{component.component_id}-{safe_version}-{component.sha256}.pkg"
+        return os.path.join(self.cache_dir, name)
+
+    def _download_to_cache(self, component: ReleaseComponent, on_progress: ProgressCallback | None = None) -> str:
+        verified_path = self._verified_cache_path(component)
+        partial_path = verified_path + ".part"
+        os.makedirs(self.cache_dir, exist_ok=True)
+        if os.path.isfile(verified_path):
+            if _sha256_file(verified_path).lower() == component.sha256.lower():
+                if on_progress:
+                    on_progress(f"使用已验证本地缓存：{component.name}", "neutral")
+                return verified_path
+            self._remove_path(verified_path)
+
         errors = []
-        for url in component.urls:
+        for url_index, url in enumerate(component.urls):
+            if url_index > 0 and os.path.exists(partial_path):
+                self._remove_path(partial_path)
             for attempt_index, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
                 if delay > 0:
                     self.retry_sleep(delay)
                 try:
-                    return self.fetcher(url, self.timeout)
+                    if self._uses_default_fetcher:
+                        offset = os.path.getsize(partial_path) if os.path.exists(partial_path) else 0
+                        progress = self._stream_progress(component, on_progress)
+                        _default_stream_fetcher(url, self.timeout, partial_path, offset, progress)
+                    else:
+                        payload = self.fetcher(url, self.timeout)
+                        with open(partial_path, "wb") as handle:
+                            handle.write(payload)
+                        if on_progress:
+                            on_progress(
+                                f"下载 {component.name}，100%，{_format_megabytes(len(payload))} / {_format_megabytes(len(payload))}",
+                                "neutral",
+                            )
+                    digest = _sha256_file(partial_path)
+                    if digest.lower() != component.sha256.lower():
+                        self._remove_path(partial_path)
+                        raise ComponentInstallError(
+                            f"sha256 mismatch: expected {component.sha256}, got {digest}"
+                        )
+                    os.replace(partial_path, verified_path)
+                    return verified_path
                 except Exception as exc:
                     is_last_attempt = attempt_index >= len(RETRY_DELAYS_SECONDS)
                     if not is_last_attempt:
@@ -508,9 +549,14 @@ class ComponentInstaller:
             on_progress(message, "neutral")
         return state
 
-    def _extract(self, component: ReleaseComponent, package: bytes, staging_path: str) -> None:
+    def _stream_progress(self, component: ReleaseComponent, on_progress: ProgressCallback | None) -> StreamFetcherProgress | None:
+        if on_progress is None:
+            return None
+        return lambda detail: on_progress(f"下载 {component.name}，{detail}", "neutral")
+
+    def _extract(self, component: ReleaseComponent, package_path: str, staging_path: str) -> None:
         if component.archive_type == "tgz":
-            self._extract_tgz(package, staging_path)
+            self._extract_tgz(package_path, staging_path)
             return
 
         if component.archive_type != "zip":
@@ -518,27 +564,17 @@ class ComponentInstaller:
             filename = component.entry or f"{component.component_id}.bin"
             target = self._safe_join(staging_path, filename)
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "wb") as handle:
-                handle.write(package)
+            shutil.copy2(package_path, target)
             return
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp:
-            temp.write(package)
-            zip_path = temp.name
-        try:
-            with zipfile.ZipFile(zip_path, "r") as archive:
-                for info in archive.infolist():
-                    self._safe_join(staging_path, info.filename)
-                archive.extractall(staging_path)
-        finally:
-            try:
-                os.unlink(zip_path)
-            except OSError:
-                pass
+        with zipfile.ZipFile(package_path, "r") as archive:
+            for info in archive.infolist():
+                self._safe_join(staging_path, info.filename)
+            archive.extractall(staging_path)
 
-    def _extract_tgz(self, package: bytes, staging_path: str) -> None:
+    def _extract_tgz(self, package_path: str, staging_path: str) -> None:
         os.makedirs(staging_path, exist_ok=True)
-        with tarfile.open(fileobj=io.BytesIO(package), mode="r:gz") as archive:
+        with tarfile.open(package_path, mode="r:gz") as archive:
             for member in archive.getmembers():
                 target = self._safe_join(staging_path, member.name)
                 if member.isdir():
@@ -1207,6 +1243,58 @@ def _default_fetcher(url: str, timeout: float) -> bytes:
         return response.read()
 
 
+def _default_stream_fetcher(
+    url: str,
+    timeout: float,
+    target_path: str,
+    offset: int,
+    on_progress: StreamFetcherProgress | None,
+) -> None:
+    headers = {"User-Agent": "LOOM-Launcher/component-installer"}
+    if offset > 0:
+        headers["Range"] = f"bytes={offset}-"
+    request = Request(url, headers=headers)
+    with urlopen(request, timeout=timeout) as response:
+        status = int(getattr(response, "status", 200) or 200)
+        content_length = _header_int(getattr(response, "headers", {}), "Content-Length")
+        total_bytes = _response_total_bytes(getattr(response, "headers", {}), status, offset, content_length)
+        current_bytes = offset
+        file_mode = "ab"
+        if offset > 0 and status != 206:
+            current_bytes = 0
+            file_mode = "wb"
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        if on_progress:
+            on_progress("已连接")
+        last_percent = -DOWNLOAD_PROGRESS_PERCENT_STEP
+        last_report_at = time.monotonic()
+        with open(target_path, file_mode) as handle:
+            while True:
+                chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                current_bytes += len(chunk)
+                if not on_progress:
+                    continue
+                now = time.monotonic()
+                should_report = now - last_report_at >= DOWNLOAD_PROGRESS_INTERVAL_SECONDS
+                if total_bytes:
+                    percent = min(100, int((current_bytes * 100) / total_bytes))
+                    should_report = should_report or percent >= last_percent + DOWNLOAD_PROGRESS_PERCENT_STEP or percent >= 100
+                    if should_report:
+                        last_percent = percent
+                        last_report_at = now
+                        on_progress(
+                            f"{percent}%，{_format_megabytes(current_bytes)} / {_format_megabytes(total_bytes)}"
+                        )
+                elif should_report:
+                    last_report_at = now
+                    on_progress(f"{_format_megabytes(current_bytes)}")
+        if on_progress and total_bytes:
+            on_progress(f"100%，{_format_megabytes(current_bytes)} / {_format_megabytes(total_bytes)}")
+
+
 def _default_health_checker(component: ReleaseComponent, _install_path: str) -> None:
     health_check = component.health_check
     if health_check is None:
@@ -1609,3 +1697,41 @@ def _versions_match(expected: str | None, detected: str | None) -> bool:
     if not expected_text or not detected_text:
         return True
     return expected_text == detected_text or expected_text.startswith(f"{detected_text}-") or detected_text.startswith(f"{expected_text}-")
+
+
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _header_int(headers: object, name: str) -> int | None:
+    value = ""
+    if hasattr(headers, "get"):
+        value = str(headers.get(name, "") or "").strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _response_total_bytes(headers: object, status: int, offset: int, content_length: int | None) -> int | None:
+    if status == 206:
+        content_range = ""
+        if hasattr(headers, "get"):
+            content_range = str(headers.get("Content-Range", "") or "").strip()
+        match = re.search(r"/(\d+)$", content_range)
+        if match:
+            return int(match.group(1))
+        if content_length is not None:
+            return offset + content_length
+        return None
+    return content_length
+
+
+def _format_megabytes(size_bytes: int) -> str:
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
