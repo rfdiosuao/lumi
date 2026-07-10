@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 import unittest
 from dataclasses import dataclass
 
@@ -158,6 +159,13 @@ class ProcessDiagnosticsRepairTests(unittest.TestCase):
             service._phone_agent_apk_check = unavailable
             service._member_gateway_check = unavailable
             service._core_service_snapshot_check = unavailable
+            original_webview2_check = service._webview2_check
+
+            def slow_webview2_check() -> dict:
+                time.sleep(0.01)
+                return original_webview2_check()
+
+            service._webview2_check = slow_webview2_check
 
             diagnostics = service.diagnose_prerequisites()
 
@@ -168,6 +176,49 @@ class ProcessDiagnosticsRepairTests(unittest.TestCase):
         )
         self.assertGreaterEqual(diagnostics["timing"]["totalMs"], 0)
         self.assertTrue(all(check["id"] in diagnostics["timing"]["checksMs"] for check in checks))
+        self.assertGreaterEqual(diagnostics["timing"]["checksMs"]["webview2"], 10)
+
+    def test_prerequisite_diagnostics_avoids_hung_deep_python_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MinimalDiagnosticProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+
+            def hung_deep_probe() -> dict:
+                time.sleep(2)
+                raise AssertionError("quick diagnostics used the deep Python probe")
+
+            service._python_runtime_check = hung_deep_probe
+            started = time.perf_counter()
+            diagnostics = service.diagnose_prerequisites()
+            elapsed = time.perf_counter() - started
+
+        self.assertLess(elapsed, 1)
+        self.assertEqual(diagnostics["checks"][0]["id"], "python_runtime")
+
+    def test_full_diagnostics_preserves_legacy_check_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MinimalDiagnosticProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+            checks = service.diagnose_environment()["checks"]
+
+        self.assertEqual(
+            [check["id"] for check in checks],
+            [
+                "base_path", "storage_health", "node", "npm", "start_js", "openclaw_core",
+                "data_dir", "git", "git_bash", "uv", "openclaw_config", "webview2",
+                "python_runtime", "portable_integrity", "security_software_block", "runtime_context",
+                "phone_agent_apk", "member_gateway", "core_service_snapshot", "port_18790",
+                "bridge_ports", "stale_process", "openclaw_version",
+            ],
+        )
 
     def test_prerequisite_repair_avoids_runtime_cleanup_and_runs_one_final_recheck(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

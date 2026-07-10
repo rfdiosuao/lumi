@@ -31,6 +31,7 @@ class DiagnosticsRouteTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["summary"]["status"], "ok")
+            self.assertEqual(len(response.json()["checks"]), 8)
 
         self.assertEqual(calls, ["prerequisites", "prerequisites"])
 
@@ -76,6 +77,7 @@ class DiagnosticsRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(calls, ["repair_prerequisites"])
         self.assertEqual(response.json()["diagnostics"]["summary"]["status"], "ok")
+        self.assertEqual(len(response.json()["diagnostics"]["checks"]), 8)
 
 
 def _test_context(calls: list[str]) -> SimpleNamespace:
@@ -94,7 +96,11 @@ def _test_context(calls: list[str]) -> SimpleNamespace:
     class ProcessService:
         def diagnose_prerequisites(self):
             calls.append("prerequisites")
-            return {"checks": [], "summary": {"status": "ok"}}
+            return {
+                "checks": [{"id": f"check_{index}", "repairable": False} for index in range(8)],
+                "summary": {"status": "ok"},
+                "repairAvailable": False,
+            }
 
         def repair_environment(self):
             calls.append("repair")
@@ -102,13 +108,21 @@ def _test_context(calls: list[str]) -> SimpleNamespace:
 
         def repair_prerequisites(self):
             calls.append("repair_prerequisites")
-            return {"actions": [], "diagnostics": {"summary": {"status": "ok"}}}
+            return {
+                "actions": [],
+                "diagnostics": {
+                    "checks": [{"id": f"check_{index}", "repairable": False} for index in range(8)],
+                    "summary": {"status": "ok"},
+                    "repairAvailable": False,
+                },
+            }
 
     return SimpleNamespace(
         auth_error=lambda _request: None,
         body=body,
         fastapi_json=fastapi_json,
         build_prerequisite_diagnostics_payload=lambda: ProcessService().diagnose_prerequisites(),
+        finalize_prerequisite_diagnostics=lambda diagnostics: diagnostics,
         get_process_svc=lambda: ProcessService(),
         append_runtime_checks=lambda diagnostics: diagnostics,
     )

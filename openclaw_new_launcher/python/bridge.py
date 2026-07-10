@@ -580,6 +580,11 @@ def _append_runtime_checks(payload: dict) -> dict:
         "repairable": False,
     })
 
+    return _finalize_diagnostics_payload(payload, checks)
+
+
+def _finalize_diagnostics_payload(payload: dict, checks: list[dict] | None = None) -> dict:
+    checks = list(payload.get("checks", [])) if checks is None else checks
     payload["checks"] = checks
     payload["summary"] = _diagnostic_summary(checks)
     payload["repairAvailable"] = any(item.get("repairable") for item in checks)
@@ -591,7 +596,7 @@ def _build_diagnostics_payload() -> dict:
 
 
 def _build_prerequisite_diagnostics_payload() -> dict:
-    return _append_runtime_checks(_get_process_svc().diagnose_prerequisites())
+    return _finalize_diagnostics_payload(_get_process_svc().diagnose_prerequisites())
 
 
 def _read_sanitized_json(path: str, default: object = None) -> object:
@@ -793,6 +798,7 @@ def _build_fastapi_context():
         body=_fastapi_body,
         build_diagnostics_payload=_build_diagnostics_payload,
         build_prerequisite_diagnostics_payload=_build_prerequisite_diagnostics_payload,
+        finalize_prerequisite_diagnostics=_finalize_diagnostics_payload,
         data_url_to_temp_file=_data_url_to_temp_file,
         fastapi_json=_fastapi_json,
         get_image_client=_get_image_client,

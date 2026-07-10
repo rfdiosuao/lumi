@@ -253,6 +253,13 @@ class OpenClawProcessService:
 
     def _build_prerequisite_checks(self, with_timing: bool = False):
         checks: list[dict] = []
+        checks_ms: dict[str, int] = {}
+
+        def timed(check_id: str, check) -> None:
+            started = time.perf_counter()
+            check()
+            if with_timing:
+                checks_ms[check_id] = round((time.perf_counter() - started) * 1000)
         def file_check(check_id: str, label: str, path: str, required: bool = True, repairable: bool = False) -> None:
             exists = os.path.exists(path)
             checks.append({
@@ -326,9 +333,10 @@ class OpenClawProcessService:
                 ])
             return candidates
 
-        tool_check("node", "Node.js 运行时", self.paths.node_exe, ("node.exe", "node"), repairable=True)
-        tool_check("npm", "npm 包管理器", self.paths.npm_cli, ("npm.cmd", "npm.exe", "npm"), repairable=True)
-        file_check("data_dir", "数据目录", self.paths.data_dir, required=False, repairable=True)
+        timed("node", lambda: tool_check("node", "Node.js 运行时", self.paths.node_exe, ("node.exe", "node"), repairable=True))
+        timed("npm", lambda: tool_check("npm", "npm 包管理器", self.paths.npm_cli, ("npm.cmd", "npm.exe", "npm"), repairable=True))
+        timed("data_dir", lambda: file_check("data_dir", "数据目录", self.paths.data_dir, required=False, repairable=True))
+        git_started = time.perf_counter()
         bundled_git_path = first_existing([
             os.path.join(self.paths.base_path, "Git", "cmd", "git.exe"),
             os.path.join(self.paths.base_path, "git", "cmd", "git.exe"),
@@ -344,6 +352,9 @@ class OpenClawProcessService:
             "detail": git_path or "Git for Windows",
             "repairable": not bool(git_path),
         })
+        if with_timing:
+            checks_ms["git"] = round((time.perf_counter() - git_started) * 1000)
+        git_bash_started = time.perf_counter()
         git_bash_path = first_existing([
             *git_bash_candidates_from_git(git_path),
             os.path.join(self.paths.base_path, "Git", "bin", "bash.exe"),
@@ -369,6 +380,9 @@ class OpenClawProcessService:
             "detail": git_bash_path or "Git for Windows bash.exe",
             "repairable": not bool(git_bash_path),
         })
+        if with_timing:
+            checks_ms["git_bash"] = round((time.perf_counter() - git_bash_started) * 1000)
+        uv_started = time.perf_counter()
         uv_path = shutil.which("uv")
         checks.append({
             "id": "uv",
@@ -378,15 +392,17 @@ class OpenClawProcessService:
             "detail": uv_path or "Python uv package manager",
             "repairable": not bool(uv_path),
         })
-        checks.append(self._webview2_check())
-        checks.append(self._python_runtime_check())
+        if with_timing:
+            checks_ms["uv"] = round((time.perf_counter() - uv_started) * 1000)
+        timed("webview2", lambda: checks.append(self._webview2_check()))
+        timed("python_runtime", lambda: checks.append(self._fast_python_runtime_check()))
 
         checks_by_id = {check["id"]: check for check in checks}
         checks = [checks_by_id[check_id] for check_id in (
             "python_runtime", "node", "npm", "git", "git_bash", "uv", "webview2", "data_dir",
         )]
         if with_timing:
-            return checks, {check["id"]: 0 for check in checks}
+            return checks, checks_ms
         return checks
 
     def diagnose_prerequisites(self) -> dict:
@@ -406,25 +422,33 @@ class OpenClawProcessService:
 
     def diagnose_environment(self) -> dict:
         """Return customer-facing environment checks for the launcher."""
-        checks = self._build_prerequisite_checks()
+        prerequisite_checks = {check["id"]: check for check in self._build_prerequisite_checks()}
 
         def file_check(check_id: str, label: str, path: str, required: bool = True, repairable: bool = False) -> dict:
             exists = os.path.exists(path)
             return {"id": check_id, "label": label, "status": "ok" if exists else ("fail" if required else "warn"), "message": "已找到" if exists else ("缺失，可能导致启动失败" if required else "未找到，一键修复会尝试补齐"), "detail": path, "repairable": repairable and not exists}
 
-        checks.extend([
+        checks = [
             file_check("base_path", "安装目录", self.paths.base_path),
             self._storage_health_check(write_test=True),
+            prerequisite_checks["node"],
+            prerequisite_checks["npm"],
             file_check("start_js", "OpenClaw 启动脚本", self.paths.find_file("start.js", ("back", "backup", ""))),
             file_check("openclaw_core", "OpenClaw 本体", self.paths.openclaw_mjs),
+            prerequisite_checks["data_dir"],
+            prerequisite_checks["git"],
+            prerequisite_checks["git_bash"],
+            prerequisite_checks["uv"],
             self._openclaw_config_check(),
+            prerequisite_checks["webview2"],
+            self._python_runtime_check(),
             self._portable_integrity_check(),
             self._security_software_block_check(),
             self._runtime_context_check(),
             self._phone_agent_apk_check(),
             self._member_gateway_check(),
             self._core_service_snapshot_check(),
-        ])
+        ]
 
         port_listeners = self._port_listeners(APP_PORT)
         expected_pid = str(self.process.pid) if self.process and self.process.poll() is None else None
@@ -1751,6 +1775,22 @@ class OpenClawProcessService:
             "message": f"已检测到 WebView2 Runtime {version}".strip() if installed else "未检测到 WebView2 Runtime，启动器窗口可能白屏或无法渲染",
             "detail": "；".join(detail_parts) or "Microsoft Edge WebView2 Runtime",
             "repairable": bool(redist and not installed),
+        }
+
+    def _fast_python_runtime_check(self) -> dict:
+        candidates = [
+            os.path.join(self.paths.base_path, "_up_", "python-runtime", "python.exe"),
+            os.path.join(self.paths.base_path, "python-runtime", "python.exe"),
+            sys.executable,
+        ]
+        python_exe = next((path for path in candidates if path and os.path.exists(path)), "")
+        return {
+            "id": "python_runtime",
+            "label": "Python / Bridge 运行时",
+            "status": "ok" if python_exe else "fail",
+            "message": "已找到 Python 运行时" if python_exe else "未找到 Python 运行时，Bridge 无法启动",
+            "detail": python_exe or "；".join(candidates),
+            "repairable": False,
         }
 
     def _python_runtime_check(self) -> dict:
