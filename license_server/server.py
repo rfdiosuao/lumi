@@ -93,6 +93,16 @@ PUBLISH_RELAY_BACKOFF_MS = 2_000
 PUBLISH_RELAY_MAX_BACKOFF_MS = 5 * 60_000
 MAX_BULK_CODE_HASHES = bounded_int_env("LICENSE_MAX_BULK_CODE_HASHES", 1000, 1, 5000)
 MAX_CODE_SECRET_EXPORT = 500
+AUDIT_SECRET_KEYS = {
+    "fullcode",
+    "code",
+    "gatewaytoken",
+    "gatewayimagetoken",
+    "gatewayvideotoken",
+    "gatewayaccesstoken",
+    "apikey",
+    "token",
+}
 LOGIN_RATE_LIMIT_ATTEMPTS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_ATTEMPTS", 10, 1, 100)
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_WINDOW_SECONDS", 600, 60, 86_400)
 LOGIN_RATE_LIMIT_LOCKOUT_SECONDS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_LOCKOUT_SECONDS", 900, 60, 86_400)
@@ -2737,6 +2747,24 @@ def audit_json(value: Any) -> str:
     return json.dumps({} if value is None else value, ensure_ascii=False, sort_keys=True)
 
 
+def masked_code_label(value: Any) -> str:
+    text = "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+    return f"••••-{text[-8:]}" if text else "[REDACTED]"
+
+
+def audit_public_value(value: Any, *, key: str = "") -> Any:
+    normalized_key = "".join(ch for ch in key.lower() if ch.isalnum())
+    if normalized_key in AUDIT_SECRET_KEYS:
+        return masked_code_label(value) if normalized_key in {"fullcode", "code"} else "[REDACTED]"
+    if normalized_key == "codes" and isinstance(value, list):
+        return [masked_code_label(item) for item in value]
+    if isinstance(value, dict):
+        return {str(k): audit_public_value(v, key=str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [audit_public_value(item, key=key) for item in value]
+    return value
+
+
 def add_audit_log(
     *,
     action: str,
@@ -2900,8 +2928,8 @@ def get_audit_rows(limit: int = 100) -> list[dict[str, Any]]:
             "action": row["action"],
             "targetType": row["target_type"],
             "targetId": row["target_id"],
-            "before": load_json_value(row["before_json"], {}),
-            "after": load_json_value(row["after_json"], {}),
+            "before": audit_public_value(load_json_value(row["before_json"], {})),
+            "after": audit_public_value(load_json_value(row["after_json"], {})),
             "requestIp": row["request_ip"],
             "backupPath": row["backup_path"],
             "backupFile": os.path.basename(row["backup_path"]) if row["backup_path"] else "",
@@ -3080,6 +3108,43 @@ def get_activation_rows(code_hash_value: str, current_account: dict[str, Any] | 
             (code_hash_value,),
         ).fetchall()
     return [activation_row_public(row) for row in rows]
+
+
+def get_all_activation_rows(
+    current_account: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    where_clause = ""
+    params: tuple[Any, ...] = ()
+    if current_account and not is_super_admin_context(current_account):
+        where_clause = "where c.owner_account_id = ?"
+        params = (context_account_id(current_account),)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            select a.id, a.code_hash, a.install_id, a.device_id, a.activated_at,
+                   c.code_label, c.plan, c.owner_account_id,
+                   coalesce(acc.display_name, '') as owner_display_name
+            from activations a
+            join codes c on c.code_hash = a.code_hash
+            left join accounts acc on acc.id = c.owner_account_id
+            {where_clause}
+            order by a.activated_at desc, a.id desc
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            "activationId": int(row["id"]),
+            "codeHash": row["code_hash"],
+            "codeLabel": row["code_label"],
+            "installId": row["install_id"],
+            "deviceId": row["device_id"],
+            "plan": row["plan"],
+            "ownerDisplayName": row["owner_display_name"],
+            "activatedAt": row["activated_at"],
+        }
+        for row in rows
+    ]
 
 
 def get_activation_snapshot(activation_id: int) -> dict[str, Any] | None:
@@ -3588,6 +3653,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(200, {"codes": get_code_rows(self.admin_context())})
             return
+        if path == "/admin/api/activations":
+            if not self.require_admin():
+                return
+            self.send_json(200, {"activations": get_all_activation_rows(self.admin_context())})
+            return
         if path == "/admin/api/plans":
             if not self.require_admin():
                 return
@@ -4041,6 +4111,50 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 self.send_json(500, {"ok": False, "error": f"server error: {error}"})
             return
+        if path == "/admin/api/codes/reveal":
+            if not self.require_admin():
+                return
+            try:
+                body = self.read_json()
+                if str(body.get("confirmation") or "") != "REVEAL":
+                    raise ActivationError("请确认查看完整授权码", 400)
+                rows = get_code_secret_rows([body.get("codeHash")], self.admin_context())
+                row = rows[0]
+                self.audit_admin_change(
+                    "codes.reveal",
+                    target_type="code",
+                    target_id=row["codeHash"],
+                    after={"codeLabel": row["codeLabel"]},
+                )
+                self.send_json(200, {"code": row["code"], "codeLabel": row["codeLabel"]})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception:
+                self.send_json(500, {"error": "查看授权码失败"})
+            return
+        if path == "/admin/api/codes/export":
+            if not self.require_admin():
+                return
+            try:
+                body = self.read_json()
+                if str(body.get("confirmation") or "") != "EXPORT":
+                    raise ActivationError("请确认导出完整授权码", 400)
+                rows = get_code_secret_rows(body.get("codeHashes"), self.admin_context())
+                self.audit_admin_change(
+                    "codes.export",
+                    target_type="codes",
+                    target_id=f"count:{len(rows)}",
+                    after={
+                        "count": len(rows),
+                        "codeLabels": [row["codeLabel"] for row in rows],
+                    },
+                )
+                self.send_json(200, {"codes": rows})
+            except ActivationError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except Exception:
+                self.send_json(500, {"error": "导出授权码失败"})
+            return
         if path == "/admin/api/codes":
             if not self.require_admin():
                 return
@@ -4087,7 +4201,6 @@ class Handler(BaseHTTPRequestHandler):
                     before={},
                     after={
                         "count": len(codes),
-                        "codes": codes,
                         "codeLabels": [code[-9:] for code in codes],
                         "licensee": str(body.get("licensee", "客户")).strip() or "客户",
                         "memberMode": bool(body.get("memberMode")),

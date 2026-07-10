@@ -115,6 +115,292 @@ class LicenseServerFlowTests(unittest.TestCase):
             self.server.get_code_secret_rows(valid_hashes)
         self.assertEqual(over_limit.exception.status, 400)
 
+    def test_reveal_and_export_require_confirmation_and_write_redacted_audit(self) -> None:
+        admin, _ = self.server.create_account_record(
+            username="admin-secret",
+            password="admin-password-123",
+            role=self.server.ACCOUNT_ROLE_SUPER_ADMIN,
+        )
+        session, _ = self.server.create_admin_session(admin["accountId"])
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Export Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=admin["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+        headers = {"X-Admin-Session": session}
+
+        self.request_json(
+            "POST",
+            "/admin/api/codes/reveal",
+            payload={"codeHash": code_hash_value, "confirmation": ""},
+            headers=headers,
+            expected_status=400,
+        )
+        revealed = self.request_json(
+            "POST",
+            "/admin/api/codes/reveal",
+            payload={"codeHash": code_hash_value, "confirmation": "REVEAL"},
+            headers=headers,
+        )
+        self.assertEqual(revealed["code"], code)
+
+        self.request_json(
+            "POST",
+            "/admin/api/codes/export",
+            payload={"codeHashes": [code_hash_value], "confirmation": ""},
+            headers=headers,
+            expected_status=400,
+        )
+        exported = self.request_json(
+            "POST",
+            "/admin/api/codes/export",
+            payload={"codeHashes": [code_hash_value], "confirmation": "EXPORT"},
+            headers=headers,
+        )
+        self.assertEqual(exported["codes"][0]["code"], code)
+
+        logs = self.server.get_audit_rows(20)
+        actions = {row["action"] for row in logs}
+        self.assertTrue({"codes.reveal", "codes.export"}.issubset(actions))
+        self.assertNotIn(code, json.dumps(logs, ensure_ascii=False))
+
+    def test_merchant_cannot_reveal_or_export_another_merchant_code(self) -> None:
+        merchant_a, _ = self.server.create_account_record(
+            username="merchant-a",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        merchant_b, _ = self.server.create_account_record(
+            username="merchant-b",
+            password="merchant-password-456",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        session_a, _ = self.server.create_admin_session(merchant_a["accountId"])
+        session_b, _ = self.server.create_admin_session(merchant_b["accountId"])
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Merchant A Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant_a["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+
+        for path, payload in (
+            ("/admin/api/codes/reveal", {"codeHash": code_hash_value, "confirmation": "REVEAL"}),
+            ("/admin/api/codes/export", {"codeHashes": [code_hash_value], "confirmation": "EXPORT"}),
+        ):
+            self.request_json(
+                "POST",
+                path,
+                payload=payload,
+                headers={"X-Admin-Session": session_b},
+                expected_status=404,
+            )
+
+        revealed = self.request_json(
+            "POST",
+            "/admin/api/codes/reveal",
+            payload={"codeHash": code_hash_value, "confirmation": "REVEAL"},
+            headers={"X-Admin-Session": session_a},
+        )
+        self.assertEqual(revealed["code"], code)
+
+    def test_code_export_http_limit_is_500(self) -> None:
+        admin, _ = self.server.create_account_record(
+            username="admin-export-limit",
+            password="admin-password-123",
+            role=self.server.ACCOUNT_ROLE_SUPER_ADMIN,
+        )
+        session, _ = self.server.create_admin_session(admin["accountId"])
+        headers = {"X-Admin-Session": session}
+        valid_hashes = [f"{index:064x}" for index in range(501)]
+
+        self.request_json(
+            "POST",
+            "/admin/api/codes/export",
+            payload={"codeHashes": valid_hashes[:500], "confirmation": "EXPORT"},
+            headers=headers,
+            expected_status=404,
+        )
+        self.request_json(
+            "POST",
+            "/admin/api/codes/export",
+            payload={"codeHashes": valid_hashes, "confirmation": "EXPORT"},
+            headers=headers,
+            expected_status=400,
+        )
+
+    def test_reveal_and_export_do_not_return_secrets_when_audit_write_fails(self) -> None:
+        admin, _ = self.server.create_account_record(
+            username="admin-audit-failure",
+            password="admin-password-123",
+            role=self.server.ACCOUNT_ROLE_SUPER_ADMIN,
+        )
+        session, _ = self.server.create_admin_session(admin["accountId"])
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Audit Failure Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=admin["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+        headers = {"X-Admin-Session": session}
+        original_add_audit_log = self.server.add_audit_log
+
+        def fail_audit_write(**_kwargs: object) -> None:
+            raise RuntimeError("audit unavailable")
+
+        self.server.add_audit_log = fail_audit_write
+        self.addCleanup(setattr, self.server, "add_audit_log", original_add_audit_log)
+
+        for path, payload, expected_error in (
+            (
+                "/admin/api/codes/reveal",
+                {"codeHash": code_hash_value, "confirmation": "REVEAL"},
+                "查看授权码失败",
+            ),
+            (
+                "/admin/api/codes/export",
+                {"codeHashes": [code_hash_value], "confirmation": "EXPORT"},
+                "导出授权码失败",
+            ),
+        ):
+            response = self.request_json(
+                "POST",
+                path,
+                payload=payload,
+                headers=headers,
+                expected_status=500,
+            )
+            self.assertEqual(response["error"], expected_error)
+            self.assertNotIn(code, json.dumps(response, ensure_ascii=False))
+
+    def test_historical_audit_rows_are_redacted_on_read(self) -> None:
+        code = "OC-PRO-HISTORICAL-SECRET-12345678"
+        gateway_token = "historical-gateway-token"
+        api_key = "historical-api-key"
+        self.server.add_audit_log(
+            action="legacy.secret",
+            before={
+                "fullCode": code,
+                "nested": {"gatewayToken": gateway_token},
+            },
+            after={
+                "codes": [code],
+                "items": [{"code": code, "apiKey": api_key}],
+            },
+        )
+
+        logs = self.server.get_audit_rows(20)
+        serialized = json.dumps(logs, ensure_ascii=False)
+        self.assertNotIn(code, serialized)
+        self.assertNotIn(gateway_token, serialized)
+        self.assertNotIn(api_key, serialized)
+        self.assertIn("••••-12345678", serialized)
+        self.assertIn("[REDACTED]", serialized)
+
+    def test_code_creation_audit_does_not_store_full_codes(self) -> None:
+        admin, _ = self.server.create_account_record(
+            username="admin-code-create-audit",
+            password="admin-password-123",
+            role=self.server.ACCOUNT_ROLE_SUPER_ADMIN,
+        )
+        session, _ = self.server.create_admin_session(admin["accountId"])
+
+        response = self.request_json(
+            "POST",
+            "/admin/api/codes",
+            payload={
+                "count": 1,
+                "licensee": "Audit Customer",
+                "edition": "pro",
+                "features": "openclaw",
+                "expires": self.expires(),
+                "maxActivations": 1,
+            },
+            headers={"X-Admin-Session": session},
+        )
+        code = response["codes"][0]
+        with self.server.connect() as conn:
+            row = conn.execute(
+                "select after_json from audit_logs where action = 'codes.create' order by id desc limit 1"
+            ).fetchone()
+
+        self.assertIsNotNone(row)
+        after = json.loads(row["after_json"])
+        self.assertNotIn("codes", after)
+        self.assertIn("codeLabels", after)
+        self.assertNotIn(code, row["after_json"])
+
+    def test_activation_inventory_is_scoped_and_redacted(self) -> None:
+        admin, _ = self.server.create_account_record(
+            username="activation-admin",
+            password="admin-password-123",
+            role=self.server.ACCOUNT_ROLE_SUPER_ADMIN,
+        )
+        merchant, _ = self.server.create_account_record(
+            username="activation-merchant",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        other, _ = self.server.create_account_record(
+            username="activation-other",
+            password="merchant-password-456",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        owned_code = self.server.create_code_records(
+            count=1,
+            licensee="Owned Device",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant["accountId"],
+        )[0]
+        other_code = self.server.create_code_records(
+            count=1,
+            licensee="Other Device",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=other["accountId"],
+        )[0]
+        self.server.activate_code({"code": owned_code, "installId": "owned-install", "deviceId": "owned-device"})
+        self.server.activate_code({"code": other_code, "installId": "other-install", "deviceId": "other-device"})
+
+        admin_rows = self.server.get_all_activation_rows(
+            {"accountId": admin["accountId"], "role": self.server.ACCOUNT_ROLE_SUPER_ADMIN}
+        )
+        merchant_rows = self.server.get_all_activation_rows(
+            {"accountId": merchant["accountId"], "role": self.server.ACCOUNT_ROLE_MERCHANT}
+        )
+        self.assertEqual(len(admin_rows), 2)
+        self.assertEqual(len(merchant_rows), 1)
+        serialized = json.dumps(merchant_rows, ensure_ascii=False)
+        self.assertIn("owned-device", serialized)
+        self.assertNotIn(owned_code, serialized)
+        self.assertNotIn("licenseJson", serialized)
+
+        session, _ = self.server.create_admin_session(merchant["accountId"])
+        response = self.request_json(
+            "GET",
+            "/admin/api/activations",
+            headers={"X-Admin-Session": session},
+        )
+        self.assertEqual(response["activations"], merchant_rows)
+
     def test_new_code_expiry_must_be_after_today(self) -> None:
         with self.assertRaises(self.server.ActivationError):
             self.server.normalize_code_expires(date.today().isoformat())
