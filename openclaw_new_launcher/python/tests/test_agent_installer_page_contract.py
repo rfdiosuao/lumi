@@ -260,12 +260,34 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("readCacheWithTtl<DiagnosticReport>(LOOM_PREFLIGHT_CACHE_KEY, PREFLIGHT_NON_OK_CACHE_TTL_MS)", cache_source)
         self.assertIn("Array.isArray(report.checks)", cache_source)
 
+    def test_refresh_preflight_returns_immediately_on_cache_hit_without_prerequisite_recheck(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            page_source = handle.read()
+
+        cached_branch = """if (options.preferCache && cached) {
+      cachedPreflight.current = cached;
+      setPreflight(cached);
+      setPreflightError('');
+      setPreflightLoading(false);
+      return;
+    }"""
+        self.assertIn(cached_branch, page_source)
+        self.assertIn("const report = await loomClient.diagnostics.prerequisites();", page_source)
+
     def test_cached_preflight_is_not_rechecked_on_page_return_even_when_not_all_ok(self) -> None:
         with open(STARTUP_CACHE_FILE, "r", encoding="utf-8") as handle:
             cache_source = handle.read()
 
         self.assertIn("export const PREFLIGHT_NON_OK_CACHE_TTL_MS = STARTUP_CACHE_TTL_MS", cache_source)
         self.assertNotIn("5 * 60 * 1000", cache_source)
+
+    def test_old_auto_detection_deep_scan_effect_is_removed(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            page_source = handle.read()
+
+        self.assertNotIn("pushLog(`自动检测", page_source)
+        self.assertNotIn("for (const component of [])", page_source)
+        self.assertNotIn("return;\n    void (async () => {", page_source)
 
     def test_agent_install_repairs_cached_missing_prerequisites_before_component_install(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:

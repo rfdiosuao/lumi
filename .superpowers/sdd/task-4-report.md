@@ -50,3 +50,11 @@
 - 当前提交以最小相关契约测试通过为准，未做完整构建校验。
 - `AgentInstallerPage.tsx` 已切到快速前置检测契约，但尚未在本次提交中补齐更大范围的页面行为回归验证。
 - 若后续要继续收口 Task 4，建议下一步补跑前端构建与更细的组件级交互验证。
+
+
+## 2026-07-10 Review Fixes
+
+- Updated `refreshPreflight({ preferCache: true })` to return immediately after applying a cached preflight result, so the page no longer calls `loomClient.diagnostics.prerequisites()` on cache hit.
+- Added a contract assertion covering the cached early-return branch so future edits cannot silently reintroduce the extra prerequisite request.
+- Removed the unreachable legacy auto-detection/deep-scan effect body that remained after an unconditional `return`.
+- Added a contract assertion proving the dead deep-scan markers are no longer present in `AgentInstallerPage.tsx`.

@@ -891,6 +891,8 @@ export const AgentInstallerPage: React.FC = () => {
       cachedPreflight.current = cached;
       setPreflight(cached);
       setPreflightError('');
+      setPreflightLoading(false);
+      return;
     }
     setPreflightLoading(true);
     setPreflightError('');
@@ -1045,35 +1047,6 @@ export const AgentInstallerPage: React.FC = () => {
     if (!selected || !supportsModelConfig(selected)) return;
     void refreshModelConfig(selected.id);
   }, [refreshModelConfig, selected?.id, selected?.status]);
-
-  React.useEffect(() => {
-    return;
-    void (async () => {
-      for (const component of []) {
-        try {
-          pushLog(`自动检测 ${component.name}`, 'neutral', component.id);
-          const next = await loomClient.components.detect(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
-          setSnapshot(next);
-          if (supportsModelConfig(component)) {
-            void refreshModelConfig(component.id);
-          }
-        } catch (err: any) {
-          pushLog(loomErrorText(err, `${component.name} 自动检测失败`), 'warning', component.id);
-        } finally {
-          void refreshJobs();
-        }
-      }
-    })();
-  }, [
-    components,
-    installActionsLocked,
-    loading,
-    pushLog,
-    recordJobProgress,
-    refreshJobs,
-    refreshModelConfig,
-    snapshot?.manifest,
-  ]);
 
   const ensurePreflightReady = async (): Promise<DiagnosticReport | null> => {
     const cached = loadCachedPreflight();
