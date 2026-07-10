@@ -58,7 +58,36 @@ class ReleaseScriptsContractTests(unittest.TestCase):
 
         self.assertNotIn("Remove-Item -LiteralPath $OutputRoot -Recurse", source)
         self.assertNotIn("Remove-Item -Path $OutputRoot -Recurse", source)
-        self.assertIn("Copy-Item -LiteralPath $builtInstaller.FullName -Destination $variantOutputPath -Force", source)
+        self.assertIn("Installer output already exists", source)
+        self.assertNotIn("Copy-Item -LiteralPath $builtInstaller.FullName -Destination $variantOutputPath -Force", source)
+
+    def test_dual_nsis_script_rejects_unsafe_output_roots(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertIn("function Assert-SafeOutputRoot", source)
+        self.assertIn("$Root", source)
+        self.assertIn("$LauncherDir", source)
+        self.assertIn('"release"', source)
+        self.assertIn('"openclaw_new_launcher"', source)
+        self.assertIn("Refusing unsafe OutputRoot", source)
+
+    def test_dual_nsis_validate_only_does_not_create_or_modify_outputs(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertIn('if ($ValidateOnly) {', source)
+        self.assertIn('Write-Host "Validated Codex package and dual NSIS build inputs."', source)
+        self.assertLess(
+            source.index('if ($ValidateOnly) {'),
+            source.index('New-Item -ItemType Directory -Path $resolvedOutputRoot -Force'),
+        )
+
+    def test_dual_nsis_checks_output_collisions_before_building(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertIn("function Assert-OutputPathAvailable", source)
+        self.assertIn("Assert-OutputPathAvailable -Path $onlineOutputPath", source)
+        self.assertIn("Assert-OutputPathAvailable -Path $completeOutputPath", source)
+        self.assertIn("Test-Path -LiteralPath $Path", source)
 
     def test_online_installer_requires_package_inputs_instead_of_old_defaults(self) -> None:
         source = read_script("build-online-exe-installer.ps1")

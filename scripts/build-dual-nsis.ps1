@@ -28,6 +28,50 @@ function Resolve-ExistingPath {
     return (Resolve-Path -LiteralPath $Path).Path
 }
 
+function Test-PathEquals {
+    param(
+        [string]$Left,
+        [string]$Right
+    )
+
+    return [string]::Equals(
+        [System.IO.Path]::GetFullPath($Left),
+        [System.IO.Path]::GetFullPath($Right),
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
+}
+
+function Assert-SafeOutputRoot {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "OutputRoot is required."
+    }
+
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    $blockedPaths = @(
+        $Root,
+        $LauncherDir,
+        (Join-Path $Root "release")
+    )
+
+    foreach ($blockedPath in $blockedPaths) {
+        if (Test-PathEquals -Left $resolvedPath -Right $blockedPath) {
+            throw "Refusing unsafe OutputRoot '$resolvedPath'. Use a dedicated output subdirectory instead."
+        }
+    }
+
+    return $resolvedPath
+}
+
+function Assert-OutputPathAvailable {
+    param([string]$Path)
+
+    if (Test-Path -LiteralPath $Path) {
+        throw "Installer output already exists: $Path"
+    }
+}
+
 function Assert-SourceVersionConsistency {
     $packageJsonPath = Join-Path $LauncherDir "package.json"
     $tauriConfigPath = Join-Path $TauriDir "tauri.conf.json"
@@ -164,7 +208,8 @@ function Build-InstallerVariant {
     }
 
     $builtInstaller = Find-BuiltInstaller -StartedAtUtc $startedAtUtc -ExpectedVersion $ExpectedVersion
-    Copy-Item -LiteralPath $builtInstaller.FullName -Destination $variantOutputPath -Force
+    Assert-OutputPathAvailable -Path $VariantOutputPath
+    Copy-Item -LiteralPath $builtInstaller.FullName -Destination $variantOutputPath
     Write-InstallerHash -Path $variantOutputPath
     return $builtInstaller
 }
@@ -173,7 +218,7 @@ $launcherVersion = Assert-SourceVersionConsistency
 $tauriConfig = Get-TauriConfig
 $codexComponent = Get-CodexManifestComponent
 $resolvedCodexPackagePath = Assert-VerifiedCodexPackage -PackagePath $CodexPackagePath -codexComponent $codexComponent
-$resolvedOutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
+$resolvedOutputRoot = Assert-SafeOutputRoot -Path $OutputRoot
 $packagePrefix = [string]$tauriConfig.mainBinaryName
 if ([string]::IsNullOrWhiteSpace($packagePrefix)) {
     $packagePrefix = "LOOM"
@@ -183,10 +228,14 @@ $completeOutputPath = Join-Path $resolvedOutputRoot "$packagePrefix-$launcherVer
 $seedPackagePath = Join-Path $CodexSeedDir (Split-Path -Leaf $resolvedCodexPackagePath)
 $seedDirExisted = Test-Path -LiteralPath $CodexSeedDir
 $seedDirBackupPath = ""
+$outputRootExists = Test-Path -LiteralPath $resolvedOutputRoot
 
-if (-not $ValidateOnly) {
-    New-Item -ItemType Directory -Path $resolvedOutputRoot -Force | Out-Null
+if ($outputRootExists -and -not (Get-Item -LiteralPath $resolvedOutputRoot).PSIsContainer) {
+    throw "OutputRoot must be a directory path: $resolvedOutputRoot"
 }
+
+Assert-OutputPathAvailable -Path $onlineOutputPath
+Assert-OutputPathAvailable -Path $completeOutputPath
 
 if ($ValidateOnly) {
     Write-Host "Validated Codex package and dual NSIS build inputs."
@@ -194,6 +243,8 @@ if ($ValidateOnly) {
     Write-Host "Complete output: $completeOutputPath"
     return
 }
+
+New-Item -ItemType Directory -Path $resolvedOutputRoot -Force | Out-Null
 
 try {
     if ($seedDirExisted) {
