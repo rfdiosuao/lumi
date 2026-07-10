@@ -92,6 +92,7 @@ PUBLISH_RELAY_MAX_ATTEMPTS = max(1, min(int(os.environ.get("PUBLISH_RELAY_MAX_AT
 PUBLISH_RELAY_BACKOFF_MS = 2_000
 PUBLISH_RELAY_MAX_BACKOFF_MS = 5 * 60_000
 MAX_BULK_CODE_HASHES = bounded_int_env("LICENSE_MAX_BULK_CODE_HASHES", 1000, 1, 5000)
+MAX_CODE_SECRET_EXPORT = 500
 LOGIN_RATE_LIMIT_ATTEMPTS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_ATTEMPTS", 10, 1, 100)
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_WINDOW_SECONDS", 600, 60, 86_400)
 LOGIN_RATE_LIMIT_LOCKOUT_SECONDS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_LOCKOUT_SECONDS", 900, 60, 86_400)
@@ -266,9 +267,11 @@ def normalize_code_expires(value: str) -> str:
         raise ActivationError("到期日期不能为空")
     candidate = raw.split("T", 1)[0].strip()  # tolerate full ISO timestamps
     try:
-        date.fromisoformat(candidate)
+        parsed = date.fromisoformat(candidate)
     except ValueError:
-        raise ActivationError(f"到期日期格式无效，需为 YYYY-MM-DD（年份 1-9999）：{raw}")
+        raise ActivationError(f"到期日期格式无效，需要 YYYY-MM-DD：{raw}")
+    if parsed <= date.today():
+        raise ActivationError("到期日期必须晚于今天")
     return candidate
 
 
@@ -2943,7 +2946,7 @@ def get_code_rows(current_account: dict[str, Any] | None = None) -> list[dict[st
     with connect() as conn:
         rows = conn.execute(
             f"""
-            select c.code_hash, c.code_label, c.full_code, c.licensee, c.edition, c.features_json, c.expires, c.max_activations,
+            select c.code_hash, c.code_label, c.licensee, c.edition, c.features_json, c.expires, c.max_activations,
                    c.disabled, c.member_mode, c.plan, c.gateway_base_url,
                    c.gateway_image_base_url, c.gateway_video_base_url, c.gateway_token,
                    c.gateway_image_token, c.gateway_video_token, c.gateway_default_model,
@@ -2966,7 +2969,6 @@ def get_code_rows(current_account: dict[str, Any] | None = None) -> list[dict[st
         {
             "codeHash": row["code_hash"],
             "codeLabel": row["code_label"],
-            "fullCode": row["full_code"] or ("OC-" + row["edition"].upper() + "-" + row["code_label"]),
             "licensee": row["licensee"],
             "edition": row["edition"],
             "features": json.loads(row["features_json"]),
@@ -2998,6 +3000,47 @@ def get_code_rows(current_account: dict[str, Any] | None = None) -> list[dict[st
         }
         for row in rows
     ]
+
+
+def get_code_secret_rows(
+    code_hashes: list[Any],
+    current_account: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    normalized = normalize_code_hashes(code_hashes)
+    if not normalized:
+        raise ActivationError("请选择授权码", 400)
+    if len(normalized) > MAX_CODE_SECRET_EXPORT:
+        raise ActivationError(f"单次最多导出 {MAX_CODE_SECRET_EXPORT} 个授权码", 400)
+    placeholders = ",".join(["?"] * len(normalized))
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            select code_hash, code_label, full_code, licensee, edition, plan, expires,
+                   max_activations, owner_account_id, disabled
+            from codes
+            where code_hash in ({placeholders})
+            """,
+            tuple(normalized),
+        ).fetchall()
+    by_hash = {str(row["code_hash"]): row for row in rows}
+    ordered: list[dict[str, Any]] = []
+    for code_hash_value in normalized:
+        row = by_hash.get(code_hash_value)
+        if not row or not code_row_owned_by_context(row, current_account):
+            raise ActivationError("授权码不存在或无权访问", 404)
+        ordered.append(
+            {
+                "codeHash": row["code_hash"],
+                "codeLabel": row["code_label"],
+                "code": row["full_code"] or ("OC-" + str(row["edition"]).upper() + "-" + row["code_label"]),
+                "licensee": row["licensee"],
+                "plan": row["plan"],
+                "expires": row["expires"],
+                "maxActivations": int(row["max_activations"] or 1),
+                "disabled": bool(row["disabled"]),
+            }
+        )
+    return ordered
 
 
 def activation_row_public(row: sqlite3.Row) -> dict[str, Any]:

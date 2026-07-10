@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -62,6 +63,47 @@ class LicenseServerFlowTests(unittest.TestCase):
 
     def expires(self) -> str:
         return (date.today() + timedelta(days=365)).isoformat()
+
+    def test_code_inventory_is_masked_and_secret_rows_are_scoped(self) -> None:
+        merchant, _ = self.server.create_account_record(
+            username="merchant-secret",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        other, _ = self.server.create_account_record(
+            username="merchant-other",
+            password="merchant-password-456",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Secret Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+        merchant_context = {"accountId": merchant["accountId"], "role": "merchant"}
+        other_context = {"accountId": other["accountId"], "role": "merchant"}
+
+        inventory = self.server.get_code_rows(merchant_context)
+        self.assertEqual(len(inventory), 1)
+        self.assertNotIn("fullCode", inventory[0])
+        self.assertNotIn(code, json.dumps(inventory, ensure_ascii=False))
+
+        secrets = self.server.get_code_secret_rows([code_hash_value], merchant_context)
+        self.assertEqual(secrets[0]["code"], code)
+        with self.assertRaises(self.server.ActivationError) as denied:
+            self.server.get_code_secret_rows([code_hash_value], other_context)
+        self.assertEqual(denied.exception.status, 404)
+
+    def test_new_code_expiry_must_be_after_today(self) -> None:
+        with self.assertRaises(self.server.ActivationError):
+            self.server.normalize_code_expires(date.today().isoformat())
+        with self.assertRaises(self.server.ActivationError):
+            self.server.normalize_code_expires((date.today() - timedelta(days=1)).isoformat())
 
     def start_http_server(self) -> str:
         from http.server import ThreadingHTTPServer
@@ -202,7 +244,7 @@ class LicenseServerFlowTests(unittest.TestCase):
             set(self.server.COMMERCIAL_FEATURES).issubset(set(plans["monthly"]["features"]))
         )
         rows = self.server.get_code_rows()
-        issued = next(item for item in rows if item["fullCode"] == code)
+        issued = next(item for item in rows if item["codeHash"] == self.server.code_hash(code))
         self.assertEqual(issued["features"], ["openclaw"])
 
     def test_signed_commercial_license_contains_display_and_device_limit_fields(self) -> None:
@@ -266,9 +308,15 @@ class LicenseServerFlowTests(unittest.TestCase):
             licensee="Expired Customer",
             edition="team",
             features=list(self.server.DEFAULT_FEATURES),
-            expires=(date.today() - timedelta(days=1)).isoformat(),
+            expires=self.expires(),
             max_activations=1,
         )[0]
+        with self.server.connect() as conn:
+            conn.execute(
+                "update codes set expires = ? where code_hash = ?",
+                ((date.today() - timedelta(days=1)).isoformat(), self.server.code_hash(expired_code)),
+            )
+            conn.commit()
         expired = self.request_json(
             "POST",
             "/activate",
@@ -613,7 +661,8 @@ class LicenseServerFlowTests(unittest.TestCase):
 
         rows = self.server.get_code_rows()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["fullCode"], code)
+        secrets = self.server.get_code_secret_rows([rows[0]["codeHash"]])
+        self.assertEqual(secrets[0]["code"], code)
         self.assertEqual(rows[0]["activations"], 1)
 
     def test_member_current_rejects_empty_or_token_only_lookup(self) -> None:
@@ -751,7 +800,8 @@ class LicenseServerFlowTests(unittest.TestCase):
         }
         rows = self.server.get_code_rows(merchant_context)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["fullCode"], code)
+        secrets = self.server.get_code_secret_rows([rows[0]["codeHash"]], merchant_context)
+        self.assertEqual(secrets[0]["code"], code)
         self.assertFalse(rows[0]["gatewayConfigured"])
         self.assertNotEqual(rows[0]["gatewayBaseUrl"], "https://platform.example/v1")
         with self.assertRaises(self.server.ActivationError):
@@ -830,7 +880,10 @@ class LicenseServerFlowTests(unittest.TestCase):
         other_context = {"accountId": other["accountId"], "role": self.server.ACCOUNT_ROLE_MERCHANT}
         admin_context = {"accountId": admin["accountId"], "role": self.server.ACCOUNT_ROLE_SUPER_ADMIN}
 
-        self.assertEqual([row["fullCode"] for row in self.server.get_code_rows(merchant_context)], [code])
+        self.assertEqual(
+            [row["codeHash"] for row in self.server.get_code_rows(merchant_context)],
+            [self.server.code_hash(code)],
+        )
         self.assertEqual(self.server.get_code_rows(other_context), [])
         self.assertEqual(len(self.server.get_code_rows(admin_context)), 1)
 
