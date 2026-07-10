@@ -72,6 +72,31 @@ function Assert-OutputPathAvailable {
     }
 }
 
+function Initialize-MsvcBuildEnvironment {
+    if (Get-Command "link.exe" -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $candidateScripts = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat"),
+        (Join-Path $env:ProgramFiles "Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat")
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
+
+    foreach ($candidate in $candidateScripts) {
+        $environmentLines = & $env:ComSpec /d /c "call `"$candidate`" -arch=x64 -host_arch=x64 >nul && set"
+        foreach ($line in $environmentLines) {
+            if ($line -match '^([^=]+)=(.*)$') {
+                [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+            }
+        }
+        if (Get-Command "link.exe" -ErrorAction SilentlyContinue) {
+            return
+        }
+    }
+
+    throw "MSVC linker link.exe was not found. Install Visual Studio 2022 Build Tools with the Desktop development with C++ workload."
+}
+
 function Assert-SourceVersionConsistency {
     $packageJsonPath = Join-Path $LauncherDir "package.json"
     $tauriConfigPath = Join-Path $TauriDir "tauri.conf.json"
@@ -195,10 +220,11 @@ function Build-InstallerVariant {
         }
     }
 
+    Initialize-MsvcBuildEnvironment
     $startedAtUtc = [datetime]::UtcNow
     Push-Location $LauncherDir
     try {
-        npm run tauri -- build -- --bundles nsis
+        npm run tauri -- build --bundles nsis
         if ($LASTEXITCODE -ne 0) {
             throw "Tauri NSIS build failed for $VariantName with exit code $LASTEXITCODE"
         }

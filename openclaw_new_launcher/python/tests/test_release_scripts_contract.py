@@ -48,7 +48,11 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn("try {", source)
         self.assertIn("finally {", source)
         self.assertIn("redist\\components\\codex-desktop", source)
-        self.assertIn("npm run tauri -- build -- --bundles nsis", source)
+        self.assertIn("npm run tauri -- build --bundles nsis", source)
+        self.assertNotIn("npm run tauri -- build -- --bundles nsis", source)
+        self.assertIn("function Initialize-MsvcBuildEnvironment", source)
+        self.assertIn("VsDevCmd.bat", source)
+        self.assertIn("Initialize-MsvcBuildEnvironment", source)
         self.assertLess(
             source.index('Build-InstallerVariant -VariantName "online"'),
             source.index('Copy-Item -LiteralPath $resolvedCodexPackagePath -Destination $seedPackagePath -Force'),
