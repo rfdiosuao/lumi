@@ -505,6 +505,11 @@ export interface DiagnosticReport {
   checks: DiagnosticCheck[];
   summary: DiagnosticSummary;
   repairAvailable: boolean;
+  timing?: {
+    totalMs: number;
+    checksMs: Record<string, number>;
+    measuredAt: string;
+  };
 }
 
 export interface DiagnosticRepairResult {
@@ -526,9 +531,12 @@ export interface DiagnosticExportResult {
 
 export const diagnosticsApi = {
   run: (): Promise<DiagnosticReport> => api('/api/diagnostics/run'),
+  prerequisites: (): Promise<DiagnosticReport> => api('/api/diagnostics/prerequisites'),
   bridgeStartupReport: (): Promise<DiagnosticReport> => invoke<DiagnosticReport>('bridge_startup_report'),
   repair: (params: { confirmed?: boolean } = {}): Promise<DiagnosticRepairResult> =>
     api('/api/diagnostics/repair', 'POST', params),
+  repairPrerequisites: (): Promise<DiagnosticRepairResult> =>
+    api('/api/diagnostics/repair', 'POST', { confirmed: true, scope: 'prerequisites' }),
   export: (): Promise<DiagnosticExportResult> => api('/api/diagnostics/export', 'POST'),
 };
 

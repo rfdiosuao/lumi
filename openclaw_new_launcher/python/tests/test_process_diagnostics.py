@@ -140,6 +140,82 @@ class MinimalDiagnosticProcessService(OpenClawProcessService):
 
 
 class ProcessDiagnosticsRepairTests(unittest.TestCase):
+    def test_prerequisite_diagnostics_excludes_expensive_checks_and_reports_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MinimalDiagnosticProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+
+            def unavailable(*_args, **_kwargs):
+                raise AssertionError("full diagnostics check ran during prerequisite detection")
+
+            service._port_range_listeners = unavailable
+            service._openclaw_gateway_processes = unavailable
+            service._clawpanel_processes = unavailable
+            service._phone_agent_apk_check = unavailable
+            service._member_gateway_check = unavailable
+            service._core_service_snapshot_check = unavailable
+
+            diagnostics = service.diagnose_prerequisites()
+
+        checks = diagnostics["checks"]
+        self.assertEqual(
+            [check["id"] for check in checks],
+            ["python_runtime", "node", "npm", "git", "git_bash", "uv", "webview2", "data_dir"],
+        )
+        self.assertGreaterEqual(diagnostics["timing"]["totalMs"], 0)
+        self.assertTrue(all(check["id"] in diagnostics["timing"]["checksMs"] for check in checks))
+
+    def test_prerequisite_repair_avoids_runtime_cleanup_and_runs_one_final_recheck(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TestableProcessService(
+                AppPaths(temp_dir),
+                append_log=lambda _text: None,
+                ui_call=lambda *_args: None,
+                command_runner=lambda _command, _timeout_sec: FakeCompletedProcess(returncode=0),
+            )
+            calls: list[str] = []
+            quick_snapshot = {
+                "basePath": temp_dir,
+                "serviceRunning": False,
+                "servicePid": None,
+                "checks": [{"id": "webview2", "status": "fail", "repairable": True}],
+                "timing": {"totalMs": 0, "checksMs": {"webview2": 0}, "measuredAt": "2026-07-10T00:00:00+0000"},
+            }
+
+            def diagnose_prerequisites():
+                calls.append("diagnose")
+                return quick_snapshot
+
+            def action(name: str):
+                def run(_checks: list[dict]) -> dict:
+                    calls.append(name)
+                    return {"label": name, "status": "ok", "message": "ok", "count": 0}
+                return run
+
+            def unavailable(*_args, **_kwargs):
+                raise AssertionError("runtime cleanup ran during prerequisite repair")
+
+            service.diagnose_prerequisites = diagnose_prerequisites
+            service._install_public_prerequisites_action = action("install")
+            service._repair_webview2_runtime = action("webview2")
+            service._prerequisite_source_check_action = action("source")
+            service._stop_registered_gateway = unavailable
+            service._kill_clawpanel_processes = unavailable
+            service._kill_openclaw_gateway_processes = unavailable
+            service._kill_port_processes = unavailable
+            service._kill_port_range_processes = unavailable
+            service._ensure_openclaw_config = unavailable
+
+            result = service.repair_prerequisites()
+
+            self.assertEqual(calls, ["diagnose", "install", "webview2", "source", "diagnose"])
+            self.assertEqual(result["diagnostics"], quick_snapshot)
+            self.assertTrue(os.path.isdir(service.paths.data_dir))
+
     def test_phone_adb_doctor_reports_missing_adb_with_repair_instructions(self) -> None:
         import services.process as process_module
 

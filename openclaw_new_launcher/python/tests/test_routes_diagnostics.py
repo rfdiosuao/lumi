@@ -19,6 +19,21 @@ from api.routes_diagnostics import register_diagnostics_routes
 
 
 class DiagnosticsRouteTests(unittest.TestCase):
+    def test_prerequisites_route_supports_get_and_post(self) -> None:
+        app = FastAPI()
+        calls: list[str] = []
+        ctx = _test_context(calls)
+        register_diagnostics_routes(app, ctx)
+        client = TestClient(app)
+
+        for method in (client.get, client.post):
+            response = method("/api/diagnostics/prerequisites")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["summary"]["status"], "ok")
+
+        self.assertEqual(calls, ["prerequisites", "prerequisites"])
+
     def test_repair_requires_post_confirmation(self) -> None:
         app = FastAPI()
         calls: list[str] = []
@@ -47,6 +62,21 @@ class DiagnosticsRouteTests(unittest.TestCase):
         self.assertEqual(calls, ["repair"])
         self.assertEqual(response.json()["diagnostics"]["summary"]["status"], "ok")
 
+    def test_prerequisite_repair_runs_only_after_confirmation(self) -> None:
+        app = FastAPI()
+        calls: list[str] = []
+        ctx = _test_context(calls)
+        register_diagnostics_routes(app, ctx)
+        client = TestClient(app)
+
+        denied = client.post("/api/diagnostics/repair", json={"scope": "prerequisites"})
+        response = client.post("/api/diagnostics/repair", json={"confirmed": True, "scope": "prerequisites"})
+
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, ["repair_prerequisites"])
+        self.assertEqual(response.json()["diagnostics"]["summary"]["status"], "ok")
+
 
 def _test_context(calls: list[str]) -> SimpleNamespace:
     async def body(request):
@@ -62,14 +92,23 @@ def _test_context(calls: list[str]) -> SimpleNamespace:
         return JSONResponse(status_code=status_code, content=payload)
 
     class ProcessService:
+        def diagnose_prerequisites(self):
+            calls.append("prerequisites")
+            return {"checks": [], "summary": {"status": "ok"}}
+
         def repair_environment(self):
             calls.append("repair")
+            return {"actions": [], "diagnostics": {"summary": {"status": "ok"}}}
+
+        def repair_prerequisites(self):
+            calls.append("repair_prerequisites")
             return {"actions": [], "diagnostics": {"summary": {"status": "ok"}}}
 
     return SimpleNamespace(
         auth_error=lambda _request: None,
         body=body,
         fastapi_json=fastapi_json,
+        build_prerequisite_diagnostics_payload=lambda: ProcessService().diagnose_prerequisites(),
         get_process_svc=lambda: ProcessService(),
         append_runtime_checks=lambda diagnostics: diagnostics,
     )

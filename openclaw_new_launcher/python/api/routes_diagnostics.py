@@ -17,6 +17,12 @@ def register_diagnostics_routes(app, ctx) -> None:
             return error
         return ctx.fastapi_json(ctx.build_diagnostics_payload())
 
+    @app.api_route("/api/diagnostics/prerequisites", methods=["GET", "POST"])
+    async def diagnostics_prerequisites(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(ctx.build_prerequisite_diagnostics_payload())
+
     def _truthy(value: object) -> bool:
         if isinstance(value, bool):
             return value
@@ -31,7 +37,11 @@ def register_diagnostics_routes(app, ctx) -> None:
         body = await ctx.body(request)
         if not _truthy(body.get("confirmed")):
             return ctx.fastapi_json({"error": "环境修复需要确认"}, 403)
-        result = ctx.get_process_svc().repair_environment()
+        result = (
+            ctx.get_process_svc().repair_prerequisites()
+            if body.get("scope") == "prerequisites"
+            else ctx.get_process_svc().repair_environment()
+        )
         result["diagnostics"] = ctx.append_runtime_checks(result.get("diagnostics", {}))
         return ctx.fastapi_json(result)
 

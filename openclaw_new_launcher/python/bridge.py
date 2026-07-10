@@ -590,6 +590,10 @@ def _build_diagnostics_payload() -> dict:
     return _append_runtime_checks(_get_process_svc().diagnose_environment())
 
 
+def _build_prerequisite_diagnostics_payload() -> dict:
+    return _append_runtime_checks(_get_process_svc().diagnose_prerequisites())
+
+
 def _read_sanitized_json(path: str, default: object = None) -> object:
     default = {} if default is None else default
     return _sanitize_payload(read_json(path, default))
@@ -788,6 +792,7 @@ def _build_fastapi_context():
         auth_error=_fastapi_auth_error,
         body=_fastapi_body,
         build_diagnostics_payload=_build_diagnostics_payload,
+        build_prerequisite_diagnostics_payload=_build_prerequisite_diagnostics_payload,
         data_url_to_temp_file=_data_url_to_temp_file,
         fastapi_json=_fastapi_json,
         get_image_client=_get_image_client,

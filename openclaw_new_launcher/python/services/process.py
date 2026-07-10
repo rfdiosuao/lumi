@@ -251,10 +251,8 @@ class OpenClawProcessService:
         self.startup_error = ""
         return "服务未启动"
 
-    def diagnose_environment(self) -> dict:
-        """Return customer-facing environment checks for the launcher."""
+    def _build_prerequisite_checks(self, with_timing: bool = False):
         checks: list[dict] = []
-
         def file_check(check_id: str, label: str, path: str, required: bool = True, repairable: bool = False) -> None:
             exists = os.path.exists(path)
             checks.append({
@@ -328,12 +326,8 @@ class OpenClawProcessService:
                 ])
             return candidates
 
-        file_check("base_path", "安装目录", self.paths.base_path)
-        checks.append(self._storage_health_check(write_test=True))
         tool_check("node", "Node.js 运行时", self.paths.node_exe, ("node.exe", "node"), repairable=True)
         tool_check("npm", "npm 包管理器", self.paths.npm_cli, ("npm.cmd", "npm.exe", "npm"), repairable=True)
-        file_check("start_js", "OpenClaw 启动脚本", self.paths.find_file("start.js", ("back", "backup", "")))
-        file_check("openclaw_core", "OpenClaw 本体", self.paths.openclaw_mjs)
         file_check("data_dir", "数据目录", self.paths.data_dir, required=False, repairable=True)
         bundled_git_path = first_existing([
             os.path.join(self.paths.base_path, "Git", "cmd", "git.exe"),
@@ -384,15 +378,53 @@ class OpenClawProcessService:
             "detail": uv_path or "Python uv package manager",
             "repairable": not bool(uv_path),
         })
-        checks.append(self._openclaw_config_check())
         checks.append(self._webview2_check())
         checks.append(self._python_runtime_check())
-        checks.append(self._portable_integrity_check())
-        checks.append(self._security_software_block_check())
-        checks.append(self._runtime_context_check())
-        checks.append(self._phone_agent_apk_check())
-        checks.append(self._member_gateway_check())
-        checks.append(self._core_service_snapshot_check())
+
+        checks_by_id = {check["id"]: check for check in checks}
+        checks = [checks_by_id[check_id] for check_id in (
+            "python_runtime", "node", "npm", "git", "git_bash", "uv", "webview2", "data_dir",
+        )]
+        if with_timing:
+            return checks, {check["id"]: 0 for check in checks}
+        return checks
+
+    def diagnose_prerequisites(self) -> dict:
+        started = time.perf_counter()
+        checks, checks_ms = self._build_prerequisite_checks(with_timing=True)
+        return {
+            "basePath": self.paths.base_path,
+            "serviceRunning": self.status().get("running", False),
+            "servicePid": self.process.pid if self.process and self.process.poll() is None else None,
+            "checks": checks,
+            "timing": {
+                "totalMs": round((time.perf_counter() - started) * 1000),
+                "checksMs": checks_ms,
+                "measuredAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            },
+        }
+
+    def diagnose_environment(self) -> dict:
+        """Return customer-facing environment checks for the launcher."""
+        checks = self._build_prerequisite_checks()
+
+        def file_check(check_id: str, label: str, path: str, required: bool = True, repairable: bool = False) -> dict:
+            exists = os.path.exists(path)
+            return {"id": check_id, "label": label, "status": "ok" if exists else ("fail" if required else "warn"), "message": "已找到" if exists else ("缺失，可能导致启动失败" if required else "未找到，一键修复会尝试补齐"), "detail": path, "repairable": repairable and not exists}
+
+        checks.extend([
+            file_check("base_path", "安装目录", self.paths.base_path),
+            self._storage_health_check(write_test=True),
+            file_check("start_js", "OpenClaw 启动脚本", self.paths.find_file("start.js", ("back", "backup", ""))),
+            file_check("openclaw_core", "OpenClaw 本体", self.paths.openclaw_mjs),
+            self._openclaw_config_check(),
+            self._portable_integrity_check(),
+            self._security_software_block_check(),
+            self._runtime_context_check(),
+            self._phone_agent_apk_check(),
+            self._member_gateway_check(),
+            self._core_service_snapshot_check(),
+        ])
 
         port_listeners = self._port_listeners(APP_PORT)
         expected_pid = str(self.process.pid) if self.process and self.process.poll() is None else None
@@ -537,6 +569,26 @@ class OpenClawProcessService:
             "actions": actions,
             "diagnostics": self.diagnose_environment(),
         }
+
+    def repair_prerequisites(self) -> dict:
+        """Repair install prerequisites without disturbing a running service."""
+        actions: list[dict] = []
+        preflight_checks = self.diagnose_prerequisites().get("checks", [])
+        actions.append(self._install_public_prerequisites_action(preflight_checks))
+        actions.append(self._repair_webview2_runtime(preflight_checks))
+        actions.append(self._prerequisite_source_check_action(preflight_checks))
+
+        created = 0
+        if not os.path.isdir(self.paths.data_dir):
+            os.makedirs(self.paths.data_dir, exist_ok=True)
+            created = 1
+        actions.append({
+            "label": "补齐基础数据目录",
+            "status": "ok",
+            "message": "已创建数据目录" if created else "无需处理",
+            "count": created,
+        })
+        return {"actions": actions, "diagnostics": self.diagnose_prerequisites()}
 
     @staticmethod
     def _default_openclaw_config() -> dict:
