@@ -270,14 +270,6 @@ function isActiveJobStatus(status: string): boolean {
   return status === 'queued' || status === 'running';
 }
 
-function parseProgressValue(message: string): number | null {
-  const match = message.match(/(\d{1,3})(?:\.\d+)?%/);
-  if (!match) return null;
-  const value = Number(match[1]);
-  if (!Number.isFinite(value)) return null;
-  return Math.max(0, Math.min(100, value));
-}
-
 function jobHistoryEntries(jobs: BridgeJob[], selectedId: string): InstallLogEntry[] {
   return jobs.flatMap((job) => {
     const componentId = typeof (job.progress as any)?.componentId === 'string' ? (job.progress as any).componentId : undefined;
@@ -1016,12 +1008,6 @@ export const AgentInstallerPage: React.FC = () => {
     return ids;
   }, [busyId, jobs, modelConfigBusy]);
   const selectedBusy = Boolean(selected && activeJobComponentIds.has(selected.id));
-  const selectedActiveJob = React.useMemo(() => {
-    if (!selected) return null;
-    return jobs.find((job) => extractJobComponentId(job) === selected.id && isActiveJobStatus(String(job.status || ''))) || null;
-  }, [jobs, selected]);
-  const selectedJobMessage = selectedActiveJob?.progress?.message || selectedActiveJob?.message || '';
-  const selectedJobProgress = parseProgressValue(selectedJobMessage);
   const selectedModelConfig = selected ? modelConfigs[selected.id] : undefined;
   const selectedModelDraft = selected ? (modelDrafts[selected.id] || selectedModelConfig?.model || selectedModelConfig?.availableModels?.[0] || '') : '';
   const readyCount = components.filter((item) => item.status === 'ready' || item.status === 'started').length;
