@@ -99,11 +99,29 @@ class LicenseServerFlowTests(unittest.TestCase):
             self.server.get_code_secret_rows([code_hash_value], other_context)
         self.assertEqual(denied.exception.status, 404)
 
+    def test_code_secret_rows_reject_empty_selection(self) -> None:
+        with self.assertRaises(self.server.ActivationError) as empty:
+            self.server.get_code_secret_rows([])
+        self.assertEqual(empty.exception.status, 400)
+
+    def test_code_secret_rows_export_limit_is_500(self) -> None:
+        valid_hashes = [f"{index:064x}" for index in range(501)]
+
+        with self.assertRaises(self.server.ActivationError) as within_limit:
+            self.server.get_code_secret_rows(valid_hashes[:500])
+        self.assertEqual(within_limit.exception.status, 404)
+
+        with self.assertRaises(self.server.ActivationError) as over_limit:
+            self.server.get_code_secret_rows(valid_hashes)
+        self.assertEqual(over_limit.exception.status, 400)
+
     def test_new_code_expiry_must_be_after_today(self) -> None:
         with self.assertRaises(self.server.ActivationError):
             self.server.normalize_code_expires(date.today().isoformat())
         with self.assertRaises(self.server.ActivationError):
             self.server.normalize_code_expires((date.today() - timedelta(days=1)).isoformat())
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        self.assertEqual(self.server.normalize_code_expires(tomorrow), tomorrow)
 
     def start_http_server(self) -> str:
         from http.server import ThreadingHTTPServer
