@@ -88,6 +88,16 @@ class AccountUiContractTests(unittest.TestCase):
         self.assertNotIn("已显示上一次账号快照", page_source)
         self.assertNotIn("LoggedInPanel", page_source)
 
+    def test_model_account_state_cannot_replace_signed_commercial_license(self) -> None:
+        with open(LICENSE_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertNotIn("setLicenseInfo", source)
+        self.assertNotIn("setAuthorized", source)
+        self.assertIn("checkLicense", source)
+        self.assertIn("await licenseApi.activate(code)", source)
+        self.assertIn("await checkLicense()", source)
+
 
 if __name__ == "__main__":
     unittest.main()

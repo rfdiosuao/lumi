@@ -96,17 +96,6 @@ function formatTime(value?: string): string {
   return date.toLocaleString();
 }
 
-function accountProfile(account: AccountSnapshot | null) {
-  if (!account?.loggedIn) return null;
-  return {
-    licensee: account.account || 'LOOM User',
-    edition: account.plan || 'account',
-    gatewayBaseUrl: account.gatewayBaseUrl,
-    gatewayDefaultModel: account.selectedModels?.text || account.models?.text?.[0],
-    managedBy: account.source || 'newapi_account',
-  };
-}
-
 async function openExternalUrl(url: string): Promise<void> {
   try {
     await open(url);
@@ -153,7 +142,7 @@ export const LicensePage: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(() => !hasCachedAccount);
   const [statusText, setStatusText] = useState('');
-  const { setAuthorized, setLicenseInfo, setCurrentPage } = useAppStore();
+  const { checkLicense, setCurrentPage } = useAppStore();
 
   const loggedIn = Boolean(account?.loggedIn);
   const totalModels = modelTotal(account);
@@ -171,10 +160,7 @@ export const LicensePage: React.FC = () => {
     saveCachedAccount(next);
     setAccount(next);
     setSubscription(next?.subscription || null);
-    const profile = accountProfile(next);
-    setLicenseInfo(profile as any);
-    setAuthorized(Boolean(profile));
-  }, [setAuthorized, setLicenseInfo]);
+  }, []);
 
   const refresh = useCallback(async (options: { background?: boolean } = {}) => {
     if (!options.background) setLoading(true);
@@ -359,9 +345,8 @@ export const LicensePage: React.FC = () => {
     setBusy(true);
     setStatusText('正在激活旧授权码...');
     try {
-      const resp = await licenseApi.activate(code);
-      setLicenseInfo(resp.license as any);
-      setAuthorized(true);
+      await licenseApi.activate(code);
+      await checkLicense();
       setLegacyCode('');
       setStatusText('旧授权码已激活');
       showToast('旧授权码已激活', 'success');
@@ -417,9 +402,7 @@ export const LicensePage: React.FC = () => {
   };
 
   const continueAsGuest = () => {
-    setAuthorized(false);
-    setLicenseInfo(null);
-    showToast('已进入访客模式。安装和手机演示可浏览，模型同步需要登录。', 'info');
+    showToast('已关闭中转站登录页。模型同步需要登录中转站账号。', 'info');
     setCurrentPage('dashboard');
   };
 

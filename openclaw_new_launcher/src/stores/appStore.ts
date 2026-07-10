@@ -44,8 +44,6 @@ interface AppState {
   setServiceRunning: (running: boolean) => void;
   setServiceStatus: (status: AppState['serviceStatus']) => void;
   setPhoneAgentSnapshot: (snapshot: Partial<Pick<AppState, 'phoneAgentStatus' | 'phoneAgentTaskId' | 'phoneAgentSummary' | 'phoneAgentProgress' | 'phoneAgentUpdatedAt'>>) => void;
-  setAuthorized: (authorized: boolean) => void;
-  setLicenseInfo: (info: License | null) => void;
   setApiConfigured: (configured: boolean) => void;
   setLicenseChecking: (checking: boolean) => void;
   setThemeConfig: (config: ThemeConfig | null) => void;
@@ -57,6 +55,7 @@ interface AppState {
 
 const initialThemeMode = getStoredThemeMode();
 const initialLanguage = getStoredAppLanguage();
+let licenseCheckGeneration = 0;
 
 export const useAppStore = create<AppState>((set) => ({
   currentPage: 'dashboard',
@@ -81,16 +80,6 @@ export const useAppStore = create<AppState>((set) => ({
   setServiceRunning: (serviceRunning) => set({ serviceRunning }),
   setServiceStatus: (serviceStatus) => set({ serviceStatus }),
   setPhoneAgentSnapshot: (snapshot) => set((state) => ({ ...state, ...snapshot })),
-  setAuthorized: (authorized) => set((state) => {
-    const isAuthorized = Boolean(authorized && state.licenseInfo?.signature);
-    if (!isAuthorized) {
-      try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }
-    }
-    return { isAuthorized, isLicenseChecking: false };
-  }),
-  setLicenseInfo: (licenseInfo) => {
-    set({ licenseInfo });
-  },
   setApiConfigured: (apiConfigured) => set({ apiConfigured }),
   setThemeConfig: (themeConfig) => set({ themeConfig }),
   setThemeMode: (themeMode) => set({ themeMode }),
@@ -101,6 +90,7 @@ export const useAppStore = create<AppState>((set) => ({
   setNavItems: (navItems) => set({ navItems }),
   setLicenseChecking: (val: boolean) => set({ isLicenseChecking: val }),
   checkLicense: async () => {
+    const checkGeneration = ++licenseCheckGeneration;
     const fixture = getDevLicenseFixture();
     if (fixture) {
       set({
@@ -125,6 +115,7 @@ export const useAppStore = create<AppState>((set) => ({
         error: response.status === 'rejected' ? response.reason : undefined,
         configUnavailable: config.status === 'rejected',
       });
+      if (checkGeneration !== licenseCheckGeneration) return;
       set({
         isAuthorized: licenseGate.authorized,
         licenseInfo: licenseGate.license,
@@ -135,6 +126,7 @@ export const useAppStore = create<AppState>((set) => ({
         try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }
       }
     } catch (error) {
+      if (checkGeneration !== licenseCheckGeneration) return;
       const licenseGate = normalizeLicenseGate({ error });
       set({ isAuthorized: false, licenseInfo: null, licenseGate, isLicenseChecking: false });
       try { localStorage.removeItem('openclaw_auth'); } catch { /* ignore */ }

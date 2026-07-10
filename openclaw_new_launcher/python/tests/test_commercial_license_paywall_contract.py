@@ -46,13 +46,26 @@ class CommercialLicenseGateStateContractTests(unittest.TestCase):
 
     def test_store_uses_signed_license_gate_without_gateway_profile_bypass(self) -> None:
         source = read_text(STORE_FILE)
+        gate_source = read_text(GATE_FILE)
 
         self.assertIn("licenseGate", source)
         self.assertIn("normalizeLicenseGate", source)
         self.assertIn("withLicenseCheckTimeout", source)
-        self.assertIn("licenseInfo?.signature", source)
+        self.assertIn("license?.signature", gate_source)
+        self.assertNotIn("setAuthorized:", source)
+        self.assertNotIn("setLicenseInfo:", source)
         self.assertNotIn("else if (gatewayProfile", source)
         self.assertNotIn("gatewayProfile as License", source)
+
+    def test_license_checks_ignore_stale_out_of_order_results(self) -> None:
+        source = read_text(STORE_FILE)
+
+        self.assertIn("let licenseCheckGeneration = 0", source)
+        self.assertIn("const checkGeneration = ++licenseCheckGeneration", source)
+        self.assertGreaterEqual(
+            source.count("if (checkGeneration !== licenseCheckGeneration) return"),
+            2,
+        )
 
     def test_api_and_types_expose_typed_commercial_license_fields(self) -> None:
         api_source = read_text(API_FILE)
