@@ -996,10 +996,10 @@ Run:
 ```powershell
 python -m unittest discover -s license_server\tests -p "test_*.py" -v
 & 'openclaw_new_launcher\python-runtime\python.exe' -m unittest discover -s openclaw_new_launcher\python\tests -p "test_*.py"
+Push-Location openclaw_new_launcher
 npm run build
+Pop-Location
 ```
-
-Run `npm run build` with working directory `D:\Axiangmu\AUSTART\openclaw_new_launcher`.
 
 Expected: 三组命令均以 exit code 0 完成。
 
