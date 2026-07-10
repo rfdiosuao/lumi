@@ -150,6 +150,7 @@ class ComponentInstaller:
         self.cache_dir = os.path.join(self.base_path, "data", ".installer", "cache")
         self.staging_dir = os.path.join(self.base_path, "data", ".installer", "staging")
         self.rollback_dir = os.path.join(self.base_path, "data", ".installer", "rollback")
+        self._external_entry_cache: dict[str, tuple[float, str | None]] = {}
 
     def install(
         self,
@@ -206,6 +207,11 @@ class ComponentInstaller:
 
         self._mark(component, "configuring", job_id=job_id, on_progress=on_progress, message=f"配置 {component.name}")
         silent_installer_ran = False
+        managed_codex_version = None
+        if component.component_id == "codex-desktop":
+            managed_entry = self._managed_codex_entry(install_path)
+            if managed_entry:
+                managed_codex_version = self._detect_installed_version(component, install_path, entry_path=managed_entry)
         if component.archive_type == "installer" and getattr(component, "installer_args", ()):
             try:
                 if on_progress:
@@ -225,7 +231,7 @@ class ComponentInstaller:
                 if on_progress:
                     on_progress(f"配置失败：{exc}", "danger")
                 raise ComponentInstallError(f"installer failed for {component.component_id}: {exc}") from exc
-        if getattr(component, "install_command", ()):
+        if getattr(component, "install_command", ()) and not managed_codex_version:
             try:
                 if on_progress:
                     on_progress(f"执行 {component.name} 安装命令", "neutral")
@@ -294,7 +300,8 @@ class ComponentInstaller:
         install_path = self._safe_install_path(component.install_path)
         self._mark(component, "health_checking", job_id=job_id, on_progress=on_progress, message=f"检测 {component.name}")
         try:
-            self._assert_component_available(component, install_path)
+            entry_path = self._resolve_component_entry(component, install_path)
+            self._assert_component_available(component, install_path, entry_path)
             if component.health_check is not None:
                 self.health_checker(component, install_path)
         except Exception as exc:
@@ -311,8 +318,7 @@ class ComponentInstaller:
                 on_progress(f"检测失败：{message}", "danger")
             raise ComponentInstallError(f"detect failed for {component.component_id}: {message}") from exc
 
-        entry_path = self._component_entry_path(component, install_path)
-        installed_version = self._detect_installed_version(component, install_path)
+        installed_version = self._detect_installed_version(component, install_path, entry_path=entry_path)
         is_codex_desktop_app = component.component_id == "codex-desktop" and _is_codex_desktop_executable(entry_path)
         if installed_version and not is_codex_desktop_app and not _versions_match(component.version, installed_version):
             state = self.state_store.mark(component.component_id, "upgrade_available", version=installed_version, job_id=job_id)
@@ -518,36 +524,75 @@ class ComponentInstaller:
         if not os.path.isfile(target):
             raise ComponentInstallError(f"component entry is missing: {component.entry}")
 
-    def _assert_component_available(self, component: ReleaseComponent, install_path: str) -> None:
+    def _assert_component_available(self, component: ReleaseComponent, install_path: str, entry_path: str = "") -> None:
         has_internal_install = os.path.exists(install_path)
-        has_external_entry = bool(self._first_existing_external_entry(component))
-        if not has_internal_install and not has_external_entry:
+        if not entry_path:
+            entry_path = self._resolve_component_entry(component, install_path)
+        if not has_internal_install and not entry_path:
             raise ComponentInstallError("未找到组件目录，请先安装或重新安装")
-        entry_path = ""
-        if component.entry:
-            entry_path = self._component_entry_path(component, install_path)
-        elif has_external_entry:
-            entry_path = self._component_entry_path(component, install_path)
         self._assert_component_sources_clean(component, install_path, entry_path)
 
     def _component_entry_path(self, component: ReleaseComponent, install_path: str) -> str:
-        if not component.entry:
-            external_entry = self._first_existing_external_entry(component)
-            if external_entry:
-                return external_entry
-            raise ComponentInstallError("组件缺少启动入口")
-        target = self._safe_join(install_path, component.entry)
-        if not os.path.isfile(target):
-            external_entry = self._first_existing_external_entry(component)
-            if external_entry:
-                return external_entry
-            raise ComponentInstallError("未找到组件文件，请先安装或重新安装")
-        return target
+        return self._resolve_component_entry(component, install_path)
 
-    def _first_existing_external_entry(self, component: ReleaseComponent) -> str | None:
+    def _managed_codex_entry(self, install_path: str) -> str | None:
+        candidate = os.path.abspath(
+            os.path.join(
+                install_path,
+                "package",
+                "vendor",
+                "x86_64-pc-windows-msvc",
+                "bin",
+                "codex.exe",
+            )
+        )
+        return candidate if _is_path_inside(candidate, install_path) and os.path.isfile(candidate) else None
+
+    def _resolve_component_entry(
+        self,
+        component: ReleaseComponent,
+        install_path: str,
+        allow_expensive: bool = True,
+    ) -> str:
+        if component.component_id == "codex-desktop":
+            managed_entry = self._managed_codex_entry(install_path)
+            if managed_entry:
+                return managed_entry
+        if component.entry:
+            target = self._safe_join(install_path, component.entry)
+            if os.path.isfile(target):
+                return target
+        external_entry = (
+            self._first_existing_external_entry(component)
+            if allow_expensive
+            else self._cached_existing_external_entry(component)
+        )
+        if external_entry:
+            return external_entry
+        if component.entry:
+            raise ComponentInstallError("未找到组件文件，请先安装或重新安装")
+        raise ComponentInstallError("组件缺少启动入口")
+
+    def _cached_existing_external_entry(self, component: ReleaseComponent) -> str | None:
+        cached = self._external_entry_cache.get(component.component_id)
+        if cached is None:
+            return None
+        created_at, entry_path = cached
+        if time.monotonic() - created_at > 30.0 or (entry_path and not os.path.isfile(entry_path)):
+            self._external_entry_cache.pop(component.component_id, None)
+            return None
+        return entry_path
+
+    def _first_existing_external_entry(self, component: ReleaseComponent, *, refresh: bool = False) -> str | None:
+        if not refresh:
+            cached_entry = self._cached_existing_external_entry(component)
+            if cached_entry is not None or component.component_id in self._external_entry_cache:
+                return cached_entry
         for candidate in self._external_entry_candidates(component):
             if os.path.isfile(candidate):
+                self._external_entry_cache[component.component_id] = (time.monotonic(), candidate)
                 return candidate
+        self._external_entry_cache[component.component_id] = (time.monotonic(), None)
         return None
 
     def _assert_component_sources_clean(self, component: ReleaseComponent, install_path: str, entry_path: str = "") -> None:
@@ -915,9 +960,14 @@ class ComponentInstaller:
         os.makedirs(prefix, exist_ok=True)
         return [command[0], "--prefix", prefix, *command[1:]]
 
-    def _detect_installed_version(self, component: ReleaseComponent, install_path: str) -> str | None:
+    def _detect_installed_version(
+        self,
+        component: ReleaseComponent,
+        install_path: str,
+        entry_path: str | None = None,
+    ) -> str | None:
         try:
-            entry_path = self._component_entry_path(component, install_path)
+            entry_path = entry_path or self._resolve_component_entry(component, install_path)
             if component.component_id == "codex-desktop" and _is_codex_desktop_executable(entry_path):
                 return _codex_desktop_version_from_path(entry_path)
             cwd = self._component_cwd(install_path)

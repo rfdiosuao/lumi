@@ -753,6 +753,136 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(state.version, "0.142.3")
             self.assertTrue(any(command[-2:] == ["prefix", "-g"] for command in calls))
 
+    def test_detects_managed_codex_vendor_entry_with_one_direct_version_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vendor_entry = os.path.join(
+                temp_dir,
+                "agents",
+                "codex-desktop",
+                "package",
+                "vendor",
+                "x86_64-pc-windows-msvc",
+                "bin",
+                "codex.exe",
+            )
+            os.makedirs(os.path.dirname(vendor_entry), exist_ok=True)
+            with open(vendor_entry, "wb") as handle:
+                handle.write(b"codex")
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="c" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            calls: list[list[str]] = []
+
+            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                self.assertEqual(command, [vendor_entry, "--version"])
+                return FakeCompletedProcess(returncode=0, stdout="codex-cli 0.142.3\n")
+
+            installer = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")), installer_runner=runner)
+
+            state = installer.detect(component, job_id="job_detect_managed_codex")
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "0.142.3")
+            self.assertEqual(calls, [[vendor_entry, "--version"]])
+
+    def test_detects_external_codex_with_single_expensive_discovery_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_entry = os.path.join(temp_dir, "npm-global", "codex.cmd")
+            os.makedirs(os.path.dirname(external_entry), exist_ok=True)
+            with open(external_entry, "wb") as handle:
+                handle.write(b"codex")
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="c" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                external_paths=(external_entry,),
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            calls: list[list[str]] = []
+
+            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                if command[:3] == ["powershell", "-NoProfile", "-Command"]:
+                    return FakeCompletedProcess(returncode=1)
+                if command[-2:] == ["prefix", "-g"]:
+                    return FakeCompletedProcess(returncode=1)
+                if command[-2:] == ["bin", "-g"]:
+                    return FakeCompletedProcess(returncode=1)
+                if command[-2:] == ["root", "-g"]:
+                    return FakeCompletedProcess(returncode=1)
+                if command[-1:] == ["--version"] and external_entry in command:
+                    return FakeCompletedProcess(returncode=0, stdout="codex-cli 0.142.3\n")
+                self.fail(f"unexpected runner command: {command}")
+
+            installer = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")), installer_runner=runner)
+
+            state = installer.detect(component, job_id="job_detect_external_codex")
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "0.142.3")
+            self.assertLessEqual(sum(command[:3] == ["powershell", "-NoProfile", "-Command"] for command in calls), 1)
+            self.assertLessEqual(sum(command[-2:] == ["prefix", "-g"] for command in calls), 1)
+            self.assertLessEqual(sum(command[-2:] == ["bin", "-g"] for command in calls), 1)
+            self.assertLessEqual(sum(command[-2:] == ["root", "-g"] for command in calls), 1)
+
+    def test_install_skips_legacy_npm_command_for_valid_managed_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vendor_relative_path = "package/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+            vendor_entry = os.path.join(temp_dir, "agents", "codex-desktop", *vendor_relative_path.split("/"))
+            payload = make_tgz_payload({vendor_relative_path: b"codex"})
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            calls: list[list[str]] = []
+
+            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                self.assertEqual(command, [vendor_entry, "--version"])
+                return FakeCompletedProcess(returncode=0, stdout="codex-cli 0.142.3\n")
+
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")),
+                fetcher=lambda _url, _timeout: payload,
+                installer_runner=runner,
+            )
+
+            state = installer.install(component, job_id="job_install_managed_codex")
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(calls, [[vendor_entry, "--version"]])
+
     def test_detect_prefers_codex_desktop_appx_over_cli_shim(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             appx_root = os.path.join(
