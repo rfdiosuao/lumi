@@ -108,6 +108,7 @@ AUDIT_SECRET_KEYS = {
     "gatewayimageaccesstoken",
     "gatewayvideoaccesstoken",
     "apikey",
+    "sessiontoken",
     "token",
 }
 LOGIN_RATE_LIMIT_ATTEMPTS = bounded_int_env("LICENSE_LOGIN_RATE_LIMIT_ATTEMPTS", 10, 1, 100)

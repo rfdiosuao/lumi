@@ -383,6 +383,7 @@ class LicenseServerFlowTests(unittest.TestCase):
             "imageToken": "historical-image-secret",
             "videoToken": "historical-video-secret",
             "apiKey": "historical-api-key-secret",
+            "sessionToken": "historical-session-token-secret",
         }
         signed_license = {
             key: secrets_by_key[key]
@@ -420,6 +421,7 @@ class LicenseServerFlowTests(unittest.TestCase):
             after={
                 "codes": [code],
                 "memberResponse": response,
+                "adminResponse": {"sessionToken": secrets_by_key["sessionToken"]},
                 "metadata": {"tokenCount": public_marker},
             },
         )
@@ -642,6 +644,103 @@ class LicenseServerFlowTests(unittest.TestCase):
         )
         self.assertTrue(deleted["ok"])
         self.assertIsNone(self.server.get_activation_snapshot(activation_id))
+
+    def test_merchant_can_delete_own_activation_via_http(self) -> None:
+        merchant, _ = self.server.create_account_record(
+            username="activation-delete-own",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        session, _ = self.server.create_admin_session(merchant["accountId"])
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Activation Delete Own Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+        self.server.activate_code(
+            {"code": code, "installId": "activation-delete-own-install", "deviceId": "activation-delete-own-device"}
+        )
+        activation_id = self.server.get_activation_rows(code_hash_value)[0]["id"]
+
+        response = self.request_json(
+            "POST",
+            "/admin/api/activations/delete",
+            payload={"id": activation_id},
+            headers={"X-Admin-Session": session},
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertIsNone(self.server.get_activation_snapshot(activation_id))
+
+    def test_merchant_delete_rechecks_owner_after_snapshot_before_sql_delete(self) -> None:
+        merchant, _ = self.server.create_account_record(
+            username="activation-delete-race-owner",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        new_owner, _ = self.server.create_account_record(
+            username="activation-delete-race-new-owner",
+            password="merchant-password-456",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        session, _ = self.server.create_admin_session(merchant["accountId"])
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Activation Delete Race Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+        self.server.activate_code(
+            {"code": code, "installId": "activation-delete-race-install", "deviceId": "activation-delete-race-device"}
+        )
+        activation_id = self.server.get_activation_rows(code_hash_value)[0]["id"]
+        original_make_db_backup = self.server.make_db_backup
+
+        def change_owner_after_snapshot(label: str) -> str:
+            backup_path = original_make_db_backup(label)
+            with self.server.connect() as conn:
+                conn.execute(
+                    "update codes set owner_account_id = ? where code_hash = ?",
+                    (new_owner["accountId"], code_hash_value),
+                )
+                conn.commit()
+            return backup_path
+
+        self.server.make_db_backup = change_owner_after_snapshot
+        self.addCleanup(setattr, self.server, "make_db_backup", original_make_db_backup)
+
+        denied = self.request_json(
+            "POST",
+            "/admin/api/activations/delete",
+            payload={"id": activation_id},
+            headers={"X-Admin-Session": session},
+            expected_status=404,
+        )
+        missing = self.request_json(
+            "POST",
+            "/admin/api/activations/delete",
+            payload={"id": activation_id + 10000},
+            headers={"X-Admin-Session": session},
+            expected_status=404,
+        )
+
+        self.assertEqual(denied, missing)
+        self.assertIsNotNone(self.server.get_activation_snapshot(activation_id))
+        with self.server.connect() as conn:
+            owner_id = conn.execute(
+                "select owner_account_id from codes where code_hash = ?",
+                (code_hash_value,),
+            ).fetchone()["owner_account_id"]
+        self.assertEqual(owner_id, new_owner["accountId"])
 
     def test_new_code_expiry_must_be_after_today(self) -> None:
         with self.assertRaises(self.server.ActivationError):
