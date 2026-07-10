@@ -49,3 +49,18 @@ Scope: installer performance harness, release verification contract, final valid
 - Script is release-safe by default.
 - Output can be redirected with `-OutputPath`.
 - `build-dual-nsis.ps1 -ValidateOnly` is used only for explicit release input validation and is reported through `releaseValidation`.
+
+## Managed Codex Detect Narrowing
+
+- Updated `openclaw_new_launcher/python/core/component_installer.py` so `_detect_installed_version()` checks managed Codex payload metadata before falling back to `codex.exe --version`.
+- The metadata fast path reads `agents/codex-desktop/package/package.json`, normalizes versions like `0.142.3-win32-x64` to `0.142.3`, and only trusts metadata that still matches the managed payload layout.
+- If payload metadata is missing, malformed, or does not match the managed entrypoint, version detection falls back to the existing `codex.exe --version` probe. A failed fallback still keeps managed Codex out of `ready`.
+- Added targeted coverage in `openclaw_new_launcher/python/tests/test_component_installer.py` for:
+  - managed Codex metadata fast path without invoking `--version`
+  - malformed metadata falling back to `--version`
+  - non-managed components still using the existing version probe path
+
+## Additional Verification
+
+- Component installer suite: `python -m unittest openclaw_new_launcher.python.tests.test_component_installer`
+- Full Python suite: `python -m unittest discover -s openclaw_new_launcher/python/tests`

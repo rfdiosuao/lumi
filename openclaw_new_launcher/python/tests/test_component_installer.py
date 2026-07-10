@@ -1034,6 +1034,103 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(calls, [[vendor_entry, "--version"]])
             self.assertEqual(timeouts, [5000])
 
+    def test_detects_managed_codex_version_from_package_metadata_without_version_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_dir = os.path.join(temp_dir, "agents", "codex-desktop", "package")
+            vendor_entry = os.path.join(
+                package_dir,
+                "vendor",
+                "x86_64-pc-windows-msvc",
+                "bin",
+                "codex.exe",
+            )
+            os.makedirs(os.path.dirname(vendor_entry), exist_ok=True)
+            with open(vendor_entry, "wb") as handle:
+                handle.write(b"codex")
+            with open(os.path.join(package_dir, "package.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "name": "@openai/codex",
+                        "version": "0.142.3-win32-x64",
+                        "os": ["win32"],
+                        "cpu": ["x64"],
+                        "files": ["vendor"],
+                    },
+                    handle,
+                )
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="c" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")),
+                installer_runner=lambda _command, _cwd, _timeout_ms: self.fail("managed metadata fast path should skip codex --version"),
+            )
+
+            state = installer.detect(component, job_id="job_detect_managed_codex_metadata")
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "0.142.3")
+
+    def test_detects_managed_codex_falls_back_to_version_probe_when_package_metadata_is_malformed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_dir = os.path.join(temp_dir, "agents", "codex-desktop", "package")
+            vendor_entry = os.path.join(
+                package_dir,
+                "vendor",
+                "x86_64-pc-windows-msvc",
+                "bin",
+                "codex.exe",
+            )
+            os.makedirs(os.path.dirname(vendor_entry), exist_ok=True)
+            with open(vendor_entry, "wb") as handle:
+                handle.write(b"codex")
+            with open(os.path.join(package_dir, "package.json"), "w", encoding="utf-8") as handle:
+                json.dump({"name": "@openai/codex", "version": "not-a-version"}, handle)
+            calls: list[list[str]] = []
+
+            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                self.assertEqual(command, [vendor_entry, "--version"])
+                return FakeCompletedProcess(returncode=0, stdout="codex-cli 0.142.3\n")
+
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="c" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")),
+                installer_runner=runner,
+            )
+
+            state = installer.detect(component, job_id="job_detect_managed_codex_bad_metadata")
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "0.142.3")
+            self.assertEqual(calls, [[vendor_entry, "--version"]])
+
     def test_detects_external_codex_with_single_expensive_discovery_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             external_entry = os.path.join(temp_dir, "npm-global", "codex.cmd")
@@ -1081,6 +1178,48 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(sum(command[-2:] == ["prefix", "-g"] for command in calls), 1)
             self.assertEqual(sum(command[-2:] == ["bin", "-g"] for command in calls), 1)
             self.assertEqual(sum(command[-2:] == ["root", "-g"] for command in calls), 1)
+
+    def test_detect_non_managed_component_still_uses_version_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry_path = os.path.join(temp_dir, "agents", "claude-code", "bin", "claude.exe")
+            package_json_path = os.path.join(temp_dir, "agents", "claude-code", "package", "package.json")
+            os.makedirs(os.path.dirname(entry_path), exist_ok=True)
+            os.makedirs(os.path.dirname(package_json_path), exist_ok=True)
+            with open(entry_path, "wb") as handle:
+                handle.write(b"claude")
+            with open(package_json_path, "w", encoding="utf-8") as handle:
+                json.dump({"name": "@anthropic-ai/claude-code", "version": "9.9.9"}, handle)
+            component = ReleaseComponent(
+                component_id="claude-code",
+                name="Claude Code",
+                version="1.2.3",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1,
+                sha256="a" * 64,
+                urls=("https://download.example.invalid/claude-code.tgz",),
+                install_path="agents/claude-code",
+                entry="bin/claude.exe",
+            )
+            calls: list[list[str]] = []
+
+            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                self.assertEqual(command, [entry_path, "--version"])
+                return FakeCompletedProcess(returncode=0, stdout="claude 1.2.3\n")
+
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")),
+                installer_runner=runner,
+            )
+
+            state = installer.detect(component, job_id="job_detect_claude")
+
+            self.assertEqual(state.status, "ready")
+            self.assertEqual(state.version, "1.2.3")
+            self.assertEqual(calls, [[entry_path, "--version"]])
 
     def test_install_skips_legacy_npm_command_for_valid_managed_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

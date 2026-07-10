@@ -1124,6 +1124,9 @@ class ComponentInstaller:
     ) -> str | None:
         try:
             entry_path = entry_path or self._resolve_component_entry(component, install_path)
+            managed_codex_version = self._managed_codex_metadata_version(component, install_path, entry_path)
+            if managed_codex_version:
+                return managed_codex_version
             if component.component_id == "codex-desktop" and _is_codex_desktop_executable(entry_path):
                 return _codex_desktop_version_from_path(entry_path)
             cwd = self._component_cwd(install_path)
@@ -1138,6 +1141,87 @@ class ComponentInstaller:
             return None
         match = re.search(r"(?<![A-Za-z0-9])v?(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?)\b", output, re.IGNORECASE)
         return match.group(1) if match else None
+
+    def _managed_codex_metadata_version(
+        self,
+        component: ReleaseComponent,
+        install_path: str,
+        entry_path: str,
+    ) -> str | None:
+        if component.component_id != "codex-desktop":
+            return None
+        managed_entry = self._managed_codex_entry(install_path)
+        if not managed_entry:
+            return None
+        if os.path.normcase(os.path.abspath(entry_path)) != os.path.normcase(os.path.abspath(managed_entry)):
+            return None
+        for resolver in (
+            self._managed_codex_version_from_package_json,
+            self._managed_codex_version_from_vendor_metadata,
+        ):
+            version = resolver(install_path, managed_entry)
+            if version:
+                return version
+        return None
+
+    def _managed_codex_version_from_package_json(self, install_path: str, managed_entry: str) -> str | None:
+        package_dir = self._safe_join(install_path, "package")
+        package_json_path = self._safe_join(package_dir, "package.json")
+        package_json = self._read_json_dict(package_json_path)
+        if not package_json:
+            return None
+        if str(package_json.get("name") or "").strip() != "@openai/codex":
+            return None
+        if not self._json_list_contains(package_json.get("os"), "win32"):
+            return None
+        if not self._json_list_contains(package_json.get("cpu"), "x64"):
+            return None
+        files_value = package_json.get("files")
+        if isinstance(files_value, list) and "vendor" not in {str(value).strip() for value in files_value}:
+            return None
+        vendor_dir = os.path.dirname(os.path.dirname(os.path.dirname(managed_entry)))
+        if not _is_path_inside(vendor_dir, package_dir):
+            return None
+        return _normalize_version_core(str(package_json.get("version") or ""))
+
+    def _managed_codex_version_from_vendor_metadata(self, install_path: str, managed_entry: str) -> str | None:
+        vendor_dir = os.path.dirname(os.path.dirname(managed_entry))
+        metadata_path = self._safe_join(vendor_dir, "codex-package.json")
+        metadata = self._read_json_dict(metadata_path)
+        if not metadata:
+            return None
+        if str(metadata.get("variant") or "").strip() != "codex":
+            return None
+        if str(metadata.get("target") or "").strip() != "x86_64-pc-windows-msvc":
+            return None
+        entrypoint = str(metadata.get("entrypoint") or "").strip()
+        if not entrypoint:
+            return None
+        try:
+            metadata_entry = self._safe_join(vendor_dir, entrypoint)
+        except ComponentInstallError:
+            return None
+        if os.path.normcase(os.path.abspath(metadata_entry)) != os.path.normcase(os.path.abspath(managed_entry)):
+            return None
+        return _normalize_version_core(str(metadata.get("version") or ""))
+
+    def _read_json_dict(self, path: str) -> dict[str, object] | None:
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8-sig") as handle:
+                value = json.load(handle)
+        except Exception:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _json_list_contains(self, value: object, expected: str) -> bool:
+        if value is None:
+            return True
+        if not isinstance(value, list):
+            return False
+        normalized_expected = expected.strip().lower()
+        return any(str(item).strip().lower() == normalized_expected for item in value)
 
     def _resolve_command(self, command: list[str]) -> list[str]:
         if not command:
@@ -1753,6 +1837,14 @@ def _short_error(error: object, *, limit: int = 160) -> str:
     if not text:
         return "没有错误输出"
     return text if len(text) <= limit else text[:limit] + "..."
+
+
+def _normalize_version_core(version: object) -> str | None:
+    text = str(version or "").strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"v?(\d+(?:\.\d+){1,3})(?:[-+][0-9A-Za-z.-]+)?", text, re.IGNORECASE)
+    return match.group(1) if match else None
 
 
 def _versions_match(expected: str | None, detected: str | None) -> bool:
