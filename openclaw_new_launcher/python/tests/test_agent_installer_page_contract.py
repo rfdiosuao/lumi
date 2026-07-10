@@ -297,7 +297,26 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("blockingPrerequisiteIssues", page_source)
         self.assertIn("repairMissingPrerequisites", page_source)
         self.assertIn("await repairMissingPrerequisites", page_source)
-        self.assertIn("const blocking = blockingPrerequisiteIssues(report)", page_source)
+        self.assertIn("const blocking = blockingPrerequisiteIssues(report, componentId)", page_source)
+
+    def test_managed_codex_only_requires_bundled_core_prerequisites(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            page_source = handle.read()
+
+        self.assertIn("COMPONENT_REQUIRED_PREREQ_IDS", page_source)
+        self.assertIn("'codex-desktop': new Set(['python_runtime', 'data_dir'])", page_source)
+        self.assertIn("requiredPrerequisiteIdsForComponent", page_source)
+        self.assertIn("ensurePreflightReady(component.id)", page_source)
+        self.assertIn("repairMissingPrerequisites(report, componentId)", page_source)
+        self.assertIn("blockingPrerequisiteIssues(report, componentId)", page_source)
+
+    def test_codex_install_retries_model_config_without_failing_the_binary_install(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            page_source = handle.read()
+
+        self.assertIn("ensureAgentModelConfig", page_source)
+        self.assertIn("loomClient.components.applyModelConfig", page_source)
+        self.assertIn("Codex 已安装，但模型配置尚未就绪", page_source)
 
 
 if __name__ == "__main__":

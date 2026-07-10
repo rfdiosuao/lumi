@@ -33,6 +33,13 @@ const FALLBACK_COMPONENTS: Record<string, { name: string; description: string; c
 };
 
 const PREREQ_IDS = ['python_runtime', 'node', 'npm', 'git', 'git_bash', 'uv', 'webview2', 'data_dir'];
+const COMPONENT_REQUIRED_PREREQ_IDS: Record<string, Set<string>> = {
+  'codex-desktop': new Set(['python_runtime', 'data_dir']),
+  'claude-code': new Set(['python_runtime', 'node', 'data_dir']),
+  opencode: new Set(['python_runtime', 'data_dir']),
+  'openclaw-companion': new Set(['python_runtime', 'node', 'data_dir']),
+  hermes: new Set(['python_runtime', 'data_dir']),
+};
 const MODEL_CONFIG_COMPONENT_IDS = new Set(['codex-desktop', 'claude-code', 'openclaw-companion']);
 const INSTALL_LOG_VISIBLE_LIMIT = 6;
 const OPENCLAW_WEB_URL = 'http://127.0.0.1:18790';
@@ -194,12 +201,22 @@ function prerequisiteSummary(checks: DiagnosticCheck[]): { ready: number; total:
   };
 }
 
-function prerequisiteNeedsRepair(report: DiagnosticReport | null): boolean {
-  return prerequisiteChecks(report).some((check) => check.status === 'fail' || (check.status === 'warn' && Boolean(check.repairable)));
+function requiredPrerequisiteIdsForComponent(componentId?: string): Set<string> {
+  return COMPONENT_REQUIRED_PREREQ_IDS[componentId || ''] || new Set(PREREQ_IDS);
 }
 
-function blockingPrerequisiteIssues(report: DiagnosticReport | null): DiagnosticCheck[] {
-  return prerequisiteChecks(report).filter((check) => check.status === 'fail');
+function componentPrerequisiteChecks(report: DiagnosticReport | null, componentId?: string): DiagnosticCheck[] {
+  const requiredIds = requiredPrerequisiteIdsForComponent(componentId);
+  return prerequisiteChecks(report).filter((check) => requiredIds.has(check.id));
+}
+
+function prerequisiteNeedsRepair(report: DiagnosticReport | null, componentId?: string): boolean {
+  return componentPrerequisiteChecks(report, componentId)
+    .some((check) => check.status === 'fail' || (check.status === 'warn' && Boolean(check.repairable)));
+}
+
+function blockingPrerequisiteIssues(report: DiagnosticReport | null, componentId?: string): DiagnosticCheck[] {
+  return componentPrerequisiteChecks(report, componentId).filter((check) => check.status === 'fail');
 }
 
 function isWorking(status: string): boolean {
@@ -956,12 +973,12 @@ export const AgentInstallerPage: React.FC = () => {
     }
   }, []);
 
-  const repairMissingPrerequisites = React.useCallback(async (currentReport: DiagnosticReport | null): Promise<DiagnosticReport> => {
-    if (!prerequisiteNeedsRepair(currentReport)) {
+  const repairMissingPrerequisites = React.useCallback(async (currentReport: DiagnosticReport | null, componentId?: string): Promise<DiagnosticReport> => {
+    if (!prerequisiteNeedsRepair(currentReport, componentId)) {
       return currentReport as DiagnosticReport;
     }
     if (currentReport?.repairAvailable === false) {
-      const blocking = blockingPrerequisiteIssues(currentReport);
+      const blocking = blockingPrerequisiteIssues(currentReport, componentId);
       const names = blocking.map((check) => check.label || check.id).join('、') || '必要环境';
       throw new Error(`前置环境未就绪：${names}。请使用完整安装包或手动安装后重新检测。`);
     }
@@ -972,7 +989,7 @@ export const AgentInstallerPage: React.FC = () => {
       const report = repaired.diagnostics;
       setPreflight(report);
       saveCachedPreflight(report);
-      const blocking = blockingPrerequisiteIssues(report);
+      const blocking = blockingPrerequisiteIssues(report, componentId);
       if (blocking.length) {
         const names = blocking.map((check) => check.label || check.id).join('、');
         throw new Error(`前置环境仍未就绪：${names}。请查看检测详情后重试。`);
@@ -1034,7 +1051,7 @@ export const AgentInstallerPage: React.FC = () => {
     void refreshModelConfig(selected.id);
   }, [refreshModelConfig, selected?.id, selected?.status]);
 
-  const ensurePreflightReady = async (): Promise<DiagnosticReport | null> => {
+  const ensurePreflightReady = async (componentId?: string): Promise<DiagnosticReport | null> => {
     const cached = loadCachedPreflight();
     const reusablePreflight = preflightCacheUsable(preflight) ? preflight : cached;
     let report: DiagnosticReport | null = reusablePreflight;
@@ -1059,13 +1076,33 @@ export const AgentInstallerPage: React.FC = () => {
       }
     }
 
-    report = await repairMissingPrerequisites(report);
-    const blocking = blockingPrerequisiteIssues(report);
+    report = await repairMissingPrerequisites(report, componentId);
+    const blocking = blockingPrerequisiteIssues(report, componentId);
     if (blocking.length) {
       const names = blocking.map((check) => check.label || check.id).join('、');
       throw new Error(`前置环境未就绪：${names}。请先点“一键补齐”或查看检测详情。`);
     }
     return report;
+  };
+
+  const ensureAgentModelConfig = async (component: ComponentSummary): Promise<AgentModelConfigStatus | null> => {
+    if (!supportsModelConfig(component)) return null;
+    let status = (await loomClient.components.modelConfigStatus(component.id)).status;
+    setModelConfigs((current) => ({ ...current, [component.id]: status }));
+    if (status.configured || component.id !== 'codex-desktop') return status;
+
+    const candidateModel = status.expectedModel || status.model || status.availableModels?.[0] || '';
+    if (!candidateModel) return status;
+    try {
+      status = (await loomClient.components.applyModelConfig({ componentId: component.id, model: candidateModel })).status;
+      setModelConfigs((current) => ({ ...current, [component.id]: status }));
+      setModelDrafts((current) => ({ ...current, [component.id]: status.model || candidateModel }));
+      pushLog('Codex 模型配置已自动校验并写入', 'ok', component.id);
+    } catch (error: any) {
+      const message = loomErrorText(error, 'Codex 模型配置自动修复失败');
+      pushLog(message, 'warning', component.id);
+    }
+    return status;
   };
 
   const prepareComponent = async (
@@ -1094,7 +1131,7 @@ export const AgentInstallerPage: React.FC = () => {
     try {
       showToast(`开始处理 ${component.name}：检测前置环境`, 'info');
       pushLog(`开始处理 ${component.name}：检测前置环境`, 'neutral', component.id);
-      await ensurePreflightReady();
+      await ensurePreflightReady(component.id);
 
       let next: ComponentSnapshot | null = null;
       try {
@@ -1123,7 +1160,16 @@ export const AgentInstallerPage: React.FC = () => {
         throw new Error(current?.errorMessage || `${component.name} 安装后仍未就绪，请打开诊断查看原因`);
       }
 
+      const modelStatus = await ensureAgentModelConfig(component);
+      const codexModelPending = component.id === 'codex-desktop' && !modelStatus?.configured;
+
       if (autoStart) {
+        if (codexModelPending) {
+          const pendingMessage = 'Codex 已安装，但模型配置尚未就绪。请先登录模型账号或填写第三方模型，再点击启动。';
+          pushLog(pendingMessage, 'warning', component.id);
+          showToast(pendingMessage, 'info');
+          return;
+        }
         const started = await loomClient.components.start(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
         setSnapshot(started);
         pushLog(`${component.name} 已检测、安装并启动`, 'ok', component.id);
@@ -1270,6 +1316,10 @@ export const AgentInstallerPage: React.FC = () => {
     setBusyAction('start');
     try {
       pushLog(`开始启动 ${component.name}`, 'neutral', component.id);
+      const modelStatus = await ensureAgentModelConfig(component);
+      if (component.id === 'codex-desktop' && !modelStatus?.configured) {
+        throw new Error('Codex 已安装，但模型配置尚未就绪。请先登录模型账号或填写第三方模型。');
+      }
       const next = await loomClient.components.start(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
       setSnapshot(next);
       if (supportsModelConfig(component)) void refreshModelConfig(component.id);

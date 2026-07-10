@@ -519,10 +519,12 @@ class WireServiceTests(unittest.TestCase):
 
             status = service.agent_model_config_status("codex-desktop")
 
-            self.assertFalse(status["configured"])
-            self.assertEqual(status["status"], "unconfigured")
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["status"], "configured_with_warning")
             self.assertEqual(status["expectedModel"], "qwen3.7-plus")
-            self.assertEqual(status["actualModel"], "gpt-5.5")
+            self.assertEqual(status["actualModel"], "qwen3.7-plus")
+            self.assertEqual(status["userActualModel"], "gpt-5.5")
+            self.assertFalse(status["userConfigSynchronized"])
 
     def test_codex_status_flags_phone_model_in_user_config_as_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -542,12 +544,47 @@ class WireServiceTests(unittest.TestCase):
 
             status = service.agent_model_config_status("codex-desktop")
 
-            self.assertFalse(status["configured"])
-            self.assertEqual(status["status"], "unconfigured")
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["status"], "configured_with_warning")
             self.assertEqual(status["expectedModel"], "qwen3.7-plus")
-            self.assertEqual(status["actualModel"], "agnes-2.0-flash")
-            self.assertEqual(status["invalidModel"], "agnes-2.0-flash")
-            self.assertIn("桌面 Agent", status["message"])
+            self.assertEqual(status["actualModel"], "qwen3.7-plus")
+            self.assertEqual(status["userActualModel"], "agnes-2.0-flash")
+            self.assertEqual(status["userInvalidModel"], "agnes-2.0-flash")
+            self.assertFalse(status["userConfigSynchronized"])
+            self.assertIn("用户 Codex", status["message"])
+
+    def test_codex_managed_config_survives_user_config_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            managed_path = os.path.join(paths.data_dir, ".codex", "config.toml")
+            user_path = os.path.join(paths.data_dir, ".codex-user", "config.toml")
+            from core import wire_config as wire_module
+
+            original_write = wire_module._write_text_with_backup
+
+            def fail_user_write(path: str, text: str) -> str:
+                if os.path.abspath(path) == os.path.abspath(user_path):
+                    raise PermissionError("simulated locked user profile")
+                return original_write(path, text)
+
+            with mock.patch("core.wire_config._write_text_with_backup", side_effect=fail_user_write):
+                result = service.sync_custom_provider(
+                    provider="OpenAI compatible",
+                    base_url="https://third.example/v1",
+                    api_key="sk-test-token-not-real",
+                    text_model="gpt-4o",
+                    targets=("codex",),
+                )
+
+            target = result["syncResults"][0]
+            self.assertTrue(target["ok"])
+            self.assertTrue(os.path.isfile(managed_path))
+            status = service.agent_model_config_status("codex-desktop")
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["status"], "configured_with_warning")
+            self.assertFalse(status["userConfigSynchronized"])
+            self.assertIn("simulated locked user profile", status["userConfigWarning"])
 
     def test_openclaw_model_sync_rejects_phone_only_model_list(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

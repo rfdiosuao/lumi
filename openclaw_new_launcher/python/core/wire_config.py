@@ -283,21 +283,23 @@ class WireService:
         user_actual_model = _desktop_text_model(user_actual_raw_model)
         invalid_actual_model = bool(actual_raw_model and not actual_model)
         invalid_user_model = bool(user_actual_raw_model and not user_actual_model)
-        invalid_model = user_actual_raw_model if invalid_user_model else actual_raw_model if invalid_actual_model else ""
+        invalid_model = actual_raw_model if invalid_actual_model else ""
         config_matches = not invalid_actual_model and (not actual_model or not expected_model or actual_model == expected_model)
-        user_config_matches = (
-            component_id != "codex-desktop"
-            or (
-                not invalid_user_model
-                and (not user_actual_model or not expected_model or user_actual_model == expected_model)
-            )
-        )
+        user_config_matches = not invalid_user_model and (not user_actual_model or not expected_model or user_actual_model == expected_model)
+        user_config_warning = _pick_text(metadata.get("userConfigWarning"))
+        if component_id == "codex-desktop" and not user_config_warning:
+            if invalid_user_model:
+                user_config_warning = "用户 Codex 配置包含非文本模型；LOOM 专用配置仍可正常使用"
+            elif user_actual_model and expected_model and user_actual_model != expected_model:
+                user_config_warning = "用户 Codex 配置与 LOOM 专用配置不一致；LOOM 启动不受影响"
+            elif user_config_path and not os.path.isfile(user_config_path):
+                user_config_warning = "用户 Codex 配置未同步；LOOM 专用配置仍可正常使用"
+        user_config_synchronized = component_id != "codex-desktop" or (not user_config_warning and user_config_matches)
         configured = bool(
             os.path.isfile(config_path)
             and metadata.get("configured")
             and expected_model
             and config_matches
-            and user_config_matches
         )
         if not wire:
             status = "no_wire"
@@ -305,12 +307,12 @@ class WireService:
         elif invalid_model:
             status = "unconfigured"
             message = "检测到手机/图像/视频模型被写入桌面 Agent，请重新写入文本模型配置"
+        elif configured and component_id == "codex-desktop" and not user_config_synchronized:
+            status = "configured_with_warning"
+            message = user_config_warning
         elif configured:
             status = "configured"
             message = "模型配置已写入"
-        elif component_id == "codex-desktop" and user_actual_model and expected_model and user_actual_model != expected_model:
-            status = "unconfigured"
-            message = "Codex 用户配置与 LOOM 当前模型不一致，请重新写入配置"
         else:
             status = "unconfigured"
             message = "可写入 LOOM 管理配置"
@@ -320,10 +322,14 @@ class WireService:
             "configured": configured,
             "status": status,
             "message": message,
-            "model": user_actual_raw_model or actual_raw_model or metadata_model or current_model,
+            "model": actual_raw_model or metadata_model or current_model,
             "expectedModel": expected_model,
-            "actualModel": user_actual_raw_model or actual_raw_model,
+            "actualModel": actual_raw_model,
+            "userActualModel": user_actual_raw_model,
             "invalidModel": invalid_model,
+            "userInvalidModel": user_actual_raw_model if invalid_user_model else "",
+            "userConfigSynchronized": user_config_synchronized,
+            "userConfigWarning": user_config_warning,
             "provider": _pick_text(wire.get("provider")) if isinstance(wire, dict) else "",
             "baseUrl": _pick_text(wire.get("baseUrl")) if isinstance(wire, dict) else "",
             "managedBy": _wire_managed_by(wire) if isinstance(wire, dict) else "",
@@ -360,6 +366,7 @@ class WireService:
         backup_path = _write_text_with_backup(config_path, config_text)
         user_config_path = ""
         user_backup_path = ""
+        user_config_warning = ""
         if component_id == "codex-desktop":
             user_config_path = _user_codex_config_path(self.paths)
             existing_user_config = _read_text(user_config_path) if os.path.isfile(user_config_path) else ""
@@ -372,10 +379,9 @@ class WireService:
             )
             try:
                 user_backup_path = _write_text_with_backup(user_config_path, user_config_text)
-            except Exception:
-                if backup_path and os.path.isfile(backup_path):
-                    _restore_text(config_path, _read_text(backup_path))
-                raise
+            except Exception as exc:
+                user_config_warning = _redact_secret_text(str(exc)) or "用户 Codex 配置写入失败"
+                self.append_log(f"[Wire] optional Codex user config sync failed: {user_config_warning}\n")
         metadata = {
             "componentId": component_id,
             "configured": True,
@@ -387,6 +393,8 @@ class WireService:
             "userConfigPath": user_config_path,
             "backupPath": backup_path or self._agent_config_metadata(component_id).get("backupPath") or "",
             "userBackupPath": user_backup_path or self._agent_config_metadata(component_id).get("userBackupPath") or "",
+            "userConfigSynchronized": not bool(user_config_warning),
+            "userConfigWarning": user_config_warning,
             "updatedAt": _iso_now(),
         }
         write_json(self._agent_config_metadata_path(component_id), metadata)

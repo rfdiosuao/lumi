@@ -98,6 +98,17 @@ class AccountUiContractTests(unittest.TestCase):
         self.assertIn("await licenseApi.activate(code)", source)
         self.assertIn("await checkLicense()", source)
 
+    def test_login_surfaces_codex_model_sync_failures_instead_of_claiming_full_success(self) -> None:
+        with open(LICENSE_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+        with open(API_FILE, "r", encoding="utf-8") as handle:
+            api_source = handle.read()
+
+        self.assertIn("failedSyncResults", source)
+        self.assertIn("Codex 模型配置未完成", source)
+        self.assertIn("resp.syncResults", source)
+        self.assertIn("syncResults?: Array", api_source)
+
 
 if __name__ == "__main__":
     unittest.main()

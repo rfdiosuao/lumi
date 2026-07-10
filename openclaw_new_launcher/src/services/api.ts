@@ -598,13 +598,13 @@ export const accountApi = {
     api('/api/account/email-code/login', 'POST', params),
   register: (params: { email: string; password: string; code: string; baseUrl?: string }): Promise<{ account: AccountSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
     api('/api/account/register', 'POST', params),
-  login: (params: { email?: string; username?: string; password: string; baseUrl?: string; apiToken?: string }): Promise<{ account: AccountSnapshot }> =>
+  login: (params: { email?: string; username?: string; password: string; baseUrl?: string; apiToken?: string }): Promise<{ account: AccountSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
     api('/api/account/login', 'POST', params),
-  bindTicket: (params: { ticket: string; baseUrl?: string }): Promise<{ account: AccountSnapshot }> =>
+  bindTicket: (params: { ticket: string; baseUrl?: string }): Promise<{ account: AccountSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
     api('/api/account/bind-ticket', 'POST', params),
-  sync: (): Promise<{ account: AccountSnapshot }> => api('/api/account/sync', 'POST'),
+  sync: (): Promise<{ account: AccountSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> => api('/api/account/sync', 'POST'),
   subscription: (): Promise<{ subscription: AccountSubscriptionSnapshot }> => api('/api/account/subscription'),
-  selectModels: (params: { textModel?: string; imageModel?: string; videoModel?: string }): Promise<{ account: AccountSnapshot }> =>
+  selectModels: (params: { textModel?: string; imageModel?: string; videoModel?: string }): Promise<{ account: AccountSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
     api('/api/account/models/select', 'POST', params),
   logout: (): Promise<{ account: AccountSnapshot; loggedOut?: boolean }> => api('/api/account/logout', 'POST'),
 };

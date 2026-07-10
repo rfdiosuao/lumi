@@ -16,6 +16,7 @@ const DEFAULT_BASE_URL = 'https://api.heang.top';
 const DEFAULT_ACCOUNT_CENTER_URL = `${DEFAULT_BASE_URL}/wallet`;
 
 type AuthMode = 'email' | 'password' | 'register';
+type RuntimeSyncResult = { target?: string; ok?: boolean; error?: string };
 
 const SUBSCRIPTION_PLANS = [
   {
@@ -63,6 +64,10 @@ function errorMessage(error: unknown): string {
 function modelTotal(account: AccountSnapshot | null): number {
   const models = account?.models || {};
   return (models.text?.length || 0) + (models.image?.length || 0) + (models.video?.length || 0);
+}
+
+function failedSyncResults(results?: RuntimeSyncResult[]): RuntimeSyncResult[] {
+  return (results || []).filter((item) => item.ok === false);
 }
 
 function displayValue(value: unknown, fallback = '暂无'): string {
@@ -233,12 +238,24 @@ export const LicensePage: React.FC = () => {
     }
   };
 
-  const finishLogin = async (next: AccountSnapshot | null, message: string) => {
+  const finishLogin = async (next: AccountSnapshot | null, message: string, syncResults?: RuntimeSyncResult[]) => {
     applyAccount(next);
     setPassword('');
     setEmailCode('');
-    setStatusText(message);
-    showToast(message, 'success');
+    const failures = failedSyncResults(syncResults);
+    const codexFailure = failures.find((item) => item.target === 'codex');
+    if (codexFailure) {
+      const warning = `登录成功，但 Codex 模型配置未完成：${codexFailure.error || '请前往安装页重新写入模型配置'}`;
+      setStatusText(warning);
+      showToast(warning, 'info');
+    } else if (failures.length) {
+      const warning = `登录成功，但有 ${failures.length} 项运行配置待修复。可在安装页重新检测。`;
+      setStatusText(warning);
+      showToast(warning, 'info');
+    } else {
+      setStatusText(message);
+      showToast(message, 'success');
+    }
     await loadSubscription(true);
   };
 
@@ -256,7 +273,7 @@ export const LicensePage: React.FC = () => {
         ? { email: name, password, baseUrl: DEFAULT_BASE_URL }
         : { username: name, password, baseUrl: DEFAULT_BASE_URL };
       const resp = await accountApi.login(loginPayload);
-      await finishLogin(resp.account || null, '登录成功，模型已同步');
+      await finishLogin(resp.account || null, '登录成功，模型已同步', resp.syncResults);
     } catch (error) {
       const message = errorMessage(error);
       setStatusText(message);
@@ -280,7 +297,7 @@ export const LicensePage: React.FC = () => {
         code: emailCode.trim(),
         baseUrl: DEFAULT_BASE_URL,
       });
-      await finishLogin(resp.account || null, '登录成功，模型已同步');
+      await finishLogin(resp.account || null, '登录成功，模型已同步', resp.syncResults);
     } catch (error) {
       const message = errorMessage(error);
       setStatusText(message);
@@ -308,7 +325,7 @@ export const LicensePage: React.FC = () => {
         code: emailCode.trim(),
         baseUrl: DEFAULT_BASE_URL,
       });
-      await finishLogin(resp.account || null, '注册成功，模型已同步');
+      await finishLogin(resp.account || null, '注册成功，模型已同步', resp.syncResults);
     } catch (error) {
       const message = errorMessage(error);
       setStatusText(message);
