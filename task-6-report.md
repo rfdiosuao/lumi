@@ -6,23 +6,23 @@ Scope: installer performance harness, release verification contract, final valid
 
 ## Changes
 
-- Added `openclaw_new_launcher/scripts/measure-installer-performance.ps1`.
-- Extended `openclaw_new_launcher/python/tests/test_release_scripts_contract.py` with Task 6 contract coverage.
-- Recorded validation outcomes for syntax, contract test, benchmark, and `-ValidateOnly`.
+- Updated `openclaw_new_launcher/scripts/measure-installer-performance.ps1` to report explicit performance gates instead of release-ready wording.
+- Hardened the benchmark tar extraction path handling so every archive member must stay under the temporary `install_path`.
+- Extended `openclaw_new_launcher/python/tests/test_release_scripts_contract.py` with Task 6 contract coverage for performance gate naming, validate-only semantics, and tar member validation.
 
 ## Safety Notes
 
 - No real account login, bulk outreach, upload, or release publish was triggered.
 - The benchmark uses quick prerequisite diagnostics plus a temporary managed Codex detection workspace.
-- `-ValidateOnly` checks release inputs without invoking a real NSIS build.
+- `performanceGate`, `onlinePerformanceGate`, and `completePerformanceGate` describe only benchmark status. They do not claim a real release is ready.
+- `releaseValidation` is the only field that reports `build-dual-nsis.ps1 -ValidateOnly` input checks, and that validation runs only when `-ValidateOnly` is passed.
 - `-Simulate` is available for contract/demo runs without touching local release assets.
 
 ## Verification
 
 - PowerShell script syntax/execution: `measure-installer-performance.ps1 -ValidateOnly`
 - Contract test: `openclaw_new_launcher/python/tests/test_release_scripts_contract.py`
-- Benchmark: `measure-installer-performance.ps1`
-- Validate-only release readiness: `measure-installer-performance.ps1 -ValidateOnly`
+- Validate-only release input validation: `measure-installer-performance.ps1 -ValidateOnly`
 
 ## Benchmark Summary
 
@@ -33,8 +33,10 @@ Scope: installer performance harness, release verification contract, final valid
   - `npmCalls`
   - `prerequisiteBudgetPassed`
   - `codexBudgetPassed`
-  - `onlineReadiness`
-  - `completeReadiness`
+  - `performanceGate`
+  - `onlinePerformanceGate`
+  - `completePerformanceGate`
+  - `releaseValidation`
 
 - Success rule:
   - prerequisite check <= 2000 ms
@@ -42,8 +44,8 @@ Scope: installer performance harness, release verification contract, final valid
   - `appxCalls == 0`
   - `npmCalls == 0`
 
-## Ready For Review
+## Notes
 
 - Script is release-safe by default.
 - Output can be redirected with `-OutputPath`.
-- Complete-package readiness is validated against the local Codex seed package and `build-dual-nsis.ps1 -ValidateOnly`.
+- `build-dual-nsis.ps1 -ValidateOnly` is used only for explicit release input validation and is reported through `releaseValidation`.

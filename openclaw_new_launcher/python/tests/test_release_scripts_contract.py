@@ -95,7 +95,7 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn("Assert-OutputPathAvailable -Path $completeOutputPath", source)
         self.assertIn("Test-Path -LiteralPath $Path", source)
 
-    def test_measure_installer_performance_script_reports_budgets_and_readiness(self) -> None:
+    def test_measure_installer_performance_script_reports_budgets_and_performance_gates(self) -> None:
         source = read_launcher_script("measure-installer-performance.ps1")
 
         self.assertIn("PrerequisiteBudgetMs", source)
@@ -106,12 +106,14 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn('"codexDetectMs"', source)
         self.assertIn('"appxCalls"', source)
         self.assertIn('"npmCalls"', source)
-        self.assertIn('"onlineReadiness"', source)
-        self.assertIn('"completeReadiness"', source)
+        self.assertIn('"performanceGate"', source)
+        self.assertIn('"onlinePerformanceGate"', source)
+        self.assertIn('"completePerformanceGate"', source)
+        self.assertIn('"releaseValidation"', source)
         self.assertIn("diagnose_prerequisites()", source)
         self.assertIn("installer.detect(codex_component", source)
 
-    def test_measure_installer_performance_script_validate_only_checks_dual_nsis_readiness(self) -> None:
+    def test_measure_installer_performance_script_validate_only_checks_dual_nsis_inputs_only(self) -> None:
         source = read_launcher_script("measure-installer-performance.ps1")
 
         self.assertIn('if ($ValidateOnly) {', source)
@@ -119,6 +121,8 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn("-ValidateOnly", source)
         self.assertIn("dual-nsis-validateonly-failed", source)
         self.assertIn("Resolve-CodexPackagePath", source)
+        self.assertIn("Input validation only runs when measure-installer-performance.ps1 is called with -ValidateOnly.", source)
+        self.assertIn('$result.releaseValidation = [pscustomobject]@{', source)
 
     def test_measure_installer_performance_script_avoids_real_release_side_effects(self) -> None:
         source = read_launcher_script("measure-installer-performance.ps1")
@@ -128,6 +132,18 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertNotIn("Invoke-WebRequest", source)
         self.assertNotIn("Start-BitsTransfer", source)
         self.assertNotIn("upload", source.lower())
+
+    def test_measure_installer_performance_script_validates_tar_members_before_extracting(self) -> None:
+        source = read_launcher_script("measure-installer-performance.ps1")
+
+        self.assertIn("def _validate_archive_members", source)
+        self.assertIn("pathlib.PurePosixPath", source)
+        self.assertIn('if ".." in pure_member.parts:', source)
+        self.assertIn("os.path.commonpath([install_root, destination_path]) != install_root", source)
+        self.assertLess(
+            source.index("_validate_archive_members(archive, install_path)"),
+            source.index("archive.extractall(install_path)"),
+        )
 
     def test_online_installer_requires_package_inputs_instead_of_old_defaults(self) -> None:
         source = read_script("build-online-exe-installer.ps1")

@@ -126,6 +126,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import tarfile
@@ -164,12 +165,63 @@ def _result_template() -> dict:
         "codexBudgetMs": codex_budget_ms,
         "prerequisiteBudgetPassed": None,
         "codexBudgetPassed": None,
-        "onlineReadiness": {"verdict": "unknown", "detail": ""},
-        "completeReadiness": {"verdict": "unknown", "detail": ""},
+        "performanceGate": {"verdict": "unknown", "detail": ""},
+        "onlinePerformanceGate": {"verdict": "unknown", "detail": ""},
+        "completePerformanceGate": {"verdict": "unknown", "detail": ""},
+        "releaseValidation": {
+            "verdict": "not_run",
+            "detail": "Input validation only runs when measure-installer-performance.ps1 is called with -ValidateOnly.",
+        },
         "managedCodexVersion": None,
         "exitCode": 0,
         "failures": [],
     }
+
+
+def _update_performance_gate(result: dict) -> None:
+    online_verdict = result["onlinePerformanceGate"]["verdict"]
+    complete_verdict = result["completePerformanceGate"]["verdict"]
+    if online_verdict == "blocked" or complete_verdict == "blocked":
+        result["performanceGate"] = {
+            "verdict": "blocked",
+            "detail": "One or more installer performance checks exceeded the allowed limits.",
+        }
+    elif online_verdict == "simulated" and complete_verdict == "simulated":
+        result["performanceGate"] = {
+            "verdict": "simulated",
+            "detail": "Simulation mode skipped the real installer performance measurements.",
+        }
+    elif online_verdict == "not_run" and complete_verdict == "not_run":
+        result["performanceGate"] = {
+            "verdict": "not_run",
+            "detail": "Validate-only mode resolved inputs without running installer performance benchmarks.",
+        }
+    elif online_verdict == "ready" and complete_verdict == "ready":
+        result["performanceGate"] = {
+            "verdict": "ready",
+            "detail": "All installer performance checks stayed within the configured limits.",
+        }
+    else:
+        result["performanceGate"] = {
+            "verdict": "unknown",
+            "detail": "Installer performance checks did not reach a final verdict.",
+        }
+
+
+def _validate_archive_members(archive: tarfile.TarFile, install_path: str) -> None:
+    install_root = os.path.abspath(install_path)
+    for member in archive.getmembers():
+        member_name = member.name
+        pure_member = pathlib.PurePosixPath(member_name)
+        if pure_member.is_absolute():
+            raise ValueError(f"Unsafe archive member path: {member_name}")
+        if pure_member.drive:
+            raise ValueError(f"Unsafe archive member path: {member_name}")
+        if ".." in pure_member.parts:
+            raise ValueError(f"Unsafe archive member path: {member_name}")
+        destination_path = os.path.abspath(os.path.normpath(os.path.join(install_root, *pure_member.parts)))
+        if os.path.commonpath([install_root, destination_path]) != install_root:
+            raise ValueError(f"Unsafe archive member path: {member_name}")
 
 
 result = _result_template()
@@ -182,14 +234,16 @@ if simulate:
     result["prerequisiteBudgetPassed"] = True
     result["codexBudgetPassed"] = True
     result["managedCodexVersion"] = codex_component.version
-    result["onlineReadiness"] = {"verdict": "simulated", "detail": "Simulation mode skipped real prerequisite and Codex detection."}
-    result["completeReadiness"] = {"verdict": "simulated", "detail": "Simulation mode skipped seed verification and release validation."}
+    result["onlinePerformanceGate"] = {"verdict": "simulated", "detail": "Simulation mode skipped the prerequisite performance check."}
+    result["completePerformanceGate"] = {"verdict": "simulated", "detail": "Simulation mode skipped the managed Codex detection performance check."}
+    _update_performance_gate(result)
     print(json.dumps(result, ensure_ascii=False))
     raise SystemExit(0)
 
 if validate_only:
-    result["onlineReadiness"] = {"verdict": "ready", "detail": "Performance harness inputs resolved without running benchmarks."}
-    result["completeReadiness"] = {"verdict": "ready", "detail": "Codex package path resolved for release validation."}
+    result["onlinePerformanceGate"] = {"verdict": "not_run", "detail": "Validate-only mode resolved inputs without running the prerequisite benchmark."}
+    result["completePerformanceGate"] = {"verdict": "not_run", "detail": "Validate-only mode resolved the Codex package path without running managed Codex detection."}
+    _update_performance_gate(result)
     print(json.dumps(result, ensure_ascii=False))
     raise SystemExit(0)
 
@@ -210,6 +264,7 @@ with tempfile.TemporaryDirectory(prefix="loom-installer-perf-") as temp_dir:
     install_path = os.path.join(codex_base, codex_component.install_path)
     os.makedirs(install_path, exist_ok=True)
     with tarfile.open(codex_package_path, mode="r:gz") as archive:
+        _validate_archive_members(archive, install_path)
         archive.extractall(install_path)
 
     runner_counts = {"appx": 0, "npm": 0}
@@ -251,17 +306,18 @@ with tempfile.TemporaryDirectory(prefix="loom-installer-perf-") as temp_dir:
     result["appxCalls"] = runner_counts["appx"]
     result["npmCalls"] = runner_counts["npm"]
     result["managedCodexVersion"] = state.version
-    result["onlineReadiness"] = {
+    result["onlinePerformanceGate"] = {
         "verdict": "ready" if result["prerequisiteBudgetPassed"] else "blocked",
         "detail": f"Quick prerequisite check completed in {prerequisite_ms} ms.",
     }
-    result["completeReadiness"] = {
+    result["completePerformanceGate"] = {
         "verdict": "ready" if result["codexBudgetPassed"] and result["appxCalls"] == 0 and result["npmCalls"] == 0 else "blocked",
         "detail": (
             f"Managed Codex detect completed in {codex_detect_ms} ms with "
             f"{result['appxCalls']} Appx calls and {result['npmCalls']} npm calls."
         ),
     }
+    _update_performance_gate(result)
 
     if not result["prerequisiteBudgetPassed"]:
         result["failures"].append(f"prerequisiteMs>{prerequisite_budget_ms}")
@@ -335,20 +391,18 @@ if ($ValidateOnly) {
             -OutputRoot $tempOutputRoot `
             -ValidateOnly 2>&1
         if ($LASTEXITCODE -ne 0) {
-            $result.onlineReadiness = [pscustomobject]@{
+            $detail = (($validationOutput | Out-String).Trim())
+            $result.releaseValidation = [pscustomobject]@{
                 verdict = "blocked"
-                detail = (($validationOutput | Out-String).Trim())
-            }
-            $result.completeReadiness = [pscustomobject]@{
-                verdict = "blocked"
-                detail = (($validationOutput | Out-String).Trim())
+                detail = $detail
             }
             $result.exitCode = 1
             $result.failures += "dual-nsis-validateonly-failed"
         } else {
-            $detail = "build-dual-nsis.ps1 -ValidateOnly passed."
-            $result.onlineReadiness = [pscustomobject]@{ verdict = "ready"; detail = $detail }
-            $result.completeReadiness = [pscustomobject]@{ verdict = "ready"; detail = $detail }
+            $result.releaseValidation = [pscustomobject]@{
+                verdict = "ready"
+                detail = "build-dual-nsis.ps1 -ValidateOnly passed."
+            }
         }
     } finally {
         if (Test-Path -LiteralPath $tempOutputRoot) {
