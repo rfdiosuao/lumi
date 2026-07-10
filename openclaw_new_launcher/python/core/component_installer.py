@@ -496,6 +496,9 @@ class ComponentInstaller:
                     on_progress(f"使用已验证本地缓存：{component.name}", "neutral")
                 return verified_path
             self._remove_path(verified_path)
+        seeded_path = self._copy_verified_local_seed_to_cache(component, verified_path, on_progress=on_progress)
+        if seeded_path:
+            return seeded_path
 
         errors = []
         for url_index, url in enumerate(component.urls):
@@ -553,6 +556,67 @@ class ComponentInstaller:
         if on_progress is None:
             return None
         return lambda detail: on_progress(f"下载 {component.name}，{detail}", "neutral")
+
+    def _copy_verified_local_seed_to_cache(
+        self,
+        component: ReleaseComponent,
+        verified_path: str,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> str | None:
+        for seed_path in self._local_seed_candidates(component):
+            try:
+                if os.path.getsize(seed_path) != component.size:
+                    if on_progress:
+                        on_progress(f"忽略未通过校验的本地预置包：{seed_path}", "warning")
+                    continue
+                digest = _sha256_file(seed_path)
+            except OSError:
+                continue
+            if digest.lower() != component.sha256.lower():
+                if on_progress:
+                    on_progress(f"忽略未通过校验的本地预置包：{seed_path}", "warning")
+                continue
+            shutil.copy2(seed_path, verified_path)
+            if on_progress:
+                on_progress(f"使用已验证本地预置包：{component.name}", "neutral")
+            return verified_path
+        return None
+
+    def _local_seed_candidates(self, component: ReleaseComponent) -> list[str]:
+        candidates: list[str] = []
+        expected_names: list[str] = []
+        for url in component.urls:
+            basename = os.path.basename(str(url).split("?", 1)[0].rstrip("/"))
+            if basename:
+                expected_names.append(basename)
+        for seed_dir in self._local_seed_directories(component):
+            if not os.path.isdir(seed_dir):
+                continue
+            for name in expected_names:
+                path = os.path.join(seed_dir, name)
+                if os.path.isfile(path):
+                    _append_unique(candidates, path)
+            try:
+                entries = sorted(os.listdir(seed_dir))
+            except OSError:
+                continue
+            for entry in entries:
+                path = os.path.join(seed_dir, entry)
+                if os.path.isfile(path):
+                    _append_unique(candidates, path)
+        return candidates
+
+    def _local_seed_directories(self, component: ReleaseComponent) -> list[str]:
+        component_dir = component.component_id
+        directories: list[str] = []
+        for base in (
+            os.path.join(self.base_path, "redist", "components"),
+            os.path.join(self.base_path, "_up_", "redist", "components"),
+            os.path.join(os.path.dirname(self.base_path), "redist", "components"),
+        ):
+            _append_unique(directories, os.path.join(base, component_dir))
+        return directories
 
     def _extract(self, component: ReleaseComponent, package_path: str, staging_path: str) -> None:
         if component.archive_type == "tgz":

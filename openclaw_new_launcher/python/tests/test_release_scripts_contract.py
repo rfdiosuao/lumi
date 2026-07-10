@@ -16,6 +16,50 @@ def read_script(name: str) -> str:
 
 
 class ReleaseScriptsContractTests(unittest.TestCase):
+    def test_dual_nsis_script_declares_validate_only_and_distinct_outputs(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertIn("CodexPackagePath", source)
+        self.assertIn("OutputRoot", source)
+        self.assertIn("ValidateOnly", source)
+        self.assertIn("-online-setup.exe", source)
+        self.assertIn("-complete-setup.exe", source)
+        self.assertIn(".sha256.txt", source)
+
+    def test_dual_nsis_script_parses_manifest_and_validates_codex_seed(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertIn("release-manifest.json", source)
+        self.assertIn("ConvertFrom-Json", source)
+        self.assertIn('component.id -eq "codex-desktop"', source)
+        self.assertIn("Get-FileHash", source)
+        self.assertIn("$codexComponent.size", source)
+        self.assertIn("$codexComponent.sha256", source)
+
+    def test_dual_nsis_script_builds_online_before_seed_injection_and_cleans_up_in_finally(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertIn("try {", source)
+        self.assertIn("finally {", source)
+        self.assertIn("redist\\components\\codex-desktop", source)
+        self.assertIn("npm run tauri -- build -- --bundles nsis", source)
+        self.assertLess(
+            source.index('Build-InstallerVariant -VariantName "online"'),
+            source.index('Copy-Item -LiteralPath $resolvedCodexPackagePath -Destination $seedPackagePath -Force'),
+        )
+        self.assertLess(
+            source.index('Copy-Item -LiteralPath $resolvedCodexPackagePath -Destination $seedPackagePath -Force'),
+            source.index('Build-InstallerVariant -VariantName "complete"'),
+        )
+        self.assertIn("Remove-Item -LiteralPath $seedPackagePath -Force", source)
+
+    def test_dual_nsis_script_preserves_existing_release_outputs(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertNotIn("Remove-Item -LiteralPath $OutputRoot -Recurse", source)
+        self.assertNotIn("Remove-Item -Path $OutputRoot -Recurse", source)
+        self.assertIn("Copy-Item -LiteralPath $builtInstaller.FullName -Destination $variantOutputPath -Force", source)
+
     def test_online_installer_requires_package_inputs_instead_of_old_defaults(self) -> None:
         source = read_script("build-online-exe-installer.ps1")
 

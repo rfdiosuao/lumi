@@ -303,6 +303,91 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             with open(installed_file, "rb") as handle:
                 self.assertEqual(handle.read(), payload)
 
+    def test_verified_seed_in_base_redist_avoids_fetcher(self) -> None:
+        payload = b"codex seeded payload"
+        component = make_payload_component(version="1.0.0", payload=payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=lambda _url, _timeout: self.fail("verified seed should avoid fetcher"),
+            )
+            seed_dir = os.path.join(temp_dir, "redist", "components", component.component_id)
+            os.makedirs(seed_dir, exist_ok=True)
+            seed_path = os.path.join(seed_dir, "codex-verified.tgz")
+            with open(seed_path, "wb") as handle:
+                handle.write(payload)
+
+            state = installer.install(component, job_id="job_seed_base")
+
+            self.assertEqual(state.status, "manual_install_required")
+            cache_path = installer._verified_cache_path(component)
+            self.assertTrue(os.path.isfile(cache_path))
+            with open(cache_path, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
+
+    def test_verified_seed_in_parent_redist_avoids_fetcher(self) -> None:
+        payload = b"codex parent seeded payload"
+        component = make_payload_component(version="1.0.0", payload=payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_path = os.path.join(temp_dir, "LOOMFiles")
+            os.makedirs(base_path, exist_ok=True)
+            store = ComponentStateStore(os.path.join(base_path, "state.json"))
+            installer = ComponentInstaller(
+                base_path=base_path,
+                state_store=store,
+                fetcher=lambda _url, _timeout: self.fail("parent verified seed should avoid fetcher"),
+            )
+            seed_dir = os.path.join(temp_dir, "redist", "components", component.component_id)
+            os.makedirs(seed_dir, exist_ok=True)
+            seed_path = os.path.join(seed_dir, "codex-parent-seed.tgz")
+            with open(seed_path, "wb") as handle:
+                handle.write(payload)
+
+            state = installer.install(component, job_id="job_seed_parent")
+
+            self.assertEqual(state.status, "manual_install_required")
+            cache_path = installer._verified_cache_path(component)
+            self.assertTrue(os.path.isfile(cache_path))
+            with open(cache_path, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
+
+    def test_invalid_local_seed_warns_and_falls_back_to_fetcher(self) -> None:
+        payload = b"codex fetched payload"
+        component = make_payload_component(version="1.0.0", payload=payload)
+        progress: list[tuple[str, str]] = []
+        fetch_calls = 0
+
+        def fetcher(_url: str, _timeout: float) -> bytes:
+            nonlocal fetch_calls
+            fetch_calls += 1
+            return payload
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(base_path=temp_dir, state_store=store, fetcher=fetcher)
+            seed_dir = os.path.join(temp_dir, "_up_", "redist", "components", component.component_id)
+            os.makedirs(seed_dir, exist_ok=True)
+            seed_path = os.path.join(seed_dir, "codex-bad-seed.tgz")
+            with open(seed_path, "wb") as handle:
+                handle.write(b"bad-seed")
+
+            state = installer.install(
+                component,
+                job_id="job_seed_bad",
+                on_progress=lambda message, tone: progress.append((message, tone)),
+            )
+
+            self.assertEqual(state.status, "manual_install_required")
+            self.assertEqual(fetch_calls, 1)
+            self.assertTrue(any("本地预置包" in message and tone == "warning" for message, tone in progress))
+            installed_file = os.path.join(temp_dir, "agents", component.component_id, "Codex-Installer.exe")
+            with open(installed_file, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
+
     def test_stream_download_reports_percent_and_size(self) -> None:
         payload = (b"0123456789" * 10)
         component = make_payload_component(version="1.0.0", payload=payload)
