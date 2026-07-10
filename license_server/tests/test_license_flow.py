@@ -213,6 +213,87 @@ class LicenseServerFlowTests(unittest.TestCase):
         )
         self.assertEqual(revealed["code"], code)
 
+    def test_merchant_mixed_code_export_is_rejected_without_partial_secrets(self) -> None:
+        merchant, _ = self.server.create_account_record(
+            username="merchant-mixed-export",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        other, _ = self.server.create_account_record(
+            username="merchant-mixed-export-other",
+            password="merchant-password-456",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        session, _ = self.server.create_admin_session(merchant["accountId"])
+        owned_code = self.server.create_code_records(
+            count=1,
+            licensee="Owned Export Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant["accountId"],
+        )[0]
+        other_code = self.server.create_code_records(
+            count=1,
+            licensee="Other Export Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=other["accountId"],
+        )[0]
+
+        response = self.request_json(
+            "POST",
+            "/admin/api/codes/export",
+            payload={
+                "codeHashes": [self.server.code_hash(owned_code), self.server.code_hash(other_code)],
+                "confirmation": "EXPORT",
+            },
+            headers={"X-Admin-Session": session},
+            expected_status=404,
+        )
+
+        serialized = json.dumps(response, ensure_ascii=False)
+        self.assertNotIn("codes", response)
+        self.assertNotIn(owned_code, serialized)
+        self.assertNotIn(other_code, serialized)
+
+    def test_legacy_admin_token_can_reveal_and_export_any_merchant_code(self) -> None:
+        merchant, _ = self.server.create_account_record(
+            username="merchant-legacy-admin-access",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Legacy Admin Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+        headers = {"X-Admin-Token": "test-admin-token"}
+
+        revealed = self.request_json(
+            "POST",
+            "/admin/api/codes/reveal",
+            payload={"codeHash": code_hash_value, "confirmation": "REVEAL"},
+            headers=headers,
+        )
+        exported = self.request_json(
+            "POST",
+            "/admin/api/codes/export",
+            payload={"codeHashes": [code_hash_value], "confirmation": "EXPORT"},
+            headers=headers,
+        )
+
+        self.assertEqual(revealed["code"], code)
+        self.assertEqual(exported["codes"][0]["code"], code)
+
     def test_code_export_http_limit_is_500(self) -> None:
         admin, _ = self.server.create_account_record(
             username="admin-export-limit",
@@ -286,29 +367,71 @@ class LicenseServerFlowTests(unittest.TestCase):
             self.assertEqual(response["error"], expected_error)
             self.assertNotIn(code, json.dumps(response, ensure_ascii=False))
 
-    def test_historical_audit_rows_are_redacted_on_read(self) -> None:
+    def test_historical_audit_rows_redact_signed_license_and_member_response_tokens(self) -> None:
         code = "OC-PRO-HISTORICAL-SECRET-12345678"
-        gateway_token = "historical-gateway-token"
-        api_key = "historical-api-key"
+        secrets_by_key = {
+            "gatewayAccessToken": "historical-gateway-access-secret",
+            "gatewayToken": "historical-gateway-secret",
+            "gatewayImageAccessToken": "historical-gateway-image-access-secret",
+            "gatewayVideoAccessToken": "historical-gateway-video-access-secret",
+            "gatewayImageToken": "historical-gateway-image-secret",
+            "gatewayVideoToken": "historical-gateway-video-secret",
+            "accessToken": "historical-access-secret",
+            "token": "historical-token-secret",
+            "imageAccessToken": "historical-image-access-secret",
+            "videoAccessToken": "historical-video-access-secret",
+            "imageToken": "historical-image-secret",
+            "videoToken": "historical-video-secret",
+            "apiKey": "historical-api-key-secret",
+        }
+        signed_license = {
+            key: secrets_by_key[key]
+            for key in (
+                "gatewayAccessToken",
+                "gatewayToken",
+                "gatewayImageAccessToken",
+                "gatewayVideoAccessToken",
+                "gatewayImageToken",
+                "gatewayVideoToken",
+            )
+        }
+        response = self.server.member_response(signed_license)
+        response["gateway"].update(
+            {
+                key: secrets_by_key[key]
+                for key in (
+                    "accessToken",
+                    "token",
+                    "imageAccessToken",
+                    "videoAccessToken",
+                    "imageToken",
+                    "videoToken",
+                )
+            }
+        )
+        response["member"]["apiKey"] = secrets_by_key["apiKey"]
+        public_marker = "historical-public-token-count-marker"
         self.server.add_audit_log(
             action="legacy.secret",
             before={
                 "fullCode": code,
-                "nested": {"gatewayToken": gateway_token},
+                "signedLicense": signed_license,
             },
             after={
                 "codes": [code],
-                "items": [{"code": code, "apiKey": api_key}],
+                "memberResponse": response,
+                "metadata": {"tokenCount": public_marker},
             },
         )
 
         logs = self.server.get_audit_rows(20)
         serialized = json.dumps(logs, ensure_ascii=False)
         self.assertNotIn(code, serialized)
-        self.assertNotIn(gateway_token, serialized)
-        self.assertNotIn(api_key, serialized)
+        for key, secret in secrets_by_key.items():
+            self.assertNotIn(secret, serialized, key)
         self.assertIn("••••-12345678", serialized)
         self.assertIn("[REDACTED]", serialized)
+        self.assertIn(public_marker, serialized)
 
     def test_code_creation_audit_does_not_store_full_codes(self) -> None:
         admin, _ = self.server.create_account_record(
@@ -400,6 +523,125 @@ class LicenseServerFlowTests(unittest.TestCase):
             headers={"X-Admin-Session": session},
         )
         self.assertEqual(response["activations"], merchant_rows)
+
+    def test_activation_detail_returns_same_404_for_missing_and_cross_tenant_code(self) -> None:
+        admin, _ = self.server.create_account_record(
+            username="activation-detail-admin",
+            password="admin-password-123",
+            role=self.server.ACCOUNT_ROLE_SUPER_ADMIN,
+        )
+        merchant, _ = self.server.create_account_record(
+            username="activation-detail-owner",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        other, _ = self.server.create_account_record(
+            username="activation-detail-other",
+            password="merchant-password-456",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        admin_session, _ = self.server.create_admin_session(admin["accountId"])
+        owner_session, _ = self.server.create_admin_session(merchant["accountId"])
+        other_session, _ = self.server.create_admin_session(other["accountId"])
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Activation Detail Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+        self.server.activate_code(
+            {"code": code, "installId": "activation-detail-install", "deviceId": "activation-detail-device"}
+        )
+
+        denied = self.request_json(
+            "GET",
+            f"/admin/api/codes/activations?codeHash={code_hash_value}",
+            headers={"X-Admin-Session": other_session},
+            expected_status=404,
+        )
+        missing = self.request_json(
+            "GET",
+            f"/admin/api/codes/activations?codeHash={'f' * 64}",
+            headers={"X-Admin-Session": other_session},
+            expected_status=404,
+        )
+        owned = self.request_json(
+            "GET",
+            f"/admin/api/codes/activations?codeHash={code_hash_value}",
+            headers={"X-Admin-Session": owner_session},
+        )
+        admin_view = self.request_json(
+            "GET",
+            f"/admin/api/codes/activations?codeHash={code_hash_value}",
+            headers={"X-Admin-Session": admin_session},
+        )
+
+        self.assertEqual(denied, missing)
+        self.assertEqual(owned["activations"][0]["deviceId"], "activation-detail-device")
+        self.assertEqual(admin_view, owned)
+
+    def test_activation_delete_returns_same_404_for_missing_and_cross_tenant_record(self) -> None:
+        admin, _ = self.server.create_account_record(
+            username="activation-delete-admin",
+            password="admin-password-123",
+            role=self.server.ACCOUNT_ROLE_SUPER_ADMIN,
+        )
+        merchant, _ = self.server.create_account_record(
+            username="activation-delete-owner",
+            password="merchant-password-123",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        other, _ = self.server.create_account_record(
+            username="activation-delete-other",
+            password="merchant-password-456",
+            role=self.server.ACCOUNT_ROLE_MERCHANT,
+        )
+        admin_session, _ = self.server.create_admin_session(admin["accountId"])
+        other_session, _ = self.server.create_admin_session(other["accountId"])
+        code = self.server.create_code_records(
+            count=1,
+            licensee="Activation Delete Customer",
+            edition="pro",
+            features=["openclaw"],
+            expires=self.expires(),
+            max_activations=1,
+            owner_account_id=merchant["accountId"],
+        )[0]
+        code_hash_value = self.server.code_hash(code)
+        self.server.activate_code(
+            {"code": code, "installId": "activation-delete-install", "deviceId": "activation-delete-device"}
+        )
+        activation_id = self.server.get_activation_rows(code_hash_value)[0]["id"]
+
+        denied = self.request_json(
+            "POST",
+            "/admin/api/activations/delete",
+            payload={"id": activation_id},
+            headers={"X-Admin-Session": other_session},
+            expected_status=404,
+        )
+        missing = self.request_json(
+            "POST",
+            "/admin/api/activations/delete",
+            payload={"id": activation_id + 10000},
+            headers={"X-Admin-Session": other_session},
+            expected_status=404,
+        )
+
+        self.assertEqual(denied, missing)
+        self.assertIsNotNone(self.server.get_activation_snapshot(activation_id))
+        deleted = self.request_json(
+            "POST",
+            "/admin/api/activations/delete",
+            payload={"id": activation_id},
+            headers={"X-Admin-Session": admin_session},
+        )
+        self.assertTrue(deleted["ok"])
+        self.assertIsNone(self.server.get_activation_snapshot(activation_id))
 
     def test_new_code_expiry_must_be_after_today(self) -> None:
         with self.assertRaises(self.server.ActivationError):

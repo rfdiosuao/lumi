@@ -96,10 +96,17 @@ MAX_CODE_SECRET_EXPORT = 500
 AUDIT_SECRET_KEYS = {
     "fullcode",
     "code",
+    "accesstoken",
+    "imageaccesstoken",
+    "videoaccesstoken",
+    "imagetoken",
+    "videotoken",
     "gatewaytoken",
     "gatewayimagetoken",
     "gatewayvideotoken",
     "gatewayaccesstoken",
+    "gatewayimageaccesstoken",
+    "gatewayvideoaccesstoken",
     "apikey",
     "token",
 }
@@ -3089,23 +3096,27 @@ def activation_row_public(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def get_activation_rows(code_hash_value: str, current_account: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    owner_clause = ""
+    params: tuple[Any, ...] = (code_hash_value,)
+    if current_account and not is_super_admin_context(current_account):
+        owner_clause = "and c.owner_account_id = ?"
+        params += (context_account_id(current_account),)
     with connect() as conn:
         code_row = conn.execute(
-            "select owner_account_id from codes where code_hash = ?",
-            (code_hash_value,),
+            f"select c.owner_account_id from codes c where c.code_hash = ? {owner_clause}",
+            params,
         ).fetchone()
         if not code_row:
-            return []
-        if current_account and not code_row_owned_by_context(code_row, current_account):
-            raise ActivationError("无权查看该授权码", 403)
+            raise ActivationError("授权码不存在或无权访问", 404)
         rows = conn.execute(
-            """
-            select id, code_hash, install_id, device_id, license_json, activated_at
-            from activations
-            where code_hash = ?
-            order by activated_at desc
+            f"""
+            select a.id, a.code_hash, a.install_id, a.device_id, a.license_json, a.activated_at
+            from activations a
+            join codes c on c.code_hash = a.code_hash
+            where a.code_hash = ? {owner_clause}
+            order by a.activated_at desc
             """,
-            (code_hash_value,),
+            params,
         ).fetchall()
     return [activation_row_public(row) for row in rows]
 
@@ -3147,15 +3158,24 @@ def get_all_activation_rows(
     ]
 
 
-def get_activation_snapshot(activation_id: int) -> dict[str, Any] | None:
+def get_activation_snapshot(
+    activation_id: int,
+    current_account: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    owner_clause = ""
+    params: tuple[Any, ...] = (activation_id,)
+    if current_account and not is_super_admin_context(current_account):
+        owner_clause = "and c.owner_account_id = ?"
+        params += (context_account_id(current_account),)
     with connect() as conn:
         row = conn.execute(
-            """
-            select id, code_hash, install_id, device_id, license_json, activated_at
-            from activations
-            where id = ?
+            f"""
+            select a.id, a.code_hash, a.install_id, a.device_id, a.license_json, a.activated_at
+            from activations a
+            left join codes c on c.code_hash = a.code_hash
+            where a.id = ? {owner_clause}
             """,
-            (activation_id,),
+            params,
         ).fetchone()
     return activation_row_public(row) if row else None
 
@@ -4425,18 +4445,29 @@ class Handler(BaseHTTPRequestHandler):
                 current = self.admin_context()
                 body = self.read_json()
                 activation_id = int(body.get("id") or 0)
-                before = get_activation_snapshot(activation_id)
+                before = get_activation_snapshot(activation_id, current)
                 if before is None:
-                    self.send_json(404, {"error": "激活记录不存在"})
+                    self.send_json(404, {"error": "激活记录不存在或无权访问"})
                     return
-                if current and not is_super_admin_context(current):
-                    code_snapshot = get_code_snapshot(before["codeHash"], current)
-                    if not code_snapshot:
-                        self.send_json(403, {"error": "无权删除该激活记录"})
-                        return
                 backup_path = make_db_backup("activations-delete")
                 with connect() as conn:
-                    conn.execute("delete from activations where id = ?", (activation_id,))
+                    if current and not is_super_admin_context(current):
+                        deleted = conn.execute(
+                            """
+                            delete from activations
+                            where id = ?
+                              and code_hash in (
+                                  select code_hash from codes where owner_account_id = ?
+                              )
+                            """,
+                            (activation_id, context_account_id(current)),
+                        )
+                    else:
+                        deleted = conn.execute("delete from activations where id = ?", (activation_id,))
+                    if deleted.rowcount != 1:
+                        conn.rollback()
+                        self.send_json(404, {"error": "激活记录不存在或无权访问"})
+                        return
                     conn.commit()
                 self.audit_admin_change(
                     "activations.delete",
