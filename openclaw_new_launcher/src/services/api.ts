@@ -808,13 +808,13 @@ export const componentApi = {
   },
   detect: async (
     componentId: string,
-    options: { onProgress?: (job: BridgeJob<{ catalog?: ComponentSnapshot }>) => void } = {},
+    options: { force?: boolean; onProgress?: (job: BridgeJob<{ catalog?: ComponentSnapshot }>) => void } = {},
   ): Promise<ComponentSnapshot> => {
     const submitted = await api<{
       jobId?: string;
       job?: BridgeJob<{ catalog?: ComponentSnapshot }>;
       catalog?: ComponentSnapshot;
-    }>('/api/components/detect', 'POST', { componentId });
+    }>('/api/components/detect', 'POST', { componentId, force: options.force });
     const jobId = submitted.jobId || submitted.job?.id;
     if (jobId) {
       const job = await waitForJob<{ catalog?: ComponentSnapshot }>(jobId, { onProgress: options.onProgress });

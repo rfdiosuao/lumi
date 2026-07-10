@@ -18,7 +18,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from api.routes_components import register_component_routes, _resolve_component_for_action
+from api.routes_components import SIMULATION_COMPONENTS, register_component_routes, _resolve_component_for_action
+from core.component_state import ComponentState
 from api.routes_jobs import register_job_routes
 from services.jobs import JobManager
 
@@ -104,6 +105,39 @@ class ComponentRouteResolutionTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 403)
             self.assertIn("安装组件需要确认", response.json()["error"])
+
+    def test_detect_route_passes_force_to_external_probe_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_component_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+            force_values: list[bool] = []
+
+            class FakeInstaller:
+                def detect(self, component, *, job_id=None, on_progress=None, force_external_probe=False):
+                    force_values.append(force_external_probe)
+                    return ComponentState(component.component_id, "ready", version=component.version, job_id=job_id)
+
+            with (
+                patch(
+                    "api.routes_components._resolve_component_for_action",
+                    return_value=(
+                        SIMULATION_COMPONENTS["codex-desktop"],
+                        None,
+                    ),
+                ),
+                patch("api.routes_components._component_installer", return_value=FakeInstaller()),
+            ):
+                response = client.post("/api/components/detect", json={"componentId": "codex-desktop", "force": True})
+                self.assertEqual(response.status_code, 202)
+                job = _wait_for_job(client, response.json()["jobId"])
+
+            self.assertEqual(job["status"], "succeeded")
+            self.assertEqual(force_values, [True])
 
     def test_rollback_route_runs_through_job_manager(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

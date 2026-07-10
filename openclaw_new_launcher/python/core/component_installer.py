@@ -53,6 +53,9 @@ KNOWN_NPM_PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
 }
 
 RETRY_DELAYS_SECONDS = (0.0, 0.8, 1.6)
+EXTERNAL_ENTRY_CACHE_TTL_SECONDS = 30.0
+VERSION_DETECT_TIMEOUT_MS = 5000
+_EXTERNAL_ENTRY_CACHE: dict[tuple[object, ...], tuple[float, str | None]] = {}
 CODEX_DESKTOP_PACKAGE_NAME = "OpenAI.Codex"
 CODEX_DESKTOP_APP_ID = "App"
 PYTHON_SOURCE_CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
@@ -150,7 +153,6 @@ class ComponentInstaller:
         self.cache_dir = os.path.join(self.base_path, "data", ".installer", "cache")
         self.staging_dir = os.path.join(self.base_path, "data", ".installer", "staging")
         self.rollback_dir = os.path.join(self.base_path, "data", ".installer", "rollback")
-        self._external_entry_cache: dict[str, tuple[float, str | None]] = {}
 
     def install(
         self,
@@ -218,7 +220,7 @@ class ComponentInstaller:
                     on_progress(f"运行 {component.name} 静默安装器", "neutral")
                 self._run_silent_installer(component, install_path)
                 silent_installer_ran = True
-                self._assert_external_install_available(component)
+                self._assert_external_install_available(component, force_refresh=True)
             except Exception as exc:
                 self.state_store.mark(
                     component.component_id,
@@ -236,7 +238,7 @@ class ComponentInstaller:
                 if on_progress:
                     on_progress(f"执行 {component.name} 安装命令", "neutral")
                 self._run_install_command(component, install_path, on_progress=on_progress)
-                self._assert_external_install_available(component)
+                self._assert_external_install_available(component, force_refresh=True)
             except Exception as exc:
                 self._restore_previous_after_failed_health(install_path, previous)
                 self.state_store.mark(
@@ -296,11 +298,16 @@ class ComponentInstaller:
         *,
         job_id: str | None = None,
         on_progress: ProgressCallback | None = None,
+        force_external_probe: bool = False,
     ) -> ComponentState:
         install_path = self._safe_install_path(component.install_path)
         self._mark(component, "health_checking", job_id=job_id, on_progress=on_progress, message=f"检测 {component.name}")
         try:
-            entry_path = self._resolve_component_entry(component, install_path)
+            entry_path = self._resolve_component_entry(
+                component,
+                install_path,
+                force_external_probe=force_external_probe,
+            )
             self._assert_component_available(component, install_path, entry_path)
             if component.health_check is not None:
                 self.health_checker(component, install_path)
@@ -319,6 +326,20 @@ class ComponentInstaller:
             raise ComponentInstallError(f"detect failed for {component.component_id}: {message}") from exc
 
         installed_version = self._detect_installed_version(component, install_path, entry_path=entry_path)
+        is_managed_codex = component.component_id == "codex-desktop" and entry_path == self._managed_codex_entry(install_path)
+        if is_managed_codex and not installed_version:
+            message = "managed Codex version check failed"
+            self.state_store.mark(
+                component.component_id,
+                "health_failed",
+                version=component.version,
+                job_id=job_id,
+                error_code="detect_failed",
+                error_message=message,
+            )
+            if on_progress:
+                on_progress(f"检测失败：{message}", "danger")
+            raise ComponentInstallError(f"detect failed for {component.component_id}: {message}")
         is_codex_desktop_app = component.component_id == "codex-desktop" and _is_codex_desktop_executable(entry_path)
         if installed_version and not is_codex_desktop_app and not _versions_match(component.version, installed_version):
             state = self.state_store.mark(component.component_id, "upgrade_available", version=installed_version, job_id=job_id)
@@ -420,6 +441,7 @@ class ComponentInstaller:
         self._mark(component, "uninstalling", job_id=job_id, on_progress=on_progress, message=f"卸载 {component.name}")
         try:
             self._run_uninstall_command(component)
+            self._invalidate_external_entry_cache(component)
             install_path = self._safe_install_path(component.install_path)
             self._remove_path(install_path)
             self._remove_path(self._rollback_path(component.component_id))
@@ -553,6 +575,7 @@ class ComponentInstaller:
         component: ReleaseComponent,
         install_path: str,
         allow_expensive: bool = True,
+        force_external_probe: bool = False,
     ) -> str:
         if component.component_id == "codex-desktop":
             managed_entry = self._managed_codex_entry(install_path)
@@ -563,7 +586,7 @@ class ComponentInstaller:
             if os.path.isfile(target):
                 return target
         external_entry = (
-            self._first_existing_external_entry(component)
+            self._first_existing_external_entry(component, refresh=force_external_probe)
             if allow_expensive
             else self._cached_existing_external_entry(component)
         )
@@ -574,26 +597,45 @@ class ComponentInstaller:
         raise ComponentInstallError("组件缺少启动入口")
 
     def _cached_existing_external_entry(self, component: ReleaseComponent) -> str | None:
-        cached = self._external_entry_cache.get(component.component_id)
+        cache_key = self._external_entry_cache_key(component)
+        cached = _EXTERNAL_ENTRY_CACHE.get(cache_key)
         if cached is None:
             return None
         created_at, entry_path = cached
-        if time.monotonic() - created_at > 30.0 or (entry_path and not os.path.isfile(entry_path)):
-            self._external_entry_cache.pop(component.component_id, None)
+        if time.monotonic() - created_at > EXTERNAL_ENTRY_CACHE_TTL_SECONDS or (entry_path and not os.path.isfile(entry_path)):
+            _EXTERNAL_ENTRY_CACHE.pop(cache_key, None)
             return None
         return entry_path
 
     def _first_existing_external_entry(self, component: ReleaseComponent, *, refresh: bool = False) -> str | None:
+        cache_key = self._external_entry_cache_key(component)
         if not refresh:
             cached_entry = self._cached_existing_external_entry(component)
-            if cached_entry is not None or component.component_id in self._external_entry_cache:
+            if cached_entry is not None or cache_key in _EXTERNAL_ENTRY_CACHE:
                 return cached_entry
         for candidate in self._external_entry_candidates(component):
             if os.path.isfile(candidate):
-                self._external_entry_cache[component.component_id] = (time.monotonic(), candidate)
+                _EXTERNAL_ENTRY_CACHE[cache_key] = (time.monotonic(), candidate)
                 return candidate
-        self._external_entry_cache[component.component_id] = (time.monotonic(), None)
+        _EXTERNAL_ENTRY_CACHE[cache_key] = (time.monotonic(), None)
         return None
+
+    def _external_entry_cache_key(self, component: ReleaseComponent) -> tuple[object, ...]:
+        return (
+            os.path.normcase(os.path.abspath(self.base_path)),
+            component.component_id,
+            component.install_path,
+            component.entry or "",
+            component.archive_type,
+            component.platform,
+            component.arch,
+            component.version,
+            tuple(str(path) for path in getattr(component, "external_paths", ())),
+            tuple(str(part) for part in getattr(component, "install_command", ())),
+        )
+
+    def _invalidate_external_entry_cache(self, component: ReleaseComponent) -> None:
+        _EXTERNAL_ENTRY_CACHE.pop(self._external_entry_cache_key(component), None)
 
     def _assert_component_sources_clean(self, component: ReleaseComponent, install_path: str, entry_path: str = "") -> None:
         if component.component_id != "hermes":
@@ -868,10 +910,10 @@ class ComponentInstaller:
     def _npm_private_prefix(self) -> str:
         return os.path.join(self.base_path, "data", ".installer", "npm-global")
 
-    def _assert_external_install_available(self, component: ReleaseComponent) -> None:
+    def _assert_external_install_available(self, component: ReleaseComponent, *, force_refresh: bool = False) -> None:
         if not getattr(component, "external_paths", ()):
             return
-        if self._first_existing_external_entry(component):
+        if self._first_existing_external_entry(component, refresh=force_refresh):
             return
         raise ComponentInstallError("静默安装已执行，但未检测到组件入口，请打开诊断或手动重试")
 
@@ -972,8 +1014,10 @@ class ComponentInstaller:
                 return _codex_desktop_version_from_path(entry_path)
             cwd = self._component_cwd(install_path)
             command = [*build_launcher_command(entry_path, cwd, base_path=self.base_path), "--version"]
-            result = self.installer_runner(command, cwd, 15000)
+            result = self.installer_runner(command, cwd, VERSION_DETECT_TIMEOUT_MS)
         except Exception:
+            return None
+        if int(getattr(result, "returncode", 0) or 0) != 0:
             return None
         output = ((getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")).strip()
         if not output:

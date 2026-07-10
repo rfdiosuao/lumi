@@ -259,6 +259,7 @@ def register_component_routes(app, ctx) -> None:
             return error
         body = await ctx.body(request)
         component_id = str(body.get("componentId") or body.get("id") or "").strip()
+        force_external_probe = _truthy(body.get("force"))
         if not component_id:
             return ctx.fastapi_json({"error": "componentId is required"}, 400)
 
@@ -276,7 +277,12 @@ def register_component_routes(app, ctx) -> None:
 
             installer = _component_installer(ctx)
             try:
-                state = installer.detect(component, job_id=job_id, on_progress=on_progress)
+                state = installer.detect(
+                    component,
+                    job_id=job_id,
+                    on_progress=on_progress,
+                    force_external_probe=force_external_probe,
+                )
             except ComponentInstallError as exc:
                 return {
                     "success": False,

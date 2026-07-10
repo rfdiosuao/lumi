@@ -783,9 +783,11 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
                 install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
             )
             calls: list[list[str]] = []
+            timeouts: list[int] = []
 
-            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+            def runner(command: list[str], _cwd: str, timeout_ms: int) -> FakeCompletedProcess:
                 calls.append(command)
+                timeouts.append(timeout_ms)
                 self.assertEqual(command, [vendor_entry, "--version"])
                 return FakeCompletedProcess(returncode=0, stdout="codex-cli 0.142.3\n")
 
@@ -796,6 +798,7 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(state.status, "ready")
             self.assertEqual(state.version, "0.142.3")
             self.assertEqual(calls, [[vendor_entry, "--version"]])
+            self.assertEqual(timeouts, [5000])
 
     def test_detects_external_codex_with_single_expensive_discovery_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -840,10 +843,10 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
             self.assertEqual(state.status, "ready")
             self.assertEqual(state.version, "0.142.3")
-            self.assertLessEqual(sum(command[:3] == ["powershell", "-NoProfile", "-Command"] for command in calls), 1)
-            self.assertLessEqual(sum(command[-2:] == ["prefix", "-g"] for command in calls), 1)
-            self.assertLessEqual(sum(command[-2:] == ["bin", "-g"] for command in calls), 1)
-            self.assertLessEqual(sum(command[-2:] == ["root", "-g"] for command in calls), 1)
+            self.assertEqual(sum(command[:3] == ["powershell", "-NoProfile", "-Command"] for command in calls), 1)
+            self.assertEqual(sum(command[-2:] == ["prefix", "-g"] for command in calls), 1)
+            self.assertEqual(sum(command[-2:] == ["bin", "-g"] for command in calls), 1)
+            self.assertEqual(sum(command[-2:] == ["root", "-g"] for command in calls), 1)
 
     def test_install_skips_legacy_npm_command_for_valid_managed_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -882,6 +885,291 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
             self.assertEqual(state.status, "ready")
             self.assertEqual(calls, [[vendor_entry, "--version"]])
+
+    def test_install_does_not_trust_failed_managed_codex_version_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vendor_relative_path = "package/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+            vendor_entry = os.path.join(temp_dir, "agents", "codex-desktop", *vendor_relative_path.split("/"))
+            payload = make_tgz_payload({vendor_relative_path: b"codex"})
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+            )
+            calls: list[list[str]] = []
+
+            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                calls.append(command)
+                if command == [vendor_entry, "--version"]:
+                    return FakeCompletedProcess(returncode=1, stdout="codex-cli 0.142.3\n")
+                return FakeCompletedProcess(returncode=1, stderr="npm install failed")
+
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")),
+                fetcher=lambda _url, _timeout: payload,
+                installer_runner=runner,
+                retry_sleep=lambda _seconds: None,
+            )
+
+            with self.assertRaises(ComponentInstallError):
+                installer.install(component, job_id="job_failed_managed_codex")
+
+            self.assertEqual(installer.state_store.load()[component.component_id].status, "config_failed")
+            self.assertEqual(calls[0], [vendor_entry, "--version"])
+            self.assertEqual(sum("install" in command for command in calls), 3)
+
+    def test_detect_rejects_managed_codex_with_failed_version_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vendor_entry = os.path.join(
+                temp_dir,
+                "agents",
+                "codex-desktop",
+                "package",
+                "vendor",
+                "x86_64-pc-windows-msvc",
+                "bin",
+                "codex.exe",
+            )
+            os.makedirs(os.path.dirname(vendor_entry), exist_ok=True)
+            with open(vendor_entry, "wb") as handle:
+                handle.write(b"codex")
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1,
+                sha256="c" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+            )
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                installer_runner=lambda _command, _cwd, _timeout_ms: FakeCompletedProcess(
+                    returncode=1,
+                    stdout="codex-cli 0.142.3\n",
+                ),
+            )
+
+            with self.assertRaises(ComponentInstallError):
+                installer.detect(component, job_id="job_detect_failed_managed_codex")
+
+            self.assertEqual(store.load()[component.component_id].status, "health_failed")
+
+    def test_external_discovery_cache_reuses_positive_result_across_installers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "external", "opencode.exe")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            with open(entry, "wb") as handle:
+                handle.write(b"opencode")
+            component = ReleaseComponent(
+                component_id="opencode",
+                name="opencode",
+                version="1.0.0",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1,
+                sha256="a" * 64,
+                urls=("https://download.example.invalid/opencode.tgz",),
+                install_path="agents/opencode",
+                entry=None,
+                external_paths=(entry,),
+            )
+            candidates_called = 0
+
+            def candidates(_component: ReleaseComponent) -> list[str]:
+                nonlocal candidates_called
+                candidates_called += 1
+                return [entry]
+
+            getattr(component_installer_module, "_EXTERNAL_ENTRY_CACHE", {}).clear()
+            first = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "first.json")))
+            second = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "second.json")))
+            first._external_entry_candidates = candidates  # type: ignore[method-assign]
+            second._external_entry_candidates = candidates  # type: ignore[method-assign]
+
+            self.assertEqual(first._first_existing_external_entry(component), entry)
+            self.assertEqual(second._first_existing_external_entry(component), entry)
+            self.assertEqual(candidates_called, 1)
+
+    def test_external_discovery_cache_reuses_negative_result_across_installers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            component = ReleaseComponent(
+                component_id="opencode",
+                name="opencode",
+                version="1.0.0",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1,
+                sha256="a" * 64,
+                urls=("https://download.example.invalid/opencode.tgz",),
+                install_path="agents/opencode",
+                entry=None,
+            )
+            candidates_called = 0
+
+            def candidates(_component: ReleaseComponent) -> list[str]:
+                nonlocal candidates_called
+                candidates_called += 1
+                return []
+
+            getattr(component_installer_module, "_EXTERNAL_ENTRY_CACHE", {}).clear()
+            first = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "first.json")))
+            second = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "second.json")))
+            first._external_entry_candidates = candidates  # type: ignore[method-assign]
+            second._external_entry_candidates = candidates  # type: ignore[method-assign]
+
+            self.assertIsNone(first._first_existing_external_entry(component))
+            self.assertIsNone(second._first_existing_external_entry(component))
+            self.assertEqual(candidates_called, 1)
+
+    def test_external_discovery_cache_expires_after_thirty_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "external", "opencode.exe")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            with open(entry, "wb") as handle:
+                handle.write(b"opencode")
+            component = ReleaseComponent("opencode", "opencode", "1.0.0", "windows", "x64", "tgz", 1, "a" * 64, ("https://download.example.invalid/opencode.tgz",), "agents/opencode", None)
+            candidates_called = 0
+
+            def candidates(_component: ReleaseComponent) -> list[str]:
+                nonlocal candidates_called
+                candidates_called += 1
+                return [entry]
+
+            installer = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")))
+            installer._external_entry_candidates = candidates  # type: ignore[method-assign]
+            clock = [100.0]
+            with mock.patch.object(component_installer_module.time, "monotonic", side_effect=lambda: clock[0]):
+                self.assertEqual(installer._first_existing_external_entry(component), entry)
+                clock[0] = 130.1
+                self.assertEqual(installer._first_existing_external_entry(component), entry)
+            self.assertEqual(candidates_called, 2)
+
+    def test_external_discovery_cache_discards_vanished_positive_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_entry = os.path.join(temp_dir, "external", "first.exe")
+            second_entry = os.path.join(temp_dir, "external", "second.exe")
+            os.makedirs(os.path.dirname(first_entry), exist_ok=True)
+            for entry in (first_entry, second_entry):
+                with open(entry, "wb") as handle:
+                    handle.write(b"opencode")
+            component = ReleaseComponent("opencode", "opencode", "1.0.0", "windows", "x64", "tgz", 1, "a" * 64, ("https://download.example.invalid/opencode.tgz",), "agents/opencode", None)
+            candidates_called = 0
+
+            def candidates(_component: ReleaseComponent) -> list[str]:
+                nonlocal candidates_called
+                candidates_called += 1
+                return [first_entry if candidates_called == 1 else second_entry]
+
+            installer = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")))
+            installer._external_entry_candidates = candidates  # type: ignore[method-assign]
+            self.assertEqual(installer._first_existing_external_entry(component), first_entry)
+            os.remove(first_entry)
+            self.assertEqual(installer._first_existing_external_entry(component), second_entry)
+            self.assertEqual(candidates_called, 2)
+
+    def test_external_discovery_cache_explicit_refresh_bypasses_cached_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = os.path.join(temp_dir, "external", "opencode.exe")
+            os.makedirs(os.path.dirname(entry), exist_ok=True)
+            with open(entry, "wb") as handle:
+                handle.write(b"opencode")
+            component = ReleaseComponent("opencode", "opencode", "1.0.0", "windows", "x64", "tgz", 1, "a" * 64, ("https://download.example.invalid/opencode.tgz",), "agents/opencode", None)
+            candidates_called = 0
+
+            def candidates(_component: ReleaseComponent) -> list[str]:
+                nonlocal candidates_called
+                candidates_called += 1
+                return [entry]
+
+            installer = ComponentInstaller(base_path=temp_dir, state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")))
+            installer._external_entry_candidates = candidates  # type: ignore[method-assign]
+            self.assertEqual(installer._first_existing_external_entry(component), entry)
+            self.assertEqual(installer._first_existing_external_entry(component, refresh=True), entry)
+            self.assertEqual(candidates_called, 2)
+
+    def test_external_discovery_cache_isolates_base_path_and_component_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_one = os.path.join(temp_dir, "one")
+            base_two = os.path.join(temp_dir, "two")
+            entry_one = os.path.join(temp_dir, "external", "one.exe")
+            entry_two = os.path.join(temp_dir, "external", "two.exe")
+            os.makedirs(os.path.dirname(entry_one), exist_ok=True)
+            for entry in (entry_one, entry_two):
+                with open(entry, "wb") as handle:
+                    handle.write(b"opencode")
+            component_one = ReleaseComponent("opencode", "opencode", "1.0.0", "windows", "x64", "tgz", 1, "a" * 64, ("https://download.example.invalid/opencode.tgz",), "agents/opencode", None, external_paths=(entry_one,))
+            changed_component = ReleaseComponent("opencode", "opencode", "1.0.0", "windows", "x64", "tgz", 1, "a" * 64, ("https://download.example.invalid/opencode.tgz",), "agents/opencode", None, external_paths=(entry_two,))
+            other_component = ReleaseComponent("claude-code", "Claude", "1.0.0", "windows", "x64", "tgz", 1, "b" * 64, ("https://download.example.invalid/claude.tgz",), "agents/claude-code", None, external_paths=(entry_two,))
+            getattr(component_installer_module, "_EXTERNAL_ENTRY_CACHE", {}).clear()
+            installer_one = ComponentInstaller(base_path=base_one, state_store=ComponentStateStore(os.path.join(temp_dir, "one.json")))
+            installer_two = ComponentInstaller(base_path=base_two, state_store=ComponentStateStore(os.path.join(temp_dir, "two.json")))
+            installer_one._external_entry_candidates = lambda component: [component.external_paths[0]]  # type: ignore[method-assign]
+            installer_two._external_entry_candidates = lambda component: [component.external_paths[0]]  # type: ignore[method-assign]
+
+            self.assertEqual(installer_one._first_existing_external_entry(component_one), entry_one)
+            self.assertEqual(installer_one._first_existing_external_entry(changed_component), entry_two)
+            self.assertEqual(installer_one._first_existing_external_entry(other_component), entry_two)
+            self.assertEqual(installer_two._first_existing_external_entry(component_one), entry_one)
+
+    def test_install_refreshes_negative_external_discovery_cache_after_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_entry = os.path.join(temp_dir, "external", "opencode.cmd")
+            payload = make_tgz_payload({"package/bin/opencode.exe": b"opencode"})
+            component = ReleaseComponent(
+                component_id="opencode",
+                name="opencode",
+                version="1.0.0",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                urls=("https://download.example.invalid/opencode.tgz",),
+                install_path="agents/opencode",
+                entry="package/bin/opencode.exe",
+                external_paths=(external_entry,),
+                install_command=("npm", "install", "-g", "opencode-ai@1.0.0"),
+            )
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")),
+                fetcher=lambda _url, _timeout: payload,
+                retry_sleep=lambda _seconds: None,
+            )
+            installer._external_entry_candidates = lambda _component: [external_entry]  # type: ignore[method-assign]
+
+            self.assertIsNone(installer._first_existing_external_entry(component))
+
+            def runner(command: list[str], _cwd: str, _timeout_ms: int) -> FakeCompletedProcess:
+                if "install" in command:
+                    os.makedirs(os.path.dirname(external_entry), exist_ok=True)
+                    with open(external_entry, "wb") as handle:
+                        handle.write(b"opencode")
+                return FakeCompletedProcess(returncode=0)
+
+            installer.installer_runner = runner
+            state = installer.install(component, job_id="job_refresh_external")
+
+            self.assertEqual(state.status, "ready")
 
     def test_detect_prefers_codex_desktop_appx_over_cli_shim(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
