@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 
 
 PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,8 +15,11 @@ if PYTHON_DIR not in sys.path:
 
 from core.newapi_account_manager import (
     ACCOUNT_SOURCE,
+    DEFAULT_API_BASE,
+    DEFAULT_BASE_URL,
     NewApiAccountError,
     NewApiAccountManager,
+    _trusted_managed_api_base,
     _classified_models_from_catalog,
     _choose_model,
     _extract_models,
@@ -28,6 +32,147 @@ from core.storage import read_json
 
 
 class NewApiAccountManagerTests(unittest.TestCase):
+    def test_accelerated_request_falls_back_to_legacy_domain_on_network_failure(self) -> None:
+        class Response:
+            def read(self):
+                return b'{"success":true,"data":{"ok":true}}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        class Opener:
+            def __init__(self):
+                self.urls: list[str] = []
+
+            def open(self, request, timeout=20):
+                del timeout
+                self.urls.append(request.full_url)
+                if request.full_url.startswith("https://api-cn.heang.top"):
+                    raise urllib.error.URLError("accelerated route unavailable")
+                return Response()
+
+        manager = NewApiAccountManager(AppPaths("."))
+        opener = Opener()
+
+        payload = manager._request_json(opener, "https://api-cn.heang.top/api/status")
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(
+            opener.urls,
+            [
+                "https://api-cn.heang.top/api/status",
+                "https://api.heang.top/api/status",
+            ],
+        )
+
+    def test_side_effecting_requests_are_never_replayed_to_legacy_domain(self) -> None:
+        class Opener:
+            def __init__(self):
+                self.urls: list[str] = []
+
+            def open(self, request, timeout=20):
+                del timeout
+                self.urls.append(request.full_url)
+                raise urllib.error.URLError("accelerated route unavailable")
+
+        manager = NewApiAccountManager(AppPaths("."))
+        opener = Opener()
+
+        with self.assertRaises(NewApiAccountError):
+            manager._request_json(
+                opener,
+                "https://api-cn.heang.top/api/openclaw/auth/email-code/send",
+                method="POST",
+                body={"email": "user@example.invalid"},
+            )
+
+        self.assertEqual(opener.urls, ["https://api-cn.heang.top/api/openclaw/auth/email-code/send"])
+
+    def test_managed_defaults_use_domestic_accelerated_domain(self) -> None:
+        self.assertEqual(DEFAULT_BASE_URL, "https://api-cn.heang.top")
+        self.assertEqual(DEFAULT_API_BASE, "https://api-cn.heang.top/v1")
+        self.assertEqual(NewApiAccountManager.normalize_base_url(""), DEFAULT_BASE_URL)
+
+    def test_trusted_gateway_aligns_known_legacy_alias_to_login_origin(self) -> None:
+        self.assertEqual(
+            _trusted_managed_api_base(
+                "https://api.heang.top/v1",
+                "https://api-cn.heang.top",
+            ),
+            "https://api-cn.heang.top/v1",
+        )
+        self.assertEqual(
+            _trusted_managed_api_base(
+                "https://api-cn.heang.top/v1",
+                "https://api.heang.top",
+            ),
+            "https://api.heang.top/v1",
+        )
+
+    def test_current_migrates_legacy_managed_session_and_resyncs_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = NewApiAccountManager(AppPaths(temp_dir))
+            manager._write_session({
+                "source": ACCOUNT_SOURCE,
+                "memberToken": "sk-migration-test-not-real",
+                "gatewayBaseUrl": "https://api.heang.top/v1",
+                "gatewayImageBaseUrl": "https://api.heang.top/v1",
+                "gatewayVideoBaseUrl": "https://api.heang.top/v1",
+                "gateway": {
+                    "baseUrl": "https://api.heang.top/v1",
+                    "imageBaseUrl": "https://api.heang.top/v1",
+                    "videoBaseUrl": "https://api.heang.top/v1",
+                },
+                "newApi": {"baseUrl": "https://api.heang.top"},
+                "phoneAgent": {"baseUrl": "https://api.heang.top/v1"},
+            })
+            sync_calls: list[tuple[str, ...]] = []
+
+            def record_sync(session, *, targets=account_module.DEFAULT_RUNTIME_SYNC_TARGETS):
+                sync_calls.append(targets)
+                return []
+
+            manager.sync_targets = record_sync
+
+            session = manager.current()
+
+            self.assertEqual(session["newApi"]["baseUrl"], DEFAULT_BASE_URL)
+            self.assertEqual(session["gatewayBaseUrl"], DEFAULT_API_BASE)
+            self.assertEqual(session["gateway"]["baseUrl"], DEFAULT_API_BASE)
+            self.assertEqual(session["phoneAgent"]["baseUrl"], DEFAULT_API_BASE)
+            self.assertEqual(sync_calls, [account_module.DEFAULT_RUNTIME_SYNC_TARGETS])
+            self.assertEqual(session["managedGatewayMigrationVersion"], 1)
+
+    def test_failed_gateway_migration_sync_is_retried_on_next_start(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = NewApiAccountManager(AppPaths(temp_dir))
+            manager._write_session({
+                "source": ACCOUNT_SOURCE,
+                "memberToken": "sk-migration-retry-not-real",
+                "gatewayBaseUrl": "https://api.heang.top/v1",
+                "newApi": {"baseUrl": "https://api.heang.top"},
+            })
+            sync_calls = 0
+
+            def fail_sync(_session, *, targets=account_module.DEFAULT_RUNTIME_SYNC_TARGETS):
+                nonlocal sync_calls
+                del targets
+                sync_calls += 1
+                raise OSError("temporary local write failure")
+
+            manager.sync_targets = fail_sync
+
+            first = manager.current()
+            second = manager.current()
+
+            self.assertEqual(sync_calls, 2)
+            self.assertEqual(first["gatewayBaseUrl"], DEFAULT_API_BASE)
+            self.assertEqual(second["gatewayBaseUrl"], DEFAULT_API_BASE)
+            self.assertNotIn("managedGatewayMigrationVersion", second)
+
     def test_nested_model_catalog_maps_are_flattened_and_classified(self) -> None:
         catalog = {
             "data": {
@@ -609,12 +754,12 @@ class NewApiAccountManagerTests(unittest.TestCase):
 
             snapshot = manager.subscription_snapshot()
 
-            self.assertEqual(manager.requests[0]["url"], "https://api.heang.top/api/user/subscription")
+            self.assertEqual(manager.requests[0]["url"], "https://api-cn.heang.top/api/user/subscription")
             self.assertEqual(snapshot["mode"], "native")
             self.assertEqual(snapshot["plan"], "pro")
             self.assertEqual(snapshot["balance"], "1200")
             self.assertEqual(snapshot["usage"]["usedQuota"], "12")
-            self.assertEqual(snapshot["purchaseUrl"], "https://api.heang.top/wallet")
+            self.assertEqual(snapshot["purchaseUrl"], "https://api-cn.heang.top/wallet")
 
     def test_session_file_protects_secret_fields_on_windows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

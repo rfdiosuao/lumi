@@ -77,7 +77,7 @@ class AcquisitionTemplateCloudSyncContractTests(unittest.TestCase):
 
         self.assertEqual(result["template"]["uploadStatus"], "uploaded")
         self.assertEqual(result["upload"]["status"], "uploaded")
-        self.assertEqual(calls[0]["url"], "https://api.heang.top/api/loom/templates")
+        self.assertEqual(calls[0]["url"], "https://api-cn.heang.top/api/loom/templates")
         self.assertEqual(calls[0]["token"], "")
 
     def test_template_save_auto_uploads_to_configured_server_and_redacts_secret(self) -> None:

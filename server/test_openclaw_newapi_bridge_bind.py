@@ -345,7 +345,7 @@ class BindTicketTests(unittest.TestCase):
         self.assertEqual(status, 200)
         data = payload["data"]
         self.assertEqual(data["account"], "user@example.com")
-        self.assertEqual(data["api"]["baseUrl"], "https://api.heang.top/v1")
+        self.assertEqual(data["api"]["baseUrl"], "https://api-cn.heang.top/v1")
         self.assertEqual(data["models"], ["qwen3.7-plus", "agnes-2.0-flash"])
 
         status, payload = self.bridge.handle_email_code_login({"email": "user@example.com", "code": sent["code"]})
@@ -416,7 +416,7 @@ class BindTicketTests(unittest.TestCase):
         self.assertEqual(data["account"]["id"], "99")
         self.assertEqual(data["account"]["email"], "new@example.com")
         self.assertEqual(data["account"]["plan"], "standard")
-        self.assertEqual(data["api"]["baseUrl"], "https://api.heang.top/v1")
+        self.assertEqual(data["api"]["baseUrl"], "https://api-cn.heang.top/v1")
         self.assertEqual(data["models"], ["qwen3.7-plus", "agnes-2.0-flash"])
         self.assertEqual(data["sessionCookie"], "session=fake-register-session-not-real")
         self.assertEqual(upstream_paths, ["/api/user/register", "/api/user/login"])

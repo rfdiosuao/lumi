@@ -11,7 +11,7 @@ type ProviderPreset = {
 
 const PROVIDERS: Record<string, ProviderPreset> = {
   'Heang AI': {
-    url: 'https://api.heang.top/v1',
+    url: 'https://api-cn.heang.top/v1',
     models: ['kimi-k2.5', 'qwen3.6-plus', 'gpt-4o', 'gpt-4.1', 'gpt-4.1-mini'],
   },
   OpenAI: {

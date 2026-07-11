@@ -669,7 +669,7 @@ def build_wire_from_session(session: dict[str, Any]) -> dict[str, Any]:
     )
     phone_model = _pick_text(phone_agent.get("model"), DEFAULT_PHONE_MODEL)
     api_key = _pick_text(phone_agent.get("apiKey"), session.get("memberToken"), gateway.get("accessToken"))
-    base_url = _pick_text(phone_agent.get("baseUrl"), session.get("gatewayBaseUrl"), gateway.get("baseUrl"), "https://api.heang.top/v1")
+    base_url = _pick_text(phone_agent.get("baseUrl"), session.get("gatewayBaseUrl"), gateway.get("baseUrl"), "https://api-cn.heang.top/v1")
     text_model_list = _desktop_text_models(_list_values(classes.get("text")))
     if text_model and text_model not in text_model_list:
         text_model_list = [text_model, *text_model_list]

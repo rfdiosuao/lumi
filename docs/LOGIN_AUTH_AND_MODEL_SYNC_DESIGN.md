@@ -2,7 +2,7 @@
 
 状态：Phase 1 已落地（启动器直连 new-api 登录 + 本地模型同步）；Phase 2 代理登录/离线许可证待评审
 日期：2026-06-22
-适用：LumiClaw 启动器（引擎 OpenClaw）、发卡/授权服务器（license.heang.top）、中转站 new-api（api.heang.top）
+适用：LumiClaw 启动器（引擎 OpenClaw）、发卡/授权服务器（license.heang.top）、中转站 new-api（api-cn.heang.top）
 
 ---
 
@@ -30,7 +30,7 @@
 
 ## 3. 已确认的环境事实
 
-- **中转站 = new-api**，公网 `https://api.heang.top` → Cloudflare → 火山云 nginx 反代 → 赔钱云 `160.202.254.29:33323`。
+- **中转站 = new-api**，公网主入口 `https://api-cn.heang.top` → 火山云 nginx 反代 → 赔钱云 NewAPI；`https://api.heang.top` 仅保留为兼容回退入口。
 - 登录：**邮箱 + 密码**（`email_verification: true`），无 OAuth。**开放注册**（用户自助注册）。
 - 额度：**自定义货币**（符号「陇」），开启 签到 / 充值 / 兑换码(redemption) / 订阅(subscription)。
 - 已启用 `enable_drawing`（图像）、`enable_task`（视频/异步任务）。
@@ -55,17 +55,17 @@
 
 ```
 启动器「登录」表单（邮箱 / 密码）
-  → POST https://api.heang.top/api/user/login  {username(或email), password}
+  → POST https://api-cn.heang.top/api/user/login  {username(或email), password}
   → 拿到登录态（cookie/session 或 access_token）
   → 用登录态调：
        GET /api/user/self        # 账号信息、额度(quota/used_quota)、分组(group)、套餐
        GET /api/token/           # 该用户的令牌(sk-)列表；无则 POST /api/token/ 新建一个
        GET /api/user/models 或 /v1/models（带 sk-）  # 可用模型清单
   → 启动器本地保存「短期凭证 + 令牌 + 模型缓存 + 额度快照」
-  → 用令牌(sk-)作为各接口的 API Key，base = https://api.heang.top/v1
+  → 用令牌(sk-)作为各接口的 API Key，base = https://api-cn.heang.top/v1
 ```
 
-> new-api 接口名以**实际部署版本为准**，落地前在 `api.heang.top` 上逐个核对（见 §8 待核对接口）。
+> new-api 接口名以**实际部署版本为准**，落地前在 `api-cn.heang.top` 上逐个核对（见 §8 待核对接口）。
 
 ### 4.2 模型同步映射（→ 启动器现有三套配置）
 
@@ -88,7 +88,7 @@
 
 ### 4.4 客户端 UI 改动（启动器）
 
-- 「授权内测」页（`LicensePage.tsx`）增加 **登录 Tab**：邮箱/密码、登录按钮、注册入口（跳 `api.heang.top` 注册）、登录后展示：账号 / 套餐 / 剩余额度 / 默认模型 / 模型调用失败原因。
+- 「授权内测」页（`LicensePage.tsx`）增加 **登录 Tab**：邮箱/密码、登录按钮、注册入口（跳 `api-cn.heang.top` 注册）、登录后展示：账号 / 套餐 / 剩余额度 / 默认模型 / 模型调用失败原因。
 - 登录成功后**自动启动核心服务**（与授权码激活后的行为一致）。
 - 「统一设置」普通模式：登录态下隐藏手填 Key，显示「来自登录账号的模型」；高级模式可手填覆盖。
 
@@ -134,7 +134,7 @@
 
 ## 7. 发卡服务器角色与 Phase 2 加固（代理模式）
 
-- **Phase 1**：启动器直连 new-api 登录（最简单，先上）。new-api base 做成**可配置**（默认 `api.heang.top`）。
+- **Phase 1**：启动器直连 new-api 登录（最简单，先上）。new-api base 做成**可配置**（默认 `api-cn.heang.top`）。
 - **Phase 2（加固，可选）**：把 **license.heang.top 做成「登录代理」**：
   - 启动器只连发卡服务器；发卡服务器在后端用 **new-api admin token** 验证账号、取令牌、查额度，再用 Ed25519 **签一张短期会话**返回。
   - 好处：避开 Cloudflare 对客户端登录的人机校验；中转站细节与 provider key 全藏服务端；以后换中转站软件不打挂客户端；离线宽限 = 签名会话有效期。
@@ -160,7 +160,7 @@
 
 | 来源（new-api） | 落地（启动器配置文件） |
 | --- | --- |
-| sk- 令牌 + `api.heang.top/v1` + 文本模型 | `data/.openclaw/agents/main/agent/auth-profiles.json` |
+| sk- 令牌 + `api-cn.heang.top/v1` + 文本模型 | `data/.openclaw/agents/main/agent/auth-profiles.json` |
 | 图像模型 | `imgapi_config.json` |
 | 视频模型 | `video_config.json` |
 | 额度/套餐/失败原因 | 仅内存 + UI 展示，退出登录清理 |
@@ -189,6 +189,6 @@
 ## 12. 风险
 
 - 弱网/Cloudflare：客户端直登可能偶发被拦 → 代理模式或重试退避缓解。
-- 中转站单点：api.heang.top（赔钱云）不可用时登录档不可用 → 离线宽限缓冲 + 档 B/C 兜底。
+- 中转站单点：api-cn.heang.top 不可用时只读和幂等登录请求可回退 api.heang.top；验证码发送与注册等有副作用请求禁止自动重放。
 - 账号共享：多设备允许 → 靠 new-api 额度与风控，不靠设备数硬限。
 - 凭证安全：只存短期令牌、加密存储、退出即清。

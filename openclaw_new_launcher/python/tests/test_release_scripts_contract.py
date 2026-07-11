@@ -238,6 +238,12 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn("No secret scan targets were selected", source)
         self.assertIn("if ($targets.Count -eq 0", source)
 
+    def test_secret_scan_includes_explicit_text_file_targets(self) -> None:
+        source = read_script("verify-release-secrets.ps1")
+
+        self.assertIn("function Add-FileTarget", source)
+        self.assertIn("Add-FileTarget -InputPath $item.FullName -Targets $targets", source)
+
     def test_portable_package_keeps_scripts_declared_by_package_json(self) -> None:
         build_source = read_script("build-portable.ps1")
         smoke_source = read_script("verify-portable-smoke.ps1")

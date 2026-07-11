@@ -18,7 +18,7 @@ Json = Dict[str, Any]
 TemplateUploader = Callable[[str, str, Json, int], Json]
 
 SENSITIVE_KEY_MARKERS = ("token", "secret", "password", "credential", "api_key", "apikey", "authorization")
-DEFAULT_TEMPLATE_SERVER_URL = "https://api.heang.top/api/loom/templates"
+DEFAULT_TEMPLATE_SERVER_URL = "https://api-cn.heang.top/api/loom/templates"
 
 
 class AcquisitionTemplateLibrary:

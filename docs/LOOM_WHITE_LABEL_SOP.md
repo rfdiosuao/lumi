@@ -73,7 +73,7 @@ brands/
   "publisher": "Heang",
   "primaryColor": "#ff6a3d",
   "secondaryColor": "#1f2937",
-  "apiBaseUrl": "https://api.heang.top",
+  "apiBaseUrl": "https://api-cn.heang.top",
   "docsUrl": "https://docs.heang.top",
   "supportUrl": "https://docs.heang.top/support",
   "downloadBaseUrl": "https://download.heang.top/loom",

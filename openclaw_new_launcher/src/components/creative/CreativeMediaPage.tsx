@@ -91,7 +91,7 @@ export const CreativeMediaPage: React.FC = () => {
   const [videoResult, setVideoResult] = React.useState<VideoResult | null>(null);
   const pollRefs = React.useRef<Record<CreativeTab, number | null>>({ image: null, video: null });
 
-  const [imageBaseUrl, setImageBaseUrl] = React.useState('https://api.heang.top/v1');
+  const [imageBaseUrl, setImageBaseUrl] = React.useState('https://api-cn.heang.top/v1');
   const [imageApiKey, setImageApiKey] = React.useState('');
   const [imageModel, setImageModel] = React.useState('');
   const [imageSize, setImageSize] = React.useState('1024x1024');
@@ -356,7 +356,7 @@ export const CreativeMediaPage: React.FC = () => {
               <div className="mt-4 grid gap-3">
                 <label>
                   <FieldLabel text="Base URL" />
-                  <Input value={imageBaseUrl} onChange={(event) => setImageBaseUrl(event.target.value)} placeholder="https://api.heang.top/v1" />
+                  <Input value={imageBaseUrl} onChange={(event) => setImageBaseUrl(event.target.value)} placeholder="https://api-cn.heang.top/v1" />
                 </label>
                 <label>
                   <FieldLabel text="API Key" />

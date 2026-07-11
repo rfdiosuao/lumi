@@ -204,6 +204,24 @@ function Add-DirectoryTargets {
         }
 }
 
+function Add-FileTarget {
+    param(
+        [string]$InputPath,
+        [System.Collections.Generic.List[object]]$Targets
+    )
+
+    $item = Get-Item -LiteralPath $InputPath
+    if ($item.Length -gt 4MB -or -not (Test-TextFileName $item.FullName)) {
+        return
+    }
+    $Targets.Add([pscustomobject]@{
+        Label = "file"
+        Path = $item.FullName
+        RelativePath = Convert-ToPortablePath $item.Name
+        PackageMode = $false
+    })
+}
+
 function Scan-ZipTarget {
     param(
         [string]$InputPath,
@@ -250,6 +268,9 @@ foreach ($inputPath in $Path) {
     $item = Get-Item -LiteralPath $inputPath
     if ($item.PSIsContainer) {
         Add-DirectoryTargets -InputPath $item.FullName -Targets $targets
+    }
+    elseif ($item.Extension -ine ".zip") {
+        Add-FileTarget -InputPath $item.FullName -Targets $targets
     }
 }
 

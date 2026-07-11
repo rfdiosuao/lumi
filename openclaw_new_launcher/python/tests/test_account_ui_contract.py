@@ -63,6 +63,13 @@ class AccountUiContractTests(unittest.TestCase):
         self.assertIn("parsed.pathname.replace(/\\/+$/, '') === '/topup'", source)
         self.assertNotIn("`${DEFAULT_BASE_URL}/topup`", source)
 
+    def test_account_login_defaults_to_domestic_accelerated_domain(self) -> None:
+        with open(LICENSE_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("https://api-cn.heang.top", source)
+        self.assertNotIn("const DEFAULT_BASE_URL = 'https://api.heang.top'", source)
+
     def test_account_api_exposes_register_and_subscription(self) -> None:
         with open(API_FILE, "r", encoding="utf-8") as handle:
             source = handle.read()

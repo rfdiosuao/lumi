@@ -12,7 +12,7 @@ import { accountCacheUsable, loadCachedAccount, saveCachedAccount } from '../../
 import { useAppStore } from '../../stores/appStore';
 import { APP_DISPLAY_NAME } from '../../version';
 
-const DEFAULT_BASE_URL = 'https://api.heang.top';
+const DEFAULT_BASE_URL = 'https://api-cn.heang.top';
 const DEFAULT_ACCOUNT_CENTER_URL = `${DEFAULT_BASE_URL}/wallet`;
 
 type AuthMode = 'email' | 'password' | 'register';
@@ -124,7 +124,7 @@ function safeSubscriptionUrl(url: string): string {
   try {
     const parsed = new URL(candidate, DEFAULT_BASE_URL);
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
-    if (parsed.hostname === 'api.heang.top' && parsed.pathname.replace(/\/+$/, '') === '/topup') {
+    if (['api-cn.heang.top', 'api.heang.top'].includes(parsed.hostname) && parsed.pathname.replace(/\/+$/, '') === '/topup') {
       return DEFAULT_ACCOUNT_CENTER_URL;
     }
     return parsed.toString();
@@ -658,7 +658,7 @@ export const LicensePage: React.FC = () => {
               <GhostTile label="账号" value={accountStateText} />
               <GhostTile label="模型" value={totalModels ? `${totalModels} 个` : '待同步'} />
               <GhostTile label="余额" value={displayValue(subscription?.balance, usageValue(account, ['quota', 'remainQuota', 'remainingQuota']))} />
-              <GhostTile label="来源" value="api.heang.top" />
+              <GhostTile label="来源" value="api-cn.heang.top" />
             </div>
             <div className="mt-7 rounded-[22px] border border-border/70 bg-surface-alt/45 p-6">
               <div className="text-sm font-black text-text">演示版能力</div>

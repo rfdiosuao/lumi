@@ -22,7 +22,7 @@ class TemplateCloudServerTests(unittest.TestCase):
                     "platforms": ["douyin"],
                     "safetyPolicy": {"sendMode": "draft_only", "manualConfirm": True},
                 },
-                public_base="https://api.heang.top",
+                public_base="https://api-cn.heang.top",
             )
             second = create_response(
                 store,
@@ -32,12 +32,12 @@ class TemplateCloudServerTests(unittest.TestCase):
                     "industry": "美业",
                     "platforms": ["douyin", "xiaohongshu"],
                 },
-                public_base="https://api.heang.top",
+                public_base="https://api-cn.heang.top",
             )
 
             self.assertEqual(first["templateId"], "beauty-local")
             self.assertEqual(first["version"], 1)
-            self.assertEqual(first["url"], "https://api.heang.top/template-admin/?templateId=beauty-local")
+            self.assertEqual(first["url"], "https://api-cn.heang.top/template-admin/?templateId=beauty-local")
             self.assertEqual(second["version"], 2)
             saved = store.list_templates()["templates"]
             self.assertEqual(len(saved), 1)

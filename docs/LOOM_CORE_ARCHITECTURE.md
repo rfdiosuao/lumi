@@ -82,7 +82,7 @@ flowchart TB
   Capability --> Video["视频生成"]
   Capability --> CLI["CLI 自动化"]
 
-  Account --> NewAPI["api.heang.top / NewAPI"]
+  Account --> NewAPI["api-cn.heang.top / NewAPI"]
   Models --> NewAPI
   Release --> Manifest["release-manifest.json / 远程清单"]
 ```
@@ -186,7 +186,7 @@ Job 必须包含：
 
 职责：
 
-- 用户登录 `api.heang.top`。
+- 用户登录 `api-cn.heang.top`；旧域名仅作受控兼容回退。
 - 自动创建或读取 API Token。
 - 拉取模型列表和分组权限。
 - 分类文本、图像、视频模型。
@@ -405,7 +405,7 @@ sequenceDiagram
 sequenceDiagram
   participant UI as 账号/模型页
   participant Bridge as Bridge
-  participant NewAPI as api.heang.top
+  participant NewAPI as api-cn.heang.top
   participant Config as 本地配置
 
   UI->>Bridge: 登录账号

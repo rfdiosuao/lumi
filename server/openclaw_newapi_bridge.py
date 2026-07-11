@@ -29,7 +29,7 @@ from typing import Any
 HOST = os.environ.get("OPENCLAW_NEWAPI_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("OPENCLAW_NEWAPI_BRIDGE_PORT", "3016"))
 NEWAPI_BASE = os.environ.get("OPENCLAW_NEWAPI_BASE", "http://127.0.0.1:3000").rstrip("/")
-PUBLIC_API_BASE = os.environ.get("OPENCLAW_PUBLIC_API_BASE", "https://api.heang.top/v1").rstrip("/")
+PUBLIC_API_BASE = os.environ.get("OPENCLAW_PUBLIC_API_BASE", "https://api-cn.heang.top/v1").rstrip("/")
 DB_PATH = os.environ.get("OPENCLAW_NEWAPI_DB", "/mnt/data/new-api/one-api.db")
 BIND_DB_PATH = os.environ.get("OPENCLAW_BIND_DB", "/tmp/openclaw-bind-tickets.db")
 BIND_TICKET_TTL_SEC = int(os.environ.get("OPENCLAW_BIND_TICKET_TTL_SEC", "600"))

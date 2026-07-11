@@ -7,19 +7,19 @@ export const LOOM_COMMAND_BRAIN_WORKFLOWS_PATH = '${CODEX_HOME}/skills/loom-comm
 export const LUMING_ACQUISITION_SKILL_PATH = '${CODEX_HOME}/skills/luming-acquisition-agent/SKILL.md';
 export const LOOM_COMMAND_BRAIN_SKILL_URLS = [
   'https://gitee.com/rfdiosuao/lumi/raw/master/skills/loom-command-brain/SKILL.md',
-  'https://api.heang.top/loom-release-channel/skills/loom-command-brain/SKILL.md',
+  'https://api-cn.heang.top/loom-release-channel/skills/loom-command-brain/SKILL.md',
   'https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/skills/loom-command-brain/SKILL.md',
   '/skills/loom-command-brain/SKILL.md',
 ];
 export const LOOM_COMMAND_BRAIN_WORKFLOWS_URLS = [
   'https://gitee.com/rfdiosuao/lumi/raw/master/skills/loom-command-brain/references/WORKFLOWS.md',
-  'https://api.heang.top/loom-release-channel/skills/loom-command-brain/references/WORKFLOWS.md',
+  'https://api-cn.heang.top/loom-release-channel/skills/loom-command-brain/references/WORKFLOWS.md',
   'https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/skills/loom-command-brain/references/WORKFLOWS.md',
   '/skills/loom-command-brain/references/WORKFLOWS.md',
 ];
 export const LUMING_ACQUISITION_SKILL_URLS = [
   'https://gitee.com/rfdiosuao/lumi/raw/master/skills/luming-acquisition-agent/SKILL.md',
-  'https://api.heang.top/loom-release-channel/skills/luming-acquisition-agent/SKILL.md',
+  'https://api-cn.heang.top/loom-release-channel/skills/luming-acquisition-agent/SKILL.md',
   'https://raw.githubusercontent.com/rfdiosuao/loom-release-channel/main/skills/luming-acquisition-agent/SKILL.md',
   '/skills/luming-acquisition-agent/SKILL.md',
 ];
@@ -34,7 +34,7 @@ model = "glm-5.2-coding"
 
 [model_providers.heang]
 name = "heang"
-base_url = "https://api.heang.top/v1"
+base_url = "https://api-cn.heang.top/v1"
 env_key = "LOOM_CODEX_API_KEY"
 wire_api = "chat"
 `;

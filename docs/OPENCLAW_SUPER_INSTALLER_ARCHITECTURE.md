@@ -25,7 +25,7 @@ Useful confirmed patterns:
 | --- | --- | --- |
 | Desktop shell | simple agent list, account modal, visitor browsing | runtime console with concise modules |
 | Local bridge | `127.0.0.1:31420`, routes for health/bootstrap/instances/config wire | one Launcher Bridge owns all config writes and status snapshots |
-| Relay | `apiBaseUrl` + `relayBaseUrl`, managed token hidden from user | `api.heang.top` account, quota, models, scoped API token |
+| Relay | `apiBaseUrl` + `relayBaseUrl`, managed token hidden from user | `api-cn.heang.top` account, quota, models, scoped API token |
 | Installer assets | manifest-like app config with URLs, official URLs, sha256 | signed release manifest with mirrors, hashes, rollback |
 | Wire config | provider/model/baseUrl/apiKey pushed into local runtime | one `heang_account` wire applied to OpenClaw, phone, RPA, media |
 
@@ -184,7 +184,7 @@ The bridge applies one wire object to all managed runtimes.
   "schemaVersion": 1,
   "managedBy": "heang_account",
   "provider": "heang",
-  "baseUrl": "https://api.heang.top/v1",
+  "baseUrl": "https://api-cn.heang.top/v1",
   "tokenMasked": "sk-...abcd",
   "models": {
     "text": "qwen3.7-plus",

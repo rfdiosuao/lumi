@@ -28,8 +28,10 @@ class NewApiAccountError(RuntimeError):
         self.status_code = status_code
 
 
-DEFAULT_BASE_URL = "https://api.heang.top"
-DEFAULT_API_BASE = "https://api.heang.top/v1"
+DEFAULT_BASE_URL = "https://api-cn.heang.top"
+DEFAULT_API_BASE = "https://api-cn.heang.top/v1"
+LEGACY_BASE_URL = "https://api.heang.top"
+LEGACY_API_BASE = "https://api.heang.top/v1"
 DEFAULT_ACCOUNT_CENTER_PATH = "/wallet"
 ACCOUNT_SOURCE = "newapi_account"
 LEGACY_ACCOUNT_SOURCE = "heang_account"
@@ -118,10 +120,77 @@ def _url_origin(value: str) -> tuple[str, str, int] | None:
         return None
 
 
+MANAGED_HEANG_HOSTS = {"api-cn.heang.top", "api.heang.top"}
+TRANSIENT_HTTP_STATUS_CODES = {408, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+LEGACY_FALLBACK_POST_PATHS = {
+    "/api/user/login",
+    "/api/openclaw/launcher-token",
+    "/api/openclaw/auth/email-code/login",
+}
+MIGRATABLE_SESSION_URL_KEYS = {
+    "baseUrl",
+    "gatewayBaseUrl",
+    "gatewayImageBaseUrl",
+    "gatewayVideoBaseUrl",
+    "imageBaseUrl",
+    "videoBaseUrl",
+    "purchaseUrl",
+    "webViewUrl",
+}
+MANAGED_GATEWAY_MIGRATION_VERSION = 1
+
+
+def _replace_managed_heang_origin(value: Any, target_base_url: str) -> str:
+    text = str(value or "").strip()
+    try:
+        parsed = urllib.parse.urlsplit(text)
+        target = urllib.parse.urlsplit(target_base_url)
+    except (TypeError, ValueError):
+        return text
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in MANAGED_HEANG_HOSTS:
+        return text
+    if target.scheme != "https" or (target.hostname or "").lower() not in MANAGED_HEANG_HOSTS:
+        return text
+    return urllib.parse.urlunsplit((target.scheme, target.netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def _migrate_managed_session_urls(session: dict[str, Any]) -> bool:
+    changed = False
+
+    def walk(value: Any) -> None:
+        nonlocal changed
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key in MIGRATABLE_SESSION_URL_KEYS and isinstance(nested, str):
+                    migrated = _replace_managed_heang_origin(nested, DEFAULT_BASE_URL)
+                    if migrated != nested:
+                        value[key] = migrated
+                        changed = True
+                else:
+                    walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested)
+
+    walk(session)
+    return changed
+
+
 def _trusted_managed_api_base(candidate: Any, account_base_url: str) -> str:
     account_base_url = str(account_base_url or "").strip().rstrip("/")
     fallback = f"{account_base_url}/v1"
     api_base_url = _pick_text(candidate, fallback).rstrip("/")
+    account_origin = _url_origin(account_base_url)
+    api_origin = _url_origin(api_base_url)
+    if (
+        account_origin
+        and api_origin
+        and account_origin[0] == "https"
+        and api_origin[0] == "https"
+        and account_origin[1] in MANAGED_HEANG_HOSTS
+        and api_origin[1] in MANAGED_HEANG_HOSTS
+    ):
+        api_base_url = _replace_managed_heang_origin(api_base_url, account_base_url)
     if _url_origin(api_base_url) != _url_origin(account_base_url):
         raise NewApiAccountError("中转站返回的模型 API 域名与登录域名不一致，已拒绝写入凭据")
     return api_base_url
@@ -708,9 +777,35 @@ def _safe_purchase_url(value: Any, *, base_url: str) -> str:
         return _default_purchase_url(base_url)
     if parsed.scheme not in {"http", "https"}:
         return _default_purchase_url(base_url)
-    if parsed.netloc == "api.heang.top" and parsed.path.rstrip("/") == "/topup":
+    if parsed.hostname in MANAGED_HEANG_HOSTS and parsed.path.rstrip("/") == "/topup":
         return _default_purchase_url(base_url)
+    if parsed.hostname in MANAGED_HEANG_HOSTS:
+        return _replace_managed_heang_origin(urllib.parse.urlunparse(parsed), base_url)
     return urllib.parse.urlunparse(parsed)
+
+
+def _legacy_fallback_url(url: str) -> str:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return ""
+    if (parsed.hostname or "").lower() != "api-cn.heang.top":
+        return ""
+    legacy = urllib.parse.urlparse(LEGACY_BASE_URL)
+    return urllib.parse.urlunparse(parsed._replace(scheme=legacy.scheme, netloc=legacy.netloc))
+
+
+def _allows_legacy_fallback(url: str, method: str) -> bool:
+    normalized_method = str(method or "GET").strip().upper()
+    if normalized_method in {"GET", "HEAD", "OPTIONS"}:
+        return True
+    if normalized_method != "POST":
+        return False
+    try:
+        path = urllib.parse.urlparse(url).path.rstrip("/") or "/"
+    except Exception:
+        return False
+    return path in LEGACY_FALLBACK_POST_PATHS
 
 
 class NewApiAccountManager:
@@ -743,34 +838,47 @@ class NewApiAccountManager:
         timeout: int = 20,
     ) -> dict[str, Any]:
         data = json.dumps(body or {}, ensure_ascii=False).encode("utf-8") if body is not None else None
-        request = urllib.request.Request(
-            url,
-            data=data,
-            method=method,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": "LOOM-Launcher/2.1",
-                **(headers or {}),
-            },
-        )
-        try:
-            with opener.open(request, timeout=timeout) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-                payload = json.loads(raw) if raw.strip() else {}
-        except urllib.error.HTTPError as error:
+        fallback_url = _legacy_fallback_url(url) if _allows_legacy_fallback(url, method) else ""
+        candidates = [url, fallback_url] if fallback_url else [url]
+        payload: Any = {}
+        for index, candidate_url in enumerate(candidates):
+            request = urllib.request.Request(
+                candidate_url,
+                data=data,
+                method=method,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "LOOM-Launcher/2.1",
+                    **(headers or {}),
+                },
+            )
             try:
-                raw = error.read().decode("utf-8", errors="replace")
-                payload = json.loads(raw) if raw.strip() else {}
-                message = _pick_text(
-                    payload.get("message") if isinstance(payload, dict) else "",
-                    payload.get("error") if isinstance(payload, dict) else "",
-                )
-            except Exception:
-                message = ""
-            raise NewApiAccountError(message or f"http_{error.code}", status_code=error.code) from error
-        except Exception as error:
-            raise NewApiAccountError(f"newapi_network_error:{error}") from error
+                with opener.open(request, timeout=timeout) as response:
+                    raw = response.read().decode("utf-8", errors="replace")
+                    payload = json.loads(raw) if raw.strip() else {}
+                break
+            except urllib.error.HTTPError as error:
+                if index + 1 < len(candidates) and error.code in TRANSIENT_HTTP_STATUS_CODES:
+                    self.append_log("NewAPI 国内加速线路暂不可用，正在切换兼容线路。")
+                    continue
+                try:
+                    raw = error.read().decode("utf-8", errors="replace")
+                    payload = json.loads(raw) if raw.strip() else {}
+                    message = _pick_text(
+                        payload.get("message") if isinstance(payload, dict) else "",
+                        payload.get("error") if isinstance(payload, dict) else "",
+                    )
+                except Exception:
+                    message = ""
+                raise NewApiAccountError(message or f"http_{error.code}", status_code=error.code) from error
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+                if index + 1 < len(candidates):
+                    self.append_log("NewAPI 国内加速线路连接失败，正在切换兼容线路。")
+                    continue
+                raise NewApiAccountError(f"newapi_network_error:{error}") from error
+            except Exception as error:
+                raise NewApiAccountError(f"newapi_network_error:{error}") from error
 
         if isinstance(payload, dict) and payload.get("success") is False:
             raise NewApiAccountError(_pick_text(payload.get("message"), payload.get("error"), "newapi_request_failed"))
@@ -1159,7 +1267,7 @@ class NewApiAccountManager:
             if "not found" in str(error).lower() or "openclaw_auth_endpoint_unavailable" in str(error).lower():
                 raise NewApiAccountError("当前中转站暂未开放验证码登录，请使用密码登录") from error
             raise
-        # The current api.heang.top deployment exposes email verification for
+        # The managed NewAPI deployment exposes email verification for
         # registration but not passwordless login. Keep this route for future
         # launcher-specific support and translate missing endpoints in routes.
         session = self._build_email_code_session(base_url, email, payload, cookie_jar)
@@ -1772,7 +1880,20 @@ class NewApiAccountManager:
     def current(self) -> dict[str, Any] | None:
         session = read_json(self.session_path, None)
         if isinstance(session, dict) and session.get("source") == ACCOUNT_SOURCE:
-            return self._unprotected_session(session)
+            current = self._unprotected_session(session)
+            urls_migrated = _migrate_managed_session_urls(current)
+            migration_version = int(current.get("managedGatewayMigrationVersion") or 0)
+            if urls_migrated or migration_version < MANAGED_GATEWAY_MIGRATION_VERSION:
+                try:
+                    results = self.sync_targets(current, targets=DEFAULT_RUNTIME_SYNC_TARGETS)
+                    if all(not isinstance(item, dict) or item.get("ok") is not False for item in results):
+                        current["managedGatewayMigrationVersion"] = MANAGED_GATEWAY_MIGRATION_VERSION
+                    else:
+                        self.append_log("[Account] accelerated gateway migration has pending local targets.\n")
+                except Exception as error:
+                    self.append_log(f"[Account] accelerated gateway migration sync failed: {_redact_secret_text(error)}\n")
+                self._write_session(current)
+            return current
         return None
 
     def _protected_session(self, session: dict[str, Any]) -> dict[str, Any]:

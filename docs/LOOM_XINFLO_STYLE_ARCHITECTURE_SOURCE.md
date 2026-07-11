@@ -452,7 +452,7 @@ Example shape only. Do not hardcode real tokens in source, logs, docs, or packag
   "managedBy": "heang_account",
   "accountId": "u_123",
   "provider": "heang",
-  "baseUrl": "https://api.heang.top/v1",
+  "baseUrl": "https://api-cn.heang.top/v1",
   "apiKey": "<scoped-model-token>",
   "tokenMasked": "sk-...abcd",
   "models": {
