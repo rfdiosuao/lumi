@@ -234,6 +234,9 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("activeJobComponentIds", page_source)
         self.assertIn("const componentJobBusy = activeJobComponentIds.size > 0", page_source)
         self.assertIn("const selectedBusy = Boolean(selected && activeJobComponentIds.has(selected.id))", page_source)
+        self.assertIn("const selectedActiveJob", page_source)
+        self.assertIn("selectedActiveJob?.progress?.message", page_source)
+        self.assertIn("data-installer-job-progress", page_source)
         self.assertIn("if (!jobs.some((job) => job.status === 'running' || job.status === 'queued')) return undefined;", page_source)
         self.assertIn("setSelectedId(component.id)", page_source)
 

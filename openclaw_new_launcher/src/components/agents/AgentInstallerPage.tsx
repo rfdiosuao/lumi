@@ -1012,6 +1012,13 @@ export const AgentInstallerPage: React.FC = () => {
   }, [components, selectedId]);
 
   const selected = components.find((item) => item.id === selectedId) || components[0];
+  const selectedActiveJob = React.useMemo(
+    () => jobs.find((job) => (
+      isActiveJobStatus(String(job.status || ''))
+      && extractJobComponentId(job) === selected?.id
+    )),
+    [jobs, selected?.id],
+  );
   const activeJobComponentIds = React.useMemo(() => {
     const ids = new Set<string>();
     jobs.forEach((job) => {
@@ -1671,10 +1678,10 @@ export const AgentInstallerPage: React.FC = () => {
                         {selected.errorMessage}
                       </div>
                     ) : isWorking(selected.status) ? (
-                      <div className="rounded-[16px] border border-[#0B4A3E]/30 bg-[#0B4A3E]/10 p-4 text-sm font-bold text-[#0B4A3E]">
+                      <div data-installer-job-progress className="rounded-[16px] border border-[#0B4A3E]/30 bg-[#0B4A3E]/10 p-4 text-sm font-bold text-[#0B4A3E]">
                         <span className="inline-flex items-center gap-2">
                           <ActivityRing />
-                          {displayStatusLabel(selected.status)}{selected.jobId ? ` · ${selected.jobId}` : ''}
+                          {selectedActiveJob?.progress?.message || selectedActiveJob?.message || displayStatusLabel(selected.status)}
                         </span>
                       </div>
                     ) : selected.status === 'upgrade_available' ? (

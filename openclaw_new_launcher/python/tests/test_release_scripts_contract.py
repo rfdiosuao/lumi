@@ -97,7 +97,15 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn("function Assert-OutputPathAvailable", source)
         self.assertIn("Assert-OutputPathAvailable -Path $onlineOutputPath", source)
         self.assertIn("Assert-OutputPathAvailable -Path $completeOutputPath", source)
+        self.assertIn("Assert-OutputPathAvailable -Path $recommendedOutputPath", source)
         self.assertIn("Test-Path -LiteralPath $Path", source)
+
+    def test_dual_nsis_publishes_complete_variant_as_unambiguous_recommended_setup(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertIn('$recommendedOutputPath = Join-Path $resolvedOutputRoot "$packagePrefix-$launcherVersion-setup.exe"', source)
+        self.assertIn('Copy-Item -LiteralPath $completeOutputPath -Destination $recommendedOutputPath', source)
+        self.assertIn('Write-InstallerHash -Path $recommendedOutputPath', source)
 
     def test_measure_installer_performance_script_reports_budgets_and_performance_gates(self) -> None:
         source = read_launcher_script("measure-installer-performance.ps1")

@@ -77,7 +77,7 @@ _skill_svc: SkillService | None = None
 _job_mgr: JobManager | None = None
 _wire_svc: WireService | None = None
 
-DEFAULT_OPENCLAW_TEXT_MODEL = "qwen3.7-plus"
+DEFAULT_OPENCLAW_TEXT_MODEL = "glm-5.2-coding"
 MANAGED_ACCOUNT_SOURCES = {"newapi_account", "heang_account"}
 
 def _get_license_mgr() -> LicenseManager:

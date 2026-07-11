@@ -16,7 +16,7 @@ if PYTHON_DIR not in sys.path:
 from core.paths import AppPaths
 from core.storage import read_json
 from core.wire_config import WireConfigError, WireService, build_wire_from_session
-from core.openclaw_model_sync import sync_openclaw_models_from_gateway_profile
+from core.openclaw_model_sync import _text_model_ids, sync_openclaw_models_from_gateway_profile
 
 
 def session_snapshot() -> dict:
@@ -48,13 +48,13 @@ def session_snapshot() -> dict:
 
 
 class WireServiceTests(unittest.TestCase):
-    def test_default_text_model_prefers_qwen37_plus_for_managed_accounts(self) -> None:
+    def test_default_text_model_prefers_glm52_coding_for_managed_accounts(self) -> None:
         session = {
             **session_snapshot(),
             "gatewayDefaultModel": "",
             "gateway": {
                 "classifiedModels": {
-                    "text": ["agnes-2.0-flash", "qwen3.7-plus"],
+                    "text": ["agnes-2.0-flash", "qwen3.7-plus", "glm-5.2-coding"],
                     "image": [],
                     "video": [],
                 },
@@ -63,7 +63,12 @@ class WireServiceTests(unittest.TestCase):
 
         wire = build_wire_from_session(session)
 
-        self.assertEqual(wire["models"]["text"], "qwen3.7-plus")
+        self.assertEqual(wire["models"]["text"], "glm-5.2-coding")
+
+    def test_openclaw_model_order_prefers_glm52_coding_when_no_explicit_default(self) -> None:
+        models = _text_model_ids(["qwen3.7-plus", "glm-5.2-coding", "gpt-4o"])
+
+        self.assertEqual(models[0], "glm-5.2-coding")
 
     def test_default_text_model_is_empty_when_managed_catalog_has_no_text_models(self) -> None:
         session = {

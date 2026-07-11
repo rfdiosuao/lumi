@@ -355,6 +355,34 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             with open(cache_path, "rb") as handle:
                 self.assertEqual(handle.read(), payload)
 
+    def test_verified_seed_in_loomfiles_up_redist_avoids_fetcher(self) -> None:
+        payload = b"codex nested complete setup seed"
+        component = make_payload_component(version="1.0.0", payload=payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                fetcher=lambda _url, _timeout: self.fail("complete setup seed should avoid network"),
+            )
+            seed_dir = os.path.join(
+                temp_dir,
+                "LOOMFiles",
+                "_up_",
+                "redist",
+                "components",
+                component.component_id,
+            )
+            os.makedirs(seed_dir, exist_ok=True)
+            with open(os.path.join(seed_dir, "codex-complete.tgz"), "wb") as handle:
+                handle.write(payload)
+
+            state = installer.install(component, job_id="job_seed_nested")
+
+            self.assertEqual(state.status, "manual_install_required")
+            self.assertTrue(os.path.isfile(installer._verified_cache_path(component)))
+
     def test_invalid_local_seed_warns_and_falls_back_to_fetcher(self) -> None:
         payload = b"codex fetched payload"
         component = make_payload_component(version="1.0.0", payload=payload)
@@ -906,6 +934,24 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertEqual(state.status, "ready")
             self.assertEqual(state.version, component.version)
             self.assertEqual(state.job_id, "job_detect")
+
+    def test_detect_missing_component_returns_not_installed_instead_of_failure(self) -> None:
+        component = make_component(component_id="missing-agent")
+        progress: list[tuple[str, str]] = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            installer = ComponentInstaller(base_path=temp_dir, state_store=store)
+
+            state = installer.detect(
+                component,
+                job_id="job_detect_missing",
+                on_progress=lambda message, tone: progress.append((message, tone)),
+            )
+
+            self.assertEqual(state.status, "not_installed")
+            self.assertEqual(state.job_id, "job_detect_missing")
+            self.assertTrue(any("未安装" in message for message, _tone in progress))
 
     def test_detect_existing_external_entry_marks_component_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

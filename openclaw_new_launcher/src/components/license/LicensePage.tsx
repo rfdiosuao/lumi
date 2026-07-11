@@ -135,6 +135,7 @@ function safeSubscriptionUrl(url: string): string {
 
 export const LicensePage: React.FC = () => {
   const cachedAccount = useRef<AccountSnapshot | null>(loadCachedAccount());
+  const subscriptionRequestVersion = useRef(0);
   const hasCachedAccount = accountCacheUsable(cachedAccount.current);
   const [account, setAccount] = useState<AccountSnapshot | null>(() => cachedAccount.current);
   const [subscription, setSubscription] = useState<AccountSubscriptionSnapshot | null>(() => cachedAccount.current?.subscription || null);
@@ -161,6 +162,7 @@ export const LicensePage: React.FC = () => {
   const accountStateText = loading ? '读取中' : loggedIn ? '已登录' : '未登录';
 
   const applyAccount = useCallback((next: AccountSnapshot | null) => {
+    subscriptionRequestVersion.current += 1;
     cachedAccount.current = next;
     saveCachedAccount(next);
     setAccount(next);
@@ -194,22 +196,25 @@ export const LicensePage: React.FC = () => {
   }, [applyAccount, refresh]);
 
   const loadSubscription = async (quiet = false) => {
+    const requestVersion = ++subscriptionRequestVersion.current;
     if (!quiet) setBusy(true);
     try {
       const resp = await accountApi.subscription();
+      if (requestVersion !== subscriptionRequestVersion.current) return;
       setSubscription(resp.subscription || null);
       if (!quiet) {
         setStatusText(resp.subscription?.message || '订阅信息已更新');
         showToast('订阅信息已更新', 'success');
       }
     } catch (error) {
+      if (requestVersion !== subscriptionRequestVersion.current) return;
       const message = errorMessage(error);
       if (!quiet) {
         setStatusText(message);
         showToast(message || '订阅信息获取失败', 'error');
       }
     } finally {
-      if (!quiet) setBusy(false);
+      if (!quiet && requestVersion === subscriptionRequestVersion.current) setBusy(false);
     }
   };
 
@@ -256,7 +261,7 @@ export const LicensePage: React.FC = () => {
       setStatusText(message);
       showToast(message, 'success');
     }
-    await loadSubscription(true);
+    void loadSubscription(true);
   };
 
   const handlePasswordLogin = async () => {
@@ -377,6 +382,7 @@ export const LicensePage: React.FC = () => {
   };
 
   const logout = async () => {
+    subscriptionRequestVersion.current += 1;
     setBusy(true);
     setStatusText('正在退出中转站账号...');
     try {

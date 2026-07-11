@@ -83,6 +83,14 @@ class NewApiAccountManagerTests(unittest.TestCase):
 
         self.assertEqual(chosen, "")
 
+    def test_default_text_model_choice_prefers_glm52_coding(self) -> None:
+        chosen = _choose_model(
+            ["qwen3.7-plus", "glm-5.2-coding", "gpt-4o"],
+            account_module.DEFAULT_TEXT_MODEL,
+        )
+
+        self.assertEqual(chosen, "glm-5.2-coding")
+
     def test_public_session_and_select_models_do_not_invent_qwen_when_catalog_has_no_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = AppPaths(temp_dir)
@@ -149,6 +157,63 @@ class NewApiAccountManagerTests(unittest.TestCase):
             self.assertIn("gpt-4o", session["gateway"]["classifiedModels"]["text"])
             self.assertEqual(session["lease"]["tokenSource"], "created_launcher")
 
+    def test_password_login_uses_one_bridge_round_trip_when_payload_is_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = LauncherTokenFakeManager(
+                AppPaths(temp_dir),
+                tokens=[],
+                bridge_token="fake-bridge-token-not-real",
+                bridge_models=["qwen3.7-plus", "gpt-4o", "agnes-2.0-flash"],
+            )
+
+            session = manager.login("user@example.invalid", "password-not-real", base_url="https://api.heang.top")
+
+            self.assertEqual(
+                [request["url"] for request in manager.requests],
+                ["https://api.heang.top/api/openclaw/launcher-token"],
+            )
+            self.assertEqual(session["memberToken"], "fake-bridge-token-not-real")
+            self.assertEqual(session["memberName"], "user@example.invalid")
+            self.assertEqual(session["newApi"]["userId"], "u_123")
+            self.assertEqual(session["newApi"]["sessionCookie"], "session=fake-session-not-real")
+            self.assertEqual(session["newApi"]["authMethod"], "password_bridge")
+            self.assertEqual(session["gatewayDefaultModel"], "qwen3.7-plus")
+            self.assertEqual(manager.synced_targets, account_module.DEFAULT_RUNTIME_SYNC_TARGETS)
+
+    def test_password_login_falls_back_to_legacy_without_retrying_missing_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = LauncherTokenFakeManager(
+                AppPaths(temp_dir),
+                tokens=[],
+                create_token="fake-created-token-not-real",
+                model_by_token={"fake-created-token-not-real": ["qwen3.7-plus"]},
+            )
+
+            session = manager.login("user@example.invalid", "password-not-real", base_url="https://api.heang.top")
+
+            bridge_requests = [
+                request for request in manager.requests
+                if request["url"].endswith("/api/openclaw/launcher-token")
+            ]
+            self.assertEqual(len(bridge_requests), 1)
+            self.assertEqual(session["memberToken"], "fake-created-token-not-real")
+
+    def test_password_login_does_not_retry_rejected_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = LauncherTokenFakeManager(
+                AppPaths(temp_dir),
+                tokens=[],
+                bridge_error=NewApiAccountError("invalid credentials", status_code=401),
+            )
+
+            with self.assertRaisesRegex(NewApiAccountError, "invalid credentials"):
+                manager.login("user@example.invalid", "wrong-password", base_url="https://api.heang.top")
+
+            self.assertEqual(
+                [request["url"] for request in manager.requests],
+                ["https://api.heang.top/api/openclaw/launcher-token"],
+            )
+
     def test_login_regenerates_launcher_token_when_existing_launcher_key_has_only_phone_models(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = LauncherTokenFakeManager(
@@ -200,7 +265,7 @@ class NewApiAccountManagerTests(unittest.TestCase):
             self.assertEqual(session["gatewayDefaultModel"], "qwen3.7-plus")
             self.assertEqual(session["lease"]["tokenSource"], "created_launcher")
 
-    def test_login_replaces_bridge_token_when_bridge_key_has_only_phone_models(self) -> None:
+    def test_login_does_not_resubmit_password_when_bridge_has_no_text_models(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = LauncherTokenFakeManager(
                 AppPaths(temp_dir),
@@ -214,11 +279,48 @@ class NewApiAccountManagerTests(unittest.TestCase):
                 },
             )
 
-            session = manager.login("user@example.invalid", "password-not-real", base_url="https://api.heang.top")
+            with self.assertRaisesRegex(NewApiAccountError, "文本模型"):
+                manager.login("user@example.invalid", "password-not-real", base_url="https://api.heang.top")
 
-            self.assertEqual(session["memberToken"], "fake-loom-fresh-token-not-real")
-            self.assertEqual(session["gatewayDefaultModel"], "qwen3.7-plus")
-            self.assertEqual(session["lease"]["tokenSource"], "created_launcher_after_model_check")
+            self.assertEqual(
+                [request["url"] for request in manager.requests],
+                ["https://api.heang.top/api/openclaw/launcher-token"],
+            )
+
+    def test_login_does_not_fall_back_after_bridge_service_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = LauncherTokenFakeManager(
+                AppPaths(temp_dir),
+                tokens=[],
+                bridge_error=NewApiAccountError("bridge token creation failed", status_code=500),
+            )
+
+            with self.assertRaisesRegex(NewApiAccountError, "bridge token creation failed"):
+                manager.login("user@example.invalid", "password-not-real", base_url="https://api.heang.top")
+
+            self.assertEqual(
+                [request["url"] for request in manager.requests],
+                ["https://api.heang.top/api/openclaw/launcher-token"],
+            )
+
+    def test_password_login_rejects_cross_origin_bridge_api_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = LauncherTokenFakeManager(
+                AppPaths(temp_dir),
+                tokens=[],
+                bridge_token="fake-bridge-token-not-real",
+                bridge_models=["qwen3.7-plus"],
+                bridge_api_base_url="https://api.heang.top/v1",
+            )
+
+            with self.assertRaisesRegex(NewApiAccountError, "域名"):
+                manager.login(
+                    "user@example.invalid",
+                    "password-not-real",
+                    base_url="https://relay.example.invalid",
+                )
+
+            self.assertEqual(len(manager.requests), 1)
 
     def test_login_falls_back_to_generic_token_when_launcher_token_creation_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -395,13 +497,105 @@ class NewApiAccountManagerTests(unittest.TestCase):
             )
             public_session = manager.public_session()
 
-            self.assertEqual(manager.requests[0]["url"], "https://api.heang.top/api/user/register")
+            self.assertEqual(manager.requests[0]["url"], "https://api.heang.top/api/openclaw/auth/email-code/register")
             self.assertEqual(manager.requests[0]["body"]["password"], "secret123")
             self.assertEqual(manager.requests[0]["body"]["verification_code"], "246810")
+            self.assertEqual(len(manager.requests), 1)
             self.assertEqual(session["memberName"], "new@example.invalid")
             self.assertEqual(session["gatewayDefaultModel"], "qwen3.7-plus")
+            self.assertEqual(session["newApi"]["sessionCookie"], "session=fake-register-session-not-real")
             self.assertNotIn("secret123", repr(session))
             self.assertNotIn("secret123", repr(public_session))
+
+    def test_register_business_error_does_not_probe_additional_endpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = EmailCodeFakeManager(
+                AppPaths(temp_dir),
+                register_error=NewApiAccountError("invalid verification code", status_code=400),
+            )
+
+            with self.assertRaisesRegex(NewApiAccountError, "invalid verification code"):
+                manager.register_with_email_code(
+                    "new@example.invalid",
+                    "secret123",
+                    "wrong-code",
+                    base_url="https://api.heang.top",
+                )
+
+            self.assertEqual(
+                [request["url"] for request in manager.requests],
+                ["https://api.heang.top/api/openclaw/auth/email-code/register"],
+            )
+
+    def test_register_not_found_business_error_does_not_probe_compatibility_endpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = EmailCodeFakeManager(
+                AppPaths(temp_dir),
+                register_error=NewApiAccountError("verification code not found", status_code=400),
+            )
+
+            with self.assertRaisesRegex(NewApiAccountError, "verification code not found"):
+                manager.register_with_email_code(
+                    "new@example.invalid",
+                    "secret123",
+                    "wrong-code",
+                    base_url="https://api.heang.top",
+                )
+
+            self.assertEqual(len(manager.requests), 1)
+
+    def test_register_falls_back_to_legacy_managed_endpoint_before_native_register(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = EmailCodeFakeManager(AppPaths(temp_dir), missing_primary_register=True)
+
+            session = manager.register_with_email_code(
+                "new@example.invalid",
+                "secret123",
+                "246810",
+                base_url="https://api.heang.top",
+            )
+
+            self.assertEqual(
+                [request["url"] for request in manager.requests[:2]],
+                [
+                    "https://api.heang.top/api/openclaw/auth/email-code/register",
+                    "https://api.heang.top/api/openclaw/email-code/register",
+                ],
+            )
+            self.assertEqual(session["memberName"], "new@example.invalid")
+
+    def test_register_rejects_cross_origin_managed_api_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = EmailCodeFakeManager(
+                AppPaths(temp_dir),
+                managed_api_base_url="https://api.heang.top/v1",
+            )
+
+            with self.assertRaisesRegex(NewApiAccountError, "域名"):
+                manager.register_with_email_code(
+                    "new@example.invalid",
+                    "secret123",
+                    "246810",
+                    base_url="https://relay.example.invalid",
+                )
+
+            self.assertEqual(len(manager.requests), 1)
+
+    def test_register_accepts_same_origin_custom_managed_api_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = EmailCodeFakeManager(
+                AppPaths(temp_dir),
+                managed_api_base_url="https://relay.example.invalid/openai/v1",
+            )
+
+            session = manager.register_with_email_code(
+                "new@example.invalid",
+                "secret123",
+                "246810",
+                base_url="https://relay.example.invalid",
+            )
+
+            self.assertEqual(session["gatewayBaseUrl"], "https://relay.example.invalid/openai/v1")
 
     def test_subscription_snapshot_reads_native_account_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -663,6 +857,8 @@ class LauncherTokenFakeManager(NewApiAccountManager):
         create_fails: bool = False,
         bridge_token: str = "",
         bridge_models: list[str] | None = None,
+        bridge_error: NewApiAccountError | None = None,
+        bridge_api_base_url: str = "",
         model_by_token: dict[str, list[str]] | None = None,
     ):
         super().__init__(paths)
@@ -671,6 +867,8 @@ class LauncherTokenFakeManager(NewApiAccountManager):
         self.create_fails = create_fails
         self.bridge_token = bridge_token
         self.bridge_models = bridge_models or []
+        self.bridge_error = bridge_error
+        self.bridge_api_base_url = bridge_api_base_url
         self.model_by_token = model_by_token or {}
         self.requests: list[dict] = []
         self.synced_targets: tuple[str, ...] | None = None
@@ -695,10 +893,18 @@ class LauncherTokenFakeManager(NewApiAccountManager):
                 },
             }
         if url.endswith("/api/openclaw/launcher-token"):
+            if self.bridge_error:
+                raise self.bridge_error
             if self.bridge_token:
                 return {
                     "success": True,
                     "data": {
+                        "userId": "u_123",
+                        "account": "user@example.invalid",
+                        "group": "standard",
+                        "sessionCookie": "session=fake-session-not-real",
+                        "remainQuota": 1000000,
+                        "api": {"baseUrl": self.bridge_api_base_url} if self.bridge_api_base_url else {},
                         "source": "bridge",
                         "apiKey": self.bridge_token,
                         "models": self.bridge_models,
@@ -748,10 +954,20 @@ class LauncherTokenFakeManager(NewApiAccountManager):
 
 
 class EmailCodeFakeManager(NewApiAccountManager):
-    def __init__(self, paths: AppPaths):
+    def __init__(
+        self,
+        paths: AppPaths,
+        *,
+        register_error: NewApiAccountError | None = None,
+        missing_primary_register: bool = False,
+        managed_api_base_url: str = "https://api.heang.top/v1",
+    ):
         super().__init__(paths)
         self.requests: list[dict] = []
         self.synced_targets: tuple[str, ...] | None = None
+        self.register_error = register_error
+        self.missing_primary_register = missing_primary_register
+        self.managed_api_base_url = managed_api_base_url
 
     def _request_json(self, opener, url, *, method="GET", body=None, headers=None, timeout=20):
         self.requests.append({
@@ -820,7 +1036,16 @@ class EmailCodeFakeManager(NewApiAccountManager):
                     "retryAfter": 60,
                 },
             }
-        if url.endswith("/api/openclaw/auth/email-code/login") or url.endswith("/api/openclaw/auth/email-code/register"):
+        if url.endswith("/api/openclaw/auth/email-code/register"):
+            if self.missing_primary_register:
+                raise NewApiAccountError("http_404", status_code=404)
+            if self.register_error:
+                raise self.register_error
+        if (
+            url.endswith("/api/openclaw/auth/email-code/login")
+            or url.endswith("/api/openclaw/auth/email-code/register")
+            or url.endswith("/api/openclaw/email-code/register")
+        ):
             return {
                 "success": True,
                 "data": {
@@ -836,10 +1061,11 @@ class EmailCodeFakeManager(NewApiAccountManager):
                         "unit": "tokens",
                     },
                     "api": {
-                        "baseUrl": "https://api.heang.top/v1",
+                        "baseUrl": self.managed_api_base_url,
                         "token": "sk-test-token-not-real",
                         "tokenMasked": "sk-****real",
                     },
+                    "sessionCookie": "session=fake-register-session-not-real",
                     "models": {
                         "text": ["qwen3.7-plus", "gpt-4o"],
                         "phone": ["agnes-2.0-flash"],

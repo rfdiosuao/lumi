@@ -30,7 +30,7 @@ export const MCP_SMOKE = 'python -B "${LOOM_CLI_DIR}/loom_mcp.py"';
 const CODEX_CONFIG = `# Codex user config: config.toml under CODEX_HOME.
 # Do not paste the real API key here. LOOM injects it through env.
 model_provider = "heang"
-model = "qwen3.7-plus"
+model = "glm-5.2-coding"
 
 [model_providers.heang]
 name = "heang"

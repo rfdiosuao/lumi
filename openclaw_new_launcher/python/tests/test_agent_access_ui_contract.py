@@ -102,6 +102,12 @@ class AgentAccessUiContractTests(unittest.TestCase):
         self.assertIn("LOOM CLI/MCP", page)
         self.assertIn("wire_api = \"chat\"", page)
 
+    def test_codex_bootstrap_example_uses_managed_default_coding_model(self) -> None:
+        prompt = self._prompt_module()
+
+        self.assertIn('model = "glm-5.2-coding"', prompt)
+        self.assertNotIn('model = "qwen3.7-plus"', prompt)
+
     def test_agent_access_page_exposes_one_shot_bootstrap_prompt(self) -> None:
         page = self._page_and_prompt()
 

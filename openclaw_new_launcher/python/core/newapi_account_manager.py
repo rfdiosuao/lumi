@@ -23,7 +23,9 @@ from core.wire_config import WireService, clear_agent_user_env_keys
 
 
 class NewApiAccountError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 DEFAULT_BASE_URL = "https://api.heang.top"
@@ -32,10 +34,11 @@ DEFAULT_ACCOUNT_CENTER_PATH = "/wallet"
 ACCOUNT_SOURCE = "newapi_account"
 LEGACY_ACCOUNT_SOURCE = "heang_account"
 SESSION_GRACE_DAYS = 14
-DEFAULT_TEXT_MODEL = "qwen3.7-plus"
+DEFAULT_TEXT_MODEL = "glm-5.2-coding"
 DEFAULT_PHONE_MODEL = "qwen3.7-plus"
 LAUNCHER_TOKEN_NAME_PREFIX = "LOOM Launcher"
 TEXT_MODEL_PRIORITY = (
+    "glm-5.2-coding",
     "qwen3.7-plus",
     "qwen3.6-plus",
     "qwen3.5-plus",
@@ -55,11 +58,9 @@ OPENCLAW_EMAIL_CODE_LOGIN_PATHS = (
     "/api/openclaw/email-code/login",
 )
 OPENCLAW_EMAIL_CODE_REGISTER_PATHS = (
-    "/api/user/register",
     "/api/openclaw/auth/email-code/register",
     "/api/openclaw/email-code/register",
-    "/api/openclaw/auth/register",
-    "/api/openclaw/register",
+    "/api/user/register",
 )
 OPENCLAW_SUBSCRIPTION_PATHS = (
     "/api/user/subscription",
@@ -102,6 +103,28 @@ def _pick_text(*values: Any) -> str:
 def _looks_like_email(value: Any) -> bool:
     text = str(value or "").strip()
     return "@" in text and "." in text.rsplit("@", 1)[-1]
+
+
+def _url_origin(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urllib.parse.urlsplit(str(value or "").strip())
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").lower()
+        if scheme not in {"http", "https"} or not hostname:
+            return None
+        port = parsed.port or (443 if scheme == "https" else 80)
+        return scheme, hostname, port
+    except (TypeError, ValueError):
+        return None
+
+
+def _trusted_managed_api_base(candidate: Any, account_base_url: str) -> str:
+    account_base_url = str(account_base_url or "").strip().rstrip("/")
+    fallback = f"{account_base_url}/v1"
+    api_base_url = _pick_text(candidate, fallback).rstrip("/")
+    if _url_origin(api_base_url) != _url_origin(account_base_url):
+        raise NewApiAccountError("中转站返回的模型 API 域名与登录域名不一致，已拒绝写入凭据")
+    return api_base_url
 
 
 def _should_retry_email_login(error: Exception) -> bool:
@@ -745,7 +768,7 @@ class NewApiAccountManager:
                 )
             except Exception:
                 message = ""
-            raise NewApiAccountError(message or f"http_{error.code}") from error
+            raise NewApiAccountError(message or f"http_{error.code}", status_code=error.code) from error
         except Exception as error:
             raise NewApiAccountError(f"newapi_network_error:{error}") from error
 
@@ -782,11 +805,18 @@ class NewApiAccountManager:
         models = []
         if isinstance(data, dict) and isinstance(data.get("models"), list):
             models = [str(item).strip() for item in data.get("models") or [] if str(item).strip()]
+        api = data.get("api") if isinstance(data, dict) and isinstance(data.get("api"), dict) else {}
         return token, {
             "source": _pick_text(data.get("source") if isinstance(data, dict) else "", "bridge"),
             "tokenId": data.get("tokenId") if isinstance(data, dict) else None,
             "tokenName": data.get("tokenName") if isinstance(data, dict) else "",
             "models": models,
+            "userId": _pick_text(data.get("userId") if isinstance(data, dict) else "", data.get("user_id") if isinstance(data, dict) else ""),
+            "account": _pick_text(data.get("account") if isinstance(data, dict) else "", data.get("username") if isinstance(data, dict) else ""),
+            "group": _pick_text(data.get("group") if isinstance(data, dict) else "", "default"),
+            "remainQuota": data.get("remainQuota") if isinstance(data, dict) else None,
+            "sessionCookie": _pick_text(data.get("sessionCookie") if isinstance(data, dict) else ""),
+            "apiBaseUrl": _pick_text(api.get("baseUrl")),
         }
 
     def _login_request(
@@ -866,6 +896,21 @@ class NewApiAccountManager:
                 )
             except NewApiAccountError as error:
                 errors.append(_redact_secret_text(error))
+                status_code = getattr(error, "status_code", None)
+                message = str(error).strip().lower()
+                if status_code is not None:
+                    endpoint_missing = status_code in {404, 405, 501}
+                else:
+                    endpoint_missing = message in {
+                        "http_404",
+                        "http_405",
+                        "http_501",
+                        "not found",
+                        "endpoint not found",
+                        "endpoint unavailable",
+                    }
+                if not endpoint_missing:
+                    raise
         raise NewApiAccountError("; ".join(errors[-2:]) or "openclaw_auth_endpoint_unavailable")
 
     def send_email_code(self, email: str, *, base_url: str = "", purpose: str = "register") -> dict[str, Any]:
@@ -980,8 +1025,11 @@ class NewApiAccountManager:
         if not api_token:
             raise NewApiAccountError("邮箱验证码登录成功，但服务端未返回托管模型 Token")
 
-        api_base_url = _pick_text(api.get("baseUrl"), api.get("baseURL"), data.get("baseUrl"), f"{base_url}/v1").rstrip("/")
-        session_base_url = api_base_url[:-3].rstrip("/") if api_base_url.lower().endswith("/v1") else self.normalize_base_url(base_url)
+        api_base_url = _trusted_managed_api_base(
+            _pick_text(api.get("baseUrl"), api.get("baseURL"), data.get("baseUrl")),
+            base_url,
+        )
+        session_base_url = self.normalize_base_url(base_url)
         username = _pick_text(account.get("email"), account.get("username"), account.get("name"), email)
         user_id = _pick_text(account.get("id"), account.get("userId"), account.get("user_id"), username)
         plan = _pick_text(account.get("plan"), account.get("group"), data.get("plan"), "default")
@@ -1065,6 +1113,9 @@ class NewApiAccountManager:
             "authMethod": "email_code",
             "modelClasses": classified,
         })
+        session_cookie = _pick_text(data.get("sessionCookie"), data.get("session_cookie"))
+        if session_cookie:
+            newapi["sessionCookie"] = session_cookie
         session["newApi"] = newapi
         phone_agent = session.get("phoneAgent") if isinstance(session.get("phoneAgent"), dict) else {}
         phone_agent.update({
@@ -1147,6 +1198,17 @@ class NewApiAccountManager:
         try:
             session = self._build_email_code_session(base_url, email, payload, cookie_jar)
         except NewApiAccountError:
+            data = _unwrap(payload)
+            api = data.get("api") if isinstance(data, dict) and isinstance(data.get("api"), dict) else {}
+            managed_token = _pick_text(
+                api.get("token"),
+                api.get("apiKey"),
+                api.get("api_key"),
+                data.get("apiToken") if isinstance(data, dict) else "",
+                data.get("apiKey") if isinstance(data, dict) else "",
+            )
+            if managed_token:
+                raise
             session = self.login(email, password, base_url=base_url)
             return session
         self._write_session(session)
@@ -1262,15 +1324,18 @@ class NewApiAccountManager:
         username: str,
         password: str,
         supplied_api_token: str,
+        *,
+        try_bridge: bool = True,
     ) -> tuple[str, dict[str, Any]]:
         supplied_api_token = supplied_api_token.strip()
         if supplied_api_token:
             return supplied_api_token, {"source": "supplied"}
 
-        try:
-            return self._request_launcher_token_bridge(opener, base_url, username, password)
-        except NewApiAccountError as error:
-            self.append_log(f"[Account] launcher token bridge unavailable: {_redact_secret_text(error)}\n")
+        if try_bridge:
+            try:
+                return self._request_launcher_token_bridge(opener, base_url, username, password)
+            except NewApiAccountError as error:
+                self.append_log(f"[Account] launcher token bridge unavailable: {_redact_secret_text(error)}\n")
 
         list_payload: dict[str, Any] | None = None
         try:
@@ -1416,6 +1481,62 @@ class NewApiAccountManager:
             "managedBy": ACCOUNT_SOURCE,
         }
 
+    @staticmethod
+    def _bridge_can_use_legacy_fallback(error: NewApiAccountError) -> bool:
+        status_code = getattr(error, "status_code", None)
+        if status_code is not None:
+            return status_code in {404, 405, 501}
+        message = str(error).strip().lower()
+        return message in {"http_404", "http_405", "http_501", "not found", "endpoint not found"}
+
+    def _build_bridge_session(
+        self,
+        base_url: str,
+        username: str,
+        api_token: str,
+        token_meta: dict[str, Any],
+        cookie_jar: http.cookiejar.CookieJar,
+    ) -> dict[str, Any]:
+        account = _pick_text(token_meta.get("account"), username)
+        user_id = _pick_text(token_meta.get("userId"), account)
+        group = _pick_text(token_meta.get("group"), "default")
+        user_data = {
+            "id": user_id,
+            "username": account,
+            "email": account if _looks_like_email(account) else "",
+            "group": group,
+            "quota": token_meta.get("remainQuota"),
+        }
+        payload = {"success": True, "data": user_data}
+        models = token_meta.get("models") if isinstance(token_meta.get("models"), list) else []
+        session = self._build_session(
+            base_url,
+            username,
+            api_token,
+            payload,
+            payload,
+            token_meta,
+            models,
+            cookie_jar,
+        )
+        api_base_url = _trusted_managed_api_base(token_meta.get("apiBaseUrl"), base_url)
+        session["gatewayBaseUrl"] = api_base_url
+        session["gatewayImageBaseUrl"] = api_base_url
+        gateway = session.get("gateway") if isinstance(session.get("gateway"), dict) else {}
+        gateway["baseUrl"] = api_base_url
+        gateway["imageBaseUrl"] = api_base_url
+        session["gateway"] = gateway
+        phone_agent = session.get("phoneAgent") if isinstance(session.get("phoneAgent"), dict) else {}
+        phone_agent["baseUrl"] = api_base_url
+        session["phoneAgent"] = phone_agent
+        newapi = session.get("newApi") if isinstance(session.get("newApi"), dict) else {}
+        newapi["authMethod"] = "password_bridge"
+        session_cookie = _pick_text(token_meta.get("sessionCookie"))
+        if session_cookie:
+            newapi["sessionCookie"] = session_cookie
+        session["newApi"] = newapi
+        return session
+
     def login(self, username: str, password: str, *, base_url: str = "", api_token: str = "") -> dict[str, Any]:
         username = username.strip()
         password = password.strip()
@@ -1425,6 +1546,24 @@ class NewApiAccountManager:
         base_url = self.normalize_base_url(base_url)
         cookie_jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        bridge_attempted = False
+        if not api_token.strip():
+            bridge_attempted = True
+            try:
+                bridge_token, bridge_meta = self._request_launcher_token_bridge(opener, base_url, username, password)
+            except NewApiAccountError as error:
+                if not self._bridge_can_use_legacy_fallback(error):
+                    raise
+                self.append_log(f"[Account] fast login bridge unavailable, using compatibility path: {_redact_secret_text(error)}\n")
+            else:
+                bridge_models = bridge_meta.get("models") if isinstance(bridge_meta.get("models"), list) else []
+                if not _models_have_text(bridge_models):
+                    raise NewApiAccountError("中转站桥接未返回可用文本模型，请稍后重试")
+                session = self._build_bridge_session(base_url, username, bridge_token, bridge_meta, cookie_jar)
+                self._write_session(session)
+                self.sync_targets(session, targets=DEFAULT_RUNTIME_SYNC_TARGETS)
+                return session
+
         login_payload = self._login_request(
             opener,
             f"{base_url}/api/user/login",
@@ -1451,7 +1590,15 @@ class NewApiAccountManager:
             user_id = _extract_user_id(self_payload, login_payload)
             headers = self._auth_headers(access_token, user_id)
 
-        api_token_value, token_meta = self._read_or_create_api_token(opener, base_url, headers, username, password, api_token)
+        api_token_value, token_meta = self._read_or_create_api_token(
+            opener,
+            base_url,
+            headers,
+            username,
+            password,
+            api_token,
+            try_bridge=not bridge_attempted,
+        )
         models = token_meta.get("models") if isinstance(token_meta.get("models"), list) else []
         if not models:
             models = self._fetch_models(opener, base_url, api_token_value, headers)

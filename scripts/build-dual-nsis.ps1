@@ -251,6 +251,7 @@ if ([string]::IsNullOrWhiteSpace($packagePrefix)) {
 }
 $onlineOutputPath = Join-Path $resolvedOutputRoot "$packagePrefix-$launcherVersion-online-setup.exe"
 $completeOutputPath = Join-Path $resolvedOutputRoot "$packagePrefix-$launcherVersion-complete-setup.exe"
+$recommendedOutputPath = Join-Path $resolvedOutputRoot "$packagePrefix-$launcherVersion-setup.exe"
 $seedPackagePath = Join-Path $CodexSeedDir (Split-Path -Leaf $resolvedCodexPackagePath)
 $seedDirExisted = Test-Path -LiteralPath $CodexSeedDir
 $seedDirBackupPath = ""
@@ -262,11 +263,13 @@ if ($outputRootExists -and -not (Get-Item -LiteralPath $resolvedOutputRoot).PSIs
 
 Assert-OutputPathAvailable -Path $onlineOutputPath
 Assert-OutputPathAvailable -Path $completeOutputPath
+Assert-OutputPathAvailable -Path $recommendedOutputPath
 
 if ($ValidateOnly) {
     Write-Host "Validated Codex package and dual NSIS build inputs."
     Write-Host "Online output: $onlineOutputPath"
     Write-Host "Complete output: $completeOutputPath"
+    Write-Host "Recommended output: $recommendedOutputPath"
     return
 }
 
@@ -284,6 +287,8 @@ try {
     Copy-Item -LiteralPath $resolvedCodexPackagePath -Destination $seedPackagePath -Force
 
     Build-InstallerVariant -VariantName "complete" -ExpectedVersion $launcherVersion -VariantOutputPath $completeOutputPath | Out-Null
+    Copy-Item -LiteralPath $completeOutputPath -Destination $recommendedOutputPath
+    Write-InstallerHash -Path $recommendedOutputPath
 }
 finally {
     if (Test-Path -LiteralPath $seedPackagePath) {

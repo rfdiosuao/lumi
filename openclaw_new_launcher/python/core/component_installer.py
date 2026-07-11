@@ -320,6 +320,18 @@ class ComponentInstaller:
     ) -> ComponentState:
         install_path = self._safe_install_path(component.install_path)
         self._mark(component, "health_checking", job_id=job_id, on_progress=on_progress, message=f"检测 {component.name}")
+        if not os.path.exists(install_path):
+            external_entry = self._first_existing_external_entry(component, refresh=force_external_probe)
+            if not external_entry:
+                state = self.state_store.mark(
+                    component.component_id,
+                    "not_installed",
+                    version=component.version,
+                    job_id=job_id,
+                )
+                if on_progress:
+                    on_progress(f"{component.name} 未安装", "neutral")
+                return state
         try:
             entry_path = self._resolve_component_entry(
                 component,
@@ -610,11 +622,16 @@ class ComponentInstaller:
     def _local_seed_directories(self, component: ReleaseComponent) -> list[str]:
         component_dir = component.component_id
         directories: list[str] = []
-        for base in (
+        bases = (
             os.path.join(self.base_path, "redist", "components"),
             os.path.join(self.base_path, "_up_", "redist", "components"),
             os.path.join(os.path.dirname(self.base_path), "redist", "components"),
-        ):
+            os.path.join(self.base_path, "LOOMFiles", "redist", "components"),
+            os.path.join(self.base_path, "LOOMFiles", "_up_", "redist", "components"),
+            os.path.join(self.base_path, "OpenClawFiles", "redist", "components"),
+            os.path.join(self.base_path, "OpenClawFiles", "_up_", "redist", "components"),
+        )
+        for base in bases:
             _append_unique(directories, os.path.join(base, component_dir))
         return directories
 

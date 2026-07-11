@@ -29,14 +29,42 @@ from typing import Any
 HOST = os.environ.get("OPENCLAW_NEWAPI_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("OPENCLAW_NEWAPI_BRIDGE_PORT", "3016"))
 NEWAPI_BASE = os.environ.get("OPENCLAW_NEWAPI_BASE", "http://127.0.0.1:3000").rstrip("/")
+PUBLIC_API_BASE = os.environ.get("OPENCLAW_PUBLIC_API_BASE", "https://api.heang.top/v1").rstrip("/")
 DB_PATH = os.environ.get("OPENCLAW_NEWAPI_DB", "/mnt/data/new-api/one-api.db")
 BIND_DB_PATH = os.environ.get("OPENCLAW_BIND_DB", "/tmp/openclaw-bind-tickets.db")
 BIND_TICKET_TTL_SEC = int(os.environ.get("OPENCLAW_BIND_TICKET_TTL_SEC", "600"))
 EMAIL_CODE_TTL_SEC = int(os.environ.get("OPENCLAW_EMAIL_CODE_TTL_SEC", "600"))
 EMAIL_CODE_RATE_WINDOW_SEC = int(os.environ.get("OPENCLAW_EMAIL_CODE_RATE_WINDOW_SEC", "900"))
 EMAIL_CODE_RATE_LIMIT = int(os.environ.get("OPENCLAW_EMAIL_CODE_RATE_LIMIT", "5"))
+AUTH_FAILURE_RATE_WINDOW_SEC = int(os.environ.get("OPENCLAW_AUTH_FAILURE_RATE_WINDOW_SEC", "900"))
+AUTH_FAILURE_RATE_LIMIT = int(os.environ.get("OPENCLAW_AUTH_FAILURE_RATE_LIMIT", "10"))
 EMAIL_CODE_PEPPER = os.environ.get("OPENCLAW_EMAIL_CODE_SECRET") or secrets.token_hex(32)
 PRODUCT_NAME = os.environ.get("OPENCLAW_PRODUCT_NAME", "LOOM / 麓鸣")
+DEFAULT_TEXT_MODEL = "glm-5.2-coding"
+TEXT_MODEL_PRIORITY = (
+    DEFAULT_TEXT_MODEL,
+    "qwen3.7-plus",
+    "qwen3.6-plus",
+    "qwen3.5-plus",
+    "glm-4-flash",
+    "kimi-k2.5",
+    "MiniMax-M2.5",
+)
+
+
+class BridgeUpstreamError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def default_text_model(models: list[str]) -> str:
+    for model in TEXT_MODEL_PRIORITY:
+        if model in models:
+            return model
+    return models[0] if models else ""
+
+
 BIND_PAGE_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -156,7 +184,12 @@ def request_json(
             payload = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             payload = {"message": raw}
-        raise RuntimeError(str(payload.get("message") or payload.get("error") or f"HTTP {error.code}")) from error
+        raise BridgeUpstreamError(
+            str(payload.get("message") or payload.get("error") or f"HTTP {error.code}"),
+            status_code=error.code,
+        ) from error
+    except urllib.error.URLError as error:
+        raise BridgeUpstreamError("upstream service unavailable", status_code=502) from error
 
 
 def candidate_user_id(login_payload: dict[str, Any]) -> str:
@@ -177,6 +210,23 @@ def user_group(login_payload: dict[str, Any]) -> str:
     if isinstance(data, dict):
         return str(data.get("group") or "default")
     return "default"
+
+
+def cookie_header(cookie_jar: http.cookiejar.CookieJar) -> str:
+    return "; ".join(f"{cookie.name}={cookie.value}" for cookie in cookie_jar)
+
+
+def upstream_error_response(error: BridgeUpstreamError, *, authentication: bool = False) -> tuple[int, dict[str, Any]]:
+    status_code = int(error.status_code or 502)
+    if status_code == 429:
+        public_status = 429
+    elif authentication and status_code in {400, 401, 403}:
+        public_status = 401
+    elif not authentication and status_code in {400, 409, 422}:
+        public_status = status_code
+    else:
+        public_status = 502
+    return public_status, {"success": False, "error": str(error)}
 
 
 def token_usable(row: sqlite3.Row) -> bool:
@@ -341,11 +391,22 @@ def handle_launcher_token(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     preferred_name = str(body.get("tokenName") or "").strip()
     if not username or not password:
         return 400, {"success": False, "error": "username and password are required"}
+    if not reserve_auth_attempt(username, "password"):
+        return 429, {"success": False, "error": "登录失败次数过多，请稍后再试"}
 
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-    login_payload = request_json(opener, "/api/user/login", method="POST", body={"username": username, "password": password})
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    try:
+        login_payload = request_json(opener, "/api/user/login", method="POST", body={"username": username, "password": password})
+    except BridgeUpstreamError as error:
+        if error.status_code not in {400, 401, 403}:
+            release_auth_attempt(username, "password")
+        return upstream_error_response(error, authentication=True)
+    except RuntimeError as error:
+        return 401, {"success": False, "error": str(error)}
     if login_payload.get("success") is False:
         return 401, {"success": False, "error": str(login_payload.get("message") or "login failed")}
+    clear_auth_failures(username, "password")
 
     user_id = candidate_user_id(login_payload)
     if not user_id:
@@ -356,6 +417,7 @@ def handle_launcher_token(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         account=username,
         group=user_group(login_payload),
         preferred_name=preferred_name,
+        session_cookie=cookie_header(cookie_jar),
     )
 
 
@@ -365,6 +427,7 @@ def build_launcher_payload(
     account: str,
     group: str = "default",
     preferred_name: str = "",
+    session_cookie: str = "",
 ) -> tuple[int, dict[str, Any]]:
     token = select_token(user_id, preferred_name)
     source = "existing"
@@ -376,11 +439,15 @@ def build_launcher_payload(
 
     key = str(token["key"])
     models = fetch_models(key)
+    if not models:
+        return 503, {"success": False, "error": "model catalog is temporarily unavailable"}
     return 200, {
         "success": True,
         "data": {
             "userId": user_id,
             "account": account,
+            "group": group or "default",
+            "sessionCookie": session_cookie,
             "key": key,
             "apiKey": key,
             "apiToken": key,
@@ -396,13 +463,101 @@ def build_launcher_payload(
             "api": {
                 "token": key,
                 "apiKey": key,
-                "baseUrl": "https://api.heang.top/v1",
+                "baseUrl": PUBLIC_API_BASE,
             },
             "defaults": {
-                "textModel": models[0] if models else "",
+                "textModel": default_text_model(models),
             },
         },
     }
+
+
+def handle_email_code_register(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    email = normalize_email(body.get("email") or body.get("username"))
+    password = str(body.get("password") or "").strip()
+    code = str(body.get("code") or body.get("verification_code") or "").strip()
+    if not email or "@" not in email:
+        return 400, {"success": False, "error": "valid email is required"}
+    if len(password) < 6:
+        return 400, {"success": False, "error": "password must contain at least 6 characters"}
+    if not code:
+        return 400, {"success": False, "error": "verification code is required"}
+    if not reserve_auth_attempt(email, "register"):
+        return 429, {"success": False, "error": "注册失败次数过多，请稍后再试"}
+
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    try:
+        register_payload = request_json(
+            opener,
+            "/api/user/register",
+            method="POST",
+            body={
+                "email": email,
+                "username": email,
+                "password": password,
+                "code": code,
+                "verification_code": code,
+            },
+        )
+    except BridgeUpstreamError as error:
+        if error.status_code not in {400, 409, 422}:
+            release_auth_attempt(email, "register")
+        return upstream_error_response(error)
+    except RuntimeError as error:
+        return 400, {"success": False, "error": str(error)}
+    if register_payload.get("success") is False:
+        return 400, {
+            "success": False,
+            "error": str(register_payload.get("message") or register_payload.get("error") or "registration failed"),
+        }
+    clear_auth_failures(email, "register")
+
+    try:
+        login_payload = request_json(
+            opener,
+            "/api/user/login",
+            method="POST",
+            body={"username": email, "password": password},
+        )
+    except BridgeUpstreamError as error:
+        status, error_payload = upstream_error_response(error, authentication=True)
+        if status == 401:
+            status = 502
+        error_payload["error"] = f"registration succeeded but automatic login failed: {error_payload['error']}"
+        return status, error_payload
+    except RuntimeError as error:
+        return 502, {"success": False, "error": f"registration succeeded but automatic login failed: {error}"}
+    if login_payload.get("success") is False:
+        return 502, {"success": False, "error": "registration succeeded but automatic login failed"}
+
+    user = find_user_by_email(email)
+    if not user:
+        return 500, {"success": False, "error": "registration succeeded but the account was not found"}
+    user_id = candidate_user_id(login_payload) or str(user.get("id") or "")
+    group = user_group(login_payload) or str(user.get("group") or "default")
+    status, payload = build_launcher_payload(
+        user_id=user_id,
+        account=email,
+        group=group,
+        session_cookie=cookie_header(cookie_jar),
+    )
+    if status != 200:
+        return status, payload
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    data["account"] = {
+        "id": user_id,
+        "email": email,
+        "username": str(user.get("username") or email),
+        "name": str(user.get("display_name") or user.get("username") or email),
+        "plan": group,
+        "group": group,
+    }
+    data["quota"] = {
+        "remaining": data.get("remainQuota"),
+    }
+    payload["data"] = data
+    return status, payload
 
 
 def normalize_email(value: Any) -> str:
@@ -507,7 +662,94 @@ def _email_code_connection() -> sqlite3.Connection:
         """
     )
     connection.execute("create index if not exists idx_email_code_email_purpose on email_code_challenges(email, purpose, created_at)")
+    connection.execute(
+        """
+        create table if not exists auth_failures (
+            id integer primary key autoincrement,
+            subject_hash text not null,
+            action text not null,
+            created_at integer not null
+        )
+        """
+    )
+    connection.execute("create index if not exists idx_auth_failures_subject_action on auth_failures(subject_hash, action, created_at)")
     return connection
+
+
+def _auth_subject_hash(subject: str) -> str:
+    normalized = str(subject or "").strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def auth_failure_limited(subject: str, action: str, now: int | None = None) -> bool:
+    now = int(now or time.time())
+    subject_hash = _auth_subject_hash(subject)
+    connection = _email_code_connection()
+    try:
+        connection.execute("delete from auth_failures where created_at < ?", (now - AUTH_FAILURE_RATE_WINDOW_SEC,))
+        count = connection.execute(
+            "select count(*) from auth_failures where subject_hash = ? and action = ? and created_at >= ?",
+            (subject_hash, action, now - AUTH_FAILURE_RATE_WINDOW_SEC),
+        ).fetchone()[0]
+        connection.commit()
+        return int(count or 0) >= AUTH_FAILURE_RATE_LIMIT
+    finally:
+        connection.close()
+
+
+def reserve_auth_attempt(subject: str, action: str, now: int | None = None) -> bool:
+    now = int(now or time.time())
+    connection = _email_code_connection()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("delete from auth_failures where created_at < ?", (now - AUTH_FAILURE_RATE_WINDOW_SEC,))
+        count = connection.execute(
+            "select count(*) from auth_failures where subject_hash = ? and action = ? and created_at >= ?",
+            (_auth_subject_hash(subject), action, now - AUTH_FAILURE_RATE_WINDOW_SEC),
+        ).fetchone()[0]
+        if int(count or 0) >= AUTH_FAILURE_RATE_LIMIT:
+            connection.commit()
+            return False
+        connection.execute(
+            "insert into auth_failures(subject_hash, action, created_at) values(?, ?, ?)",
+            (_auth_subject_hash(subject), action, now),
+        )
+        connection.commit()
+        return True
+    finally:
+        connection.close()
+
+
+def clear_auth_failures(subject: str, action: str) -> None:
+    connection = _email_code_connection()
+    try:
+        connection.execute(
+            "delete from auth_failures where subject_hash = ? and action = ?",
+            (_auth_subject_hash(subject), action),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def release_auth_attempt(subject: str, action: str) -> None:
+    connection = _email_code_connection()
+    try:
+        connection.execute(
+            """
+            delete from auth_failures
+            where id = (
+                select id from auth_failures
+                where subject_hash = ? and action = ?
+                order by id desc
+                limit 1
+            )
+            """,
+            (_auth_subject_hash(subject), action),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def cleanup_email_codes(now: int | None = None) -> None:
@@ -799,6 +1041,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/openclaw/email-code/send": handle_email_code_send,
             "/api/openclaw/auth/email-code/login": handle_email_code_login,
             "/api/openclaw/email-code/login": handle_email_code_login,
+            "/api/openclaw/auth/email-code/register": handle_email_code_register,
+            "/api/openclaw/email-code/register": handle_email_code_register,
         }
         handler = routes.get(self.path)
         if not handler:

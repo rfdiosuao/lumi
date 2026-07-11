@@ -19,9 +19,10 @@ from core.storage import read_json, write_json
 WIRE_MANAGED_BY = "heang_account"
 WIRE_PROVIDER = "heang"
 WIRE_CUSTOM_MANAGED_BY = "custom_provider"
-DEFAULT_TEXT_MODEL = "qwen3.7-plus"
+DEFAULT_TEXT_MODEL = "glm-5.2-coding"
 DEFAULT_PHONE_MODEL = "qwen3.7-plus"
 TEXT_MODEL_PRIORITY = (
+    "glm-5.2-coding",
     "qwen3.7-plus",
     "qwen3.6-plus",
     "qwen3.5-plus",

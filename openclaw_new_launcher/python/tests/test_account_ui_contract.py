@@ -109,6 +109,24 @@ class AccountUiContractTests(unittest.TestCase):
         self.assertIn("resp.syncResults", source)
         self.assertIn("syncResults?: Array", api_source)
 
+    def test_login_releases_the_form_before_subscription_refresh_finishes(self) -> None:
+        with open(LICENSE_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        finish_login = source.split("const finishLogin =", 1)[1].split("const handlePasswordLogin =", 1)[0]
+        self.assertIn("void loadSubscription(true)", finish_login)
+        self.assertNotIn("await loadSubscription(true)", finish_login)
+
+    def test_background_subscription_refresh_cannot_restore_data_after_logout(self) -> None:
+        with open(LICENSE_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("subscriptionRequestVersion", source)
+        self.assertIn("const requestVersion = ++subscriptionRequestVersion.current", source)
+        self.assertIn("if (requestVersion !== subscriptionRequestVersion.current) return", source)
+        logout_block = source.split("const logout =", 1)[1].split("const handleOpenSubscription =", 1)[0]
+        self.assertIn("subscriptionRequestVersion.current += 1", logout_block)
+
 
 if __name__ == "__main__":
     unittest.main()

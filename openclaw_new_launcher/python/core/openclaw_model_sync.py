@@ -11,7 +11,7 @@ from core.paths import AppPaths
 from core.storage import read_json, write_json
 
 
-DEFAULT_OPENCLAW_TEXT_MODEL = "qwen3.7-plus"
+DEFAULT_OPENCLAW_TEXT_MODEL = "glm-5.2-coding"
 PHONE_MODEL_IDS = {"agnes-2.0-flash"}
 MANAGED_ACCOUNT_SOURCES = {"newapi_account", "heang_account"}
 
