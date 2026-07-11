@@ -194,8 +194,11 @@ export default function App() {
           if (ok) {
             appendLog('[更新] 开始更新...\n');
             const updateResp = await updateApi.do();
+            if (updateResp.success && updateResp.installer_path) {
+              await updateApi.prepareInstall(updateResp.installer_path);
+            }
             showToast(
-              updateResp.success ? `LOOM ${updateResp.current_version} 安装器已启动，请按提示完成覆盖安装` : '更新失败',
+              updateResp.success ? `LOOM ${updateResp.current_version} 已完成校验，正在安全更新` : '更新失败',
               updateResp.success ? 'success' : 'error',
             );
           }

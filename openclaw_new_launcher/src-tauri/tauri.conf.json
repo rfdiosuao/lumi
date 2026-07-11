@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Luming AI Matrix Acquisition Workbench",
   "mainBinaryName": "LOOM",
-  "version": "2.1.61",
+  "version": "2.1.62",
   "identifier": "top.heang.loom",
   "build": {
     "frontendDist": "../dist",
@@ -52,6 +52,7 @@
       "icons/icon.ico"
     ],
     "windows": {
+      "allowDowngrades": false,
       "webviewInstallMode": {
         "type": "offlineInstaller"
       },
@@ -68,7 +69,8 @@
         "customLanguageFiles": {
           "SimpChinese": "installer/zh-cn.nsh"
         },
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "installer/upgrade-hooks.nsh"
       }
     }
   }

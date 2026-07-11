@@ -321,10 +321,25 @@ export const SettingsPage: React.FC = () => {
       tone: 'info',
       message: copy.updates.installing,
     }));
+    const progressTimer = window.setInterval(() => {
+      void updateApi.status().then((progress) => {
+        if (progress.phase === 'downloading') {
+          setUpdateStatus((prev) => ({
+            ...(prev ?? { tone: 'info' as const }),
+            tone: 'info',
+            message: `${copy.updates.installing} ${progress.percent}%`,
+          }));
+        }
+      }).catch(() => undefined);
+    }, 500);
     try {
       const result = await updateApi.do();
+      window.clearInterval(progressTimer);
+      if (result.success && result.installer_path) {
+        await updateApi.prepareInstall(result.installer_path);
+      }
       const message = result.success
-        ? `${copy.toast.updateSuccess}: ${result.current_version}，安装器已启动`
+        ? `${copy.toast.updateSuccess}: ${result.current_version}`
         : copy.updates.failedInstall;
       setUpdateStatus({
         tone: result.success ? 'success' : 'error',
@@ -335,6 +350,7 @@ export const SettingsPage: React.FC = () => {
       });
       showToast(message, result.success ? 'success' : 'error');
     } catch (error) {
+      window.clearInterval(progressTimer);
       const message = formatUpdateError(error, copy.updates.failedInstall);
       setUpdateStatus((prev) => ({
         ...(prev ?? { tone: 'error' as const }),
@@ -344,6 +360,7 @@ export const SettingsPage: React.FC = () => {
       }));
       showToast(message, 'error');
     } finally {
+      window.clearInterval(progressTimer);
       setUpdateBusy(null);
     }
   };

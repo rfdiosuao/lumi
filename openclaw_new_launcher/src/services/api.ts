@@ -444,7 +444,18 @@ export const videoApi = {
 // === Update API ===
 export const updateApi = {
   check: (): Promise<{ current: string; latest: string; hasUpdate: boolean }> => api('/api/update/check'),
-  do: (): Promise<{ success: boolean; current_version: string; log: string[] }> => api('/api/update/do', 'POST'),
+  status: (): Promise<{
+    phase: string;
+    downloaded: number;
+    total: number;
+    percent: number;
+    version: string;
+    message: string;
+  }> => api('/api/update/status'),
+  do: (): Promise<{ success: boolean; current_version: string; log: string[]; installer_path: string }> =>
+    api('/api/update/do', 'POST'),
+  prepareInstall: (installerPath: string): Promise<string> =>
+    invoke('prepare_update_install', { installerPath }),
 };
 
 // === Config API ===

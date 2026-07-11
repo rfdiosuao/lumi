@@ -424,6 +424,9 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     child_cmd.env("PYTHONUTF8", "1");
     child_cmd.env("PYTHONIOENCODING", "utf-8");
     child_cmd.env("LOOM_APP_VERSION", env!("CARGO_PKG_VERSION"));
+    if let Ok(app_exe) = std::env::current_exe() {
+        child_cmd.env("LOOM_APP_EXE", app_exe);
+    }
     // Cache compiled bytecode in a writable, stable location to speed up cold
     // starts. Previously bytecode writing was disabled entirely, which forced
     // Python to recompile every module (fastapi/pydantic/uvicorn/...) on every
@@ -922,6 +925,92 @@ async fn open_path(path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+async fn prepare_update_install(app: tauri::AppHandle, installer_path: String) -> Result<String, String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (app, installer_path);
+        return Err("LOOM automatic update is currently available on Windows only".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let installer = std::fs::canonicalize(installer_path.trim())
+            .map_err(|e| format!("更新安装包不存在: {e}"))?;
+        let local_app_data = std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| "LOCALAPPDATA 不可用，无法创建安全更新目录".to_string())?;
+        let cache_root = local_app_data.join("LOOM").join("updates");
+        let canonical_cache = std::fs::canonicalize(&cache_root)
+            .map_err(|e| format!("更新缓存目录不可用: {e}"))?;
+        if !installer.starts_with(&canonical_cache) {
+            return Err("拒绝启动更新：安装包不在 LOOM 外部更新缓存中".to_string());
+        }
+        let filename = installer
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        if !filename.starts_with("LOOM-") || !filename.ends_with("-setup.exe") {
+            return Err("拒绝启动更新：安装包名称不符合正式发布规则".to_string());
+        }
+
+        shutdown_backend().await;
+        let install_root = bootstrap::install_root()?;
+        let app_exe = std::env::current_exe().map_err(|e| format!("无法定位当前 LOOM: {e}"))?;
+        let recovery_root = local_app_data
+            .join("LOOM")
+            .join("upgrade-backups")
+            .join(format!("{}-{}", env!("CARGO_PKG_VERSION"), chrono_like_timestamp()));
+        std::fs::create_dir_all(&recovery_root)
+            .map_err(|e| format!("无法创建升级恢复目录: {e}"))?;
+        let marker_path = local_app_data.join("LOOM").join("update-pending.json");
+        let script_path = recovery_root.join("update-handoff.ps1");
+        let script = include_str!("../installer/update-handoff.ps1");
+        std::fs::write(&script_path, script.as_bytes())
+            .map_err(|e| format!("无法写入升级交接脚本: {e}"))?;
+
+        let powershell = std::path::PathBuf::from(
+            std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into()),
+        )
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+        let mut command = Command::new(powershell);
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ]);
+        command.arg(&script_path);
+        command.arg("-Installer").arg(&installer);
+        command.arg("-InstallRoot").arg(&install_root);
+        command.arg("-AppExe").arg(&app_exe);
+        command.arg("-RecoveryRoot").arg(&recovery_root);
+        command.arg("-MarkerPath").arg(&marker_path);
+        command.arg("-ParentPid").arg(std::process::id().to_string());
+        command.arg("-Version").arg(env!("CARGO_PKG_VERSION"));
+        if std::env::var("LOOM_UPDATE_TEST_MODE").ok().as_deref() == Some("1") {
+            command.arg("-TestMode");
+        }
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+            .spawn()
+            .map_err(|e| format!("无法启动升级交接进程: {e}"))?;
+
+        if std::env::var("LOOM_UPDATE_TEST_MODE").ok().as_deref() != Some("1") {
+            let app_handle = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(350));
+                app_handle.exit(0);
+            });
+        }
+        Ok(recovery_root.to_string_lossy().to_string())
+    }
+}
+
 fn chrono_like_timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let seconds = SystemTime::now()
@@ -987,6 +1076,7 @@ pub fn run() {
             phone_proxy_request,
             export_log,
             open_path,
+            prepare_update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri");

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import Request
 
 
@@ -23,7 +25,21 @@ def register_update_routes(app, ctx) -> None:
             return error
 
         updater = ctx.get_app_updater()
-        success, current, output = updater.install_latest()
+        success, current, output = await asyncio.to_thread(updater.install_latest)
         for line in output:
             ctx.append_log(line)
-        return ctx.fastapi_json({"success": success, "current_version": current, "log": output}, 200 if success else 500)
+        return ctx.fastapi_json(
+            {
+                "success": success,
+                "current_version": current,
+                "log": output,
+                "installer_path": updater.last_installer_path if success else "",
+            },
+            200 if success else 500,
+        )
+
+    @app.get("/api/update/status")
+    async def update_status(request: Request):
+        if error := ctx.auth_error(request):
+            return error
+        return ctx.fastapi_json(ctx.get_app_updater().status())

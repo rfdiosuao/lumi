@@ -12,9 +12,18 @@ from services.app_updater import LoomAppUpdater
 
 
 class _Response:
-    def __init__(self, payload: bytes, *, url: str = "https://example.invalid/value") -> None:
+    def __init__(
+        self,
+        payload: bytes,
+        *,
+        url: str = "https://example.invalid/value",
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self._stream = io.BytesIO(payload)
         self.url = url
+        self.status = status
+        self.headers = headers or {}
 
     def read(self, size: int = -1) -> bytes:
         return self._stream.read(size)
@@ -180,6 +189,7 @@ class LoomAppUpdaterTests(unittest.TestCase):
                 release_api_urls=("https://api.example/releases/latest",),
                 opener=opener,
                 launcher=lambda path: launched.append(path),
+                signature_verifier=lambda _path: (True, "CN=LOOM Release"),
             )
 
             success, version, output = updater.install_latest()
@@ -225,6 +235,136 @@ class LoomAppUpdaterTests(unittest.TestCase):
         self.assertFalse(success)
         self.assertFalse(launched)
         self.assertTrue(any("SHA256" in line for line in output))
+
+    def test_update_cache_is_outside_the_install_data_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_root = os.path.join(temp_dir, "installed-app")
+            cache_root = os.path.join(temp_dir, "external-cache")
+            updater = LoomAppUpdater(
+                AppPaths(install_root),
+                current_version="2.1.61",
+                release_api_urls=(),
+                update_cache_dir=cache_root,
+            )
+
+            self.assertEqual(os.path.realpath(updater.update_cache_dir), os.path.realpath(cache_root))
+            self.assertFalse(
+                os.path.commonpath(
+                    [os.path.realpath(updater.update_cache_dir), os.path.realpath(updater.paths.data_dir)]
+                )
+                == os.path.realpath(updater.paths.data_dir)
+            )
+
+    def test_install_latest_resumes_partial_download_and_reports_progress(self) -> None:
+        installer = b"verified-installer-with-resume"
+        digest = hashlib.sha256(installer).hexdigest()
+        release = {
+            "assets": [
+                {
+                    "name": "LOOM-2.1.62-setup.exe",
+                    "size": len(installer),
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": "https://downloads.example/LOOM-2.1.62-setup.exe",
+                }
+            ]
+        }
+        seen_ranges: list[str] = []
+        progress: list[dict[str, object]] = []
+        launched: list[str] = []
+
+        def opener(request, timeout=0):
+            del timeout
+            url = request.full_url if hasattr(request, "full_url") else str(request)
+            if url.endswith("/releases/latest"):
+                return _Response(json.dumps(release).encode("utf-8"), url=url)
+            range_header = request.headers.get("Range") or request.headers.get("range")
+            if range_header:
+                seen_ranges.append(range_header)
+            start = int(str(range_header).split("=")[1].split("-")[0])
+            return _Response(
+                installer[start:],
+                url=url,
+                status=206,
+                headers={"Content-Range": f"bytes {start}-{len(installer) - 1}/{len(installer)}"},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_root = os.path.join(temp_dir, "cache")
+            os.makedirs(cache_root, exist_ok=True)
+            partial_path = os.path.join(cache_root, "LOOM-2.1.62-setup.exe.part")
+            with open(partial_path, "wb") as handle:
+                handle.write(installer[:9])
+            updater = LoomAppUpdater(
+                AppPaths(os.path.join(temp_dir, "app")),
+                current_version="2.1.61",
+                release_api_urls=("https://api.example/releases/latest",),
+                opener=opener,
+                launcher=lambda path: launched.append(path),
+                signature_verifier=lambda _path: (True, "CN=LOOM Release"),
+                update_cache_dir=cache_root,
+            )
+
+            success, version, _output = updater.install_latest(progress_callback=progress.append)
+
+        self.assertTrue(success)
+        self.assertEqual(version, "2.1.62")
+        self.assertEqual(seen_ranges, ["bytes=9-"])
+        self.assertEqual(len(launched), 1)
+        self.assertTrue(any(item.get("phase") == "downloading" for item in progress))
+        self.assertEqual(progress[-1].get("phase"), "ready")
+        self.assertEqual(progress[-1].get("downloaded"), len(installer))
+
+    def test_install_latest_refuses_invalid_windows_signature_after_sha256(self) -> None:
+        installer = b"sha-valid-but-unsigned"
+        digest = hashlib.sha256(installer).hexdigest()
+        release = {
+            "assets": [
+                {
+                    "name": "LOOM-2.1.62-setup.exe",
+                    "size": len(installer),
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": "https://downloads.example/LOOM-2.1.62-setup.exe",
+                }
+            ]
+        }
+        launched: list[str] = []
+
+        def opener(request, timeout=0):
+            del timeout
+            url = request.full_url if hasattr(request, "full_url") else str(request)
+            payload = json.dumps(release).encode("utf-8") if url.endswith("/releases/latest") else installer
+            return _Response(payload, url=url)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            updater = LoomAppUpdater(
+                AppPaths(os.path.join(temp_dir, "app")),
+                current_version="2.1.61",
+                release_api_urls=("https://api.example/releases/latest",),
+                opener=opener,
+                launcher=lambda path: launched.append(path),
+                signature_verifier=lambda _path: (False, "NotSigned"),
+                update_cache_dir=os.path.join(temp_dir, "cache"),
+            )
+            success, _version, output = updater.install_latest()
+
+        self.assertFalse(success)
+        self.assertFalse(launched)
+        self.assertTrue(any("签名" in line or "signature" in line.lower() for line in output))
+
+    def test_status_exposes_download_state_without_install_path_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            updater = LoomAppUpdater(
+                AppPaths(os.path.join(temp_dir, "app")),
+                current_version="2.1.61",
+                release_api_urls=(),
+                update_cache_dir=os.path.join(temp_dir, "cache"),
+            )
+            status = updater.status()
+
+        self.assertEqual(status["phase"], "idle")
+        self.assertEqual(status["downloaded"], 0)
+        self.assertEqual(status["total"], 0)
+        self.assertNotIn("installer_path", status)
 
 
 if __name__ == "__main__":
