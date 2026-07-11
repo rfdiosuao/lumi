@@ -37,6 +37,7 @@ from services.desktop_agent import DesktopAgentService
 from services.image_api import ImageApiClient
 from services.video_api import DashScopeVideoClient
 from services.updater import OpenClawUpdater
+from services.app_updater import LoomAppUpdater
 from services.skills import SkillService
 from services.jobs import JobManager
 
@@ -70,6 +71,7 @@ _newapi_account_mgr: NewApiAccountManager | None = None
 _process_svc: OpenClawProcessService | None = None
 _desktop_agent_svc: DesktopAgentService | None = None
 _updater: OpenClawUpdater | None = None
+_app_updater: LoomAppUpdater | None = None
 _image_client: ImageApiClient | None = None
 _video_client: DashScopeVideoClient | None = None
 _theme_mgr: ThemeManager | None = None
@@ -115,6 +117,13 @@ def _get_updater() -> OpenClawUpdater:
     if _updater is None:
         _updater = OpenClawUpdater(paths)
     return _updater
+
+
+def _get_app_updater() -> LoomAppUpdater:
+    global _app_updater
+    if _app_updater is None:
+        _app_updater = LoomAppUpdater(paths)
+    return _app_updater
 
 def _get_image_client() -> ImageApiClient:
     global _image_client
@@ -811,6 +820,7 @@ def _build_fastapi_context():
         get_skill_svc=_get_skill_svc,
         get_theme_mgr=_get_theme_mgr,
         get_updater=_get_updater,
+        get_app_updater=_get_app_updater,
         get_video_client=_get_video_client,
         get_wire_svc=_get_wire_svc,
         log_buffer=log_buffer,

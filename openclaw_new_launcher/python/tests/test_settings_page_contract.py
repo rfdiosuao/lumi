@@ -20,14 +20,15 @@ class SettingsPageContractTests(unittest.TestCase):
         self.assertIn("handleInstallUpdate", source)
         self.assertIn("updateStatus", source)
 
-    def test_update_copy_describes_runtime_not_launcher_app_version(self) -> None:
+    def test_update_copy_describes_verified_launcher_app_updates(self) -> None:
         with open(SETTINGS_PAGE, "r", encoding="utf-8") as handle:
             source = handle.read()
 
-        self.assertIn("智能体运行时更新", source)
-        self.assertIn("当前运行时", source)
-        self.assertIn("最新运行时", source)
-        self.assertNotIn("checkTitle: '应用更新'", source)
+        self.assertIn("LOOM 应用更新", source)
+        self.assertIn("当前版本", source)
+        self.assertIn("最新版本", source)
+        self.assertIn("SHA256", source)
+        self.assertNotIn("智能体运行时更新", source)
 
     def test_install_update_is_locked_until_an_update_is_found(self) -> None:
         with open(SETTINGS_PAGE, "r", encoding="utf-8") as handle:

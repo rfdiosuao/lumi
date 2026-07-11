@@ -10,7 +10,7 @@ def register_update_routes(app, ctx) -> None:
     async def update_check(request: Request):
         if error := ctx.auth_error(request):
             return error
-        updater = ctx.get_updater()
+        updater = ctx.get_app_updater()
         current = updater.current_version()
         latest, error_message = updater.latest_version()
         if error_message:
@@ -22,7 +22,7 @@ def register_update_routes(app, ctx) -> None:
         if error := ctx.auth_error(request):
             return error
 
-        updater = ctx.get_updater()
+        updater = ctx.get_app_updater()
         success, current, output = updater.install_latest()
         for line in output:
             ctx.append_log(line)

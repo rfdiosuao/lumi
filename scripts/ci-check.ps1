@@ -37,6 +37,7 @@ $VerifyVersionScript = Join-Path $PSScriptRoot "verify-version-consistency.ps1"
 $VerifyAdminConsoleScript = Join-Path $PSScriptRoot "verify-admin-console.ps1"
 $WorkspaceHygieneScript = Join-Path $PSScriptRoot "check-workspace-hygiene.ps1"
 $VerifyInstallerManifestScript = Join-Path $PSScriptRoot "verify-installer-manifest.ps1"
+$VerifyReleaseSecretsScript = Join-Path $PSScriptRoot "verify-release-secrets.ps1"
 
 function Invoke-Step {
     param(
@@ -67,6 +68,10 @@ if (-not $SkipSourceText) {
     Invoke-Step "Source text guard" {
         & powershell -ExecutionPolicy Bypass -File $VerifySourceTextScript
     }
+}
+
+Invoke-Step "Source secret scan" {
+    & powershell -ExecutionPolicy Bypass -File $VerifyReleaseSecretsScript -Source
 }
 
 Invoke-Step "Version consistency" {

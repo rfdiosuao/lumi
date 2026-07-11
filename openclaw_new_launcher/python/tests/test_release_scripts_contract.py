@@ -48,8 +48,8 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn("try {", source)
         self.assertIn("finally {", source)
         self.assertIn("redist\\components\\codex-desktop", source)
-        self.assertIn("npm run tauri -- build --bundles nsis", source)
-        self.assertNotIn("npm run tauri -- build -- --bundles nsis", source)
+        self.assertIn('@("run", "tauri", "--", "build", "--bundles", "nsis")', source)
+        self.assertIn("--config", source)
         self.assertIn("function Initialize-MsvcBuildEnvironment", source)
         self.assertIn("VsDevCmd.bat", source)
         self.assertIn("Initialize-MsvcBuildEnvironment", source)
@@ -106,6 +106,14 @@ class ReleaseScriptsContractTests(unittest.TestCase):
         self.assertIn('$recommendedOutputPath = Join-Path $resolvedOutputRoot "$packagePrefix-$launcherVersion-setup.exe"', source)
         self.assertIn('Copy-Item -LiteralPath $completeOutputPath -Destination $recommendedOutputPath', source)
         self.assertIn('Write-InstallerHash -Path $recommendedOutputPath', source)
+
+    def test_dual_nsis_can_require_a_valid_authenticode_signature(self) -> None:
+        source = read_script("build-dual-nsis.ps1")
+
+        self.assertIn("RequireCodeSignature", source)
+        self.assertIn("CertificateThumbprint", source)
+        self.assertIn("Get-AuthenticodeSignature", source)
+        self.assertIn('signature.Status -ne "Valid"', source)
 
     def test_measure_installer_performance_script_reports_budgets_and_performance_gates(self) -> None:
         source = read_launcher_script("measure-installer-performance.ps1")
@@ -223,6 +231,12 @@ class ReleaseScriptsContractTests(unittest.TestCase):
             "_up_/node-runtime/node_modules/npm/node_modules/@npmcli/config/lib/definitions/definitions.js",
             source,
         )
+
+    def test_secret_scan_rejects_an_empty_target_set(self) -> None:
+        source = read_script("verify-release-secrets.ps1")
+
+        self.assertIn("No secret scan targets were selected", source)
+        self.assertIn("if ($targets.Count -eq 0", source)
 
     def test_portable_package_keeps_scripts_declared_by_package_json(self) -> None:
         build_source = read_script("build-portable.ps1")

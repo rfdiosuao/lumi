@@ -3,6 +3,9 @@ param(
     [string]$CodexPackagePath,
     [Parameter(Mandatory = $true)]
     [string]$OutputRoot,
+    [string]$CertificateThumbprint = "",
+    [string]$TimestampUrl = "http://timestamp.digicert.com",
+    [switch]$RequireCodeSignature,
     [switch]$ValidateOnly
 )
 
@@ -15,6 +18,7 @@ $ManifestPath = Join-Path $Root "release-manifest.json"
 $BundleDir = Join-Path $TauriDir "target\release\bundle\nsis"
 $RedistComponentsDir = Join-Path $LauncherDir "redist\components"
 $CodexSeedDir = Join-Path $LauncherDir "redist\components\codex-desktop"
+$tauriBuildConfigPath = ""
 
 function Resolve-ExistingPath {
     param([string]$Path)
@@ -181,6 +185,15 @@ function Write-InstallerHash {
     Set-Content -LiteralPath ($Path + ".sha256.txt") -Value "$hash *$(Split-Path -Leaf $Path)" -Encoding ASCII
 }
 
+function Assert-CodeSignature {
+    param([string]$Path)
+
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ($signature.Status -ne "Valid") {
+        throw "Installer Authenticode signature is not valid: $Path status=$($signature.Status)"
+    }
+}
+
 function Find-BuiltInstaller {
     param(
         [datetime]$StartedAtUtc,
@@ -224,7 +237,11 @@ function Build-InstallerVariant {
     $startedAtUtc = [datetime]::UtcNow
     Push-Location $LauncherDir
     try {
-        npm run tauri -- build --bundles nsis
+        $tauriArgs = @("run", "tauri", "--", "build", "--bundles", "nsis")
+        if (-not [string]::IsNullOrWhiteSpace($tauriBuildConfigPath)) {
+            $tauriArgs += @("--config", $tauriBuildConfigPath)
+        }
+        & npm @tauriArgs
         if ($LASTEXITCODE -ne 0) {
             throw "Tauri NSIS build failed for $VariantName with exit code $LASTEXITCODE"
         }
@@ -236,6 +253,9 @@ function Build-InstallerVariant {
     $builtInstaller = Find-BuiltInstaller -StartedAtUtc $startedAtUtc -ExpectedVersion $ExpectedVersion
     Assert-OutputPathAvailable -Path $VariantOutputPath
     Copy-Item -LiteralPath $builtInstaller.FullName -Destination $variantOutputPath
+    if ($RequireCodeSignature) {
+        Assert-CodeSignature -Path $variantOutputPath
+    }
     Write-InstallerHash -Path $variantOutputPath
     return $builtInstaller
 }
@@ -245,6 +265,9 @@ $tauriConfig = Get-TauriConfig
 $codexComponent = Get-CodexManifestComponent
 $resolvedCodexPackagePath = Assert-VerifiedCodexPackage -PackagePath $CodexPackagePath -codexComponent $codexComponent
 $resolvedOutputRoot = Assert-SafeOutputRoot -Path $OutputRoot
+if ($RequireCodeSignature -and [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+    throw "RequireCodeSignature needs CertificateThumbprint. Import a trusted code-signing certificate before release."
+}
 $packagePrefix = [string]$tauriConfig.mainBinaryName
 if ([string]::IsNullOrWhiteSpace($packagePrefix)) {
     $packagePrefix = "LOOM"
@@ -271,6 +294,25 @@ if ($ValidateOnly) {
     Write-Host "Complete output: $completeOutputPath"
     Write-Host "Recommended output: $recommendedOutputPath"
     return
+}
+
+if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+    $certificate = Get-ChildItem Cert:\CurrentUser\My,Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
+        Where-Object { $_.Thumbprint -eq $CertificateThumbprint -and $_.HasPrivateKey } |
+        Select-Object -First 1
+    if (-not $certificate) {
+        throw "Code-signing certificate not found or has no private key: $CertificateThumbprint"
+    }
+    $tauriBuildConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) ("loom-tauri-signing-" + [guid]::NewGuid().ToString("N") + ".json")
+    @{
+        bundle = @{
+            windows = @{
+                certificateThumbprint = $CertificateThumbprint
+                digestAlgorithm = "sha256"
+                timestampUrl = $TimestampUrl
+            }
+        }
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tauriBuildConfigPath -Encoding UTF8
 }
 
 New-Item -ItemType Directory -Path $resolvedOutputRoot -Force | Out-Null
@@ -305,5 +347,8 @@ finally {
             Remove-Item -LiteralPath $CodexSeedDir -Recurse -Force
         }
         Move-Item -LiteralPath $seedDirBackupPath -Destination $CodexSeedDir
+    }
+    if ($tauriBuildConfigPath -and (Test-Path -LiteralPath $tauriBuildConfigPath)) {
+        Remove-Item -LiteralPath $tauriBuildConfigPath -Force
     }
 }

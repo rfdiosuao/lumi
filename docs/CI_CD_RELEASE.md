@@ -1,85 +1,89 @@
-# CI/CD Release Notes
+# CI/CD Release Guide
 
-This repository supports GitHub Actions for CI and GitHub Releases. Gitee Go can
-still be used for domestic mirroring, but GitHub is the primary cloud CI/CD path
-for this checkout.
+GitHub Actions is the authoritative build and release path. Gitee Releases is a
+domestic mirror and must receive the same recommended installer and SHA256
+sidecar after GitHub validation succeeds.
 
-## GitHub Actions
+## Authoritative Versions
 
-Workflows:
+The LOOM desktop version must match in:
 
-- `.github/workflows/ci.yml`: runs on pushes and pull requests to `master`.
-- `.github/workflows/release.yml`: runs on tags matching `v*` or manual dispatch.
+- `openclaw_new_launcher/package.json`
+- `openclaw_new_launcher/package-lock.json`
+- `openclaw_new_launcher/src-tauri/Cargo.toml`
+- `openclaw_new_launcher/src-tauri/Cargo.lock`
+- `openclaw_new_launcher/src-tauri/tauri.conf.json`
 
-The release workflow validates source text, installs Node.js 20, builds the React
-frontend, checks Rust, builds Tauri bundles, uploads CI artifacts, and publishes a
-GitHub Release for the tag.
+`release-manifest.json` is a signed component catalog for Codex, Claude Code,
+opencode, OpenClaw, and Hermes. Its catalog version is intentionally independent
+from the LOOM desktop version. Do not use it to decide whether the desktop app
+has an update.
 
-The cloud artifact is not the full customer-facing Windows portable package. The
-full offline package contains a Windows Tauri executable, bundled Node.js,
-OpenClaw, bundled bot plugins, and an embedded Python runtime. That package must
-be produced on a Windows builder or on the local packaging machine with an
-existing seed package.
+## Required Release Secrets
 
-## Automatic GitHub Triggers
+Stable Windows publishing is blocked unless both GitHub Actions secrets exist:
 
-CI runs on:
+- `WINDOWS_PFX_BASE64`: base64 encoding of a trusted OV or EV Authenticode PFX.
+- `WINDOWS_PFX_PASSWORD`: the PFX import password.
 
-- Pushes to `master`
-- Pull requests to `master`
+The workflow imports the certificate into the ephemeral runner, signs the NSIS
+outputs with SHA256 plus a timestamp, and rejects any installer whose signature
+is not `Valid`. Never commit a PFX, password, token, or private signing key.
 
-Release publishing runs on:
+## Release Workflow
 
-- Tags matching `v*`
-- Manual `workflow_dispatch` with a tag name
+`.github/workflows/release.yml` runs for tags matching `v*` or a manual dispatch.
+It performs these release gates:
 
-## Local Full Portable Release
+1. Source text, secret scan, version consistency, frontend build, and Rust check.
+2. Verified Codex seed download using the signed component catalog size and SHA256.
+3. Dual NSIS build using `scripts/build-dual-nsis.ps1`.
+4. Authenticode validation of the built installers.
+5. Exact recommended-installer smoke tests in ASCII and Chinese install paths.
+6. Packaged Python/FastAPI Bridge, authorization boundary, secret, and cleanup checks.
+7. Publication of only `LOOM-X.Y.Z-setup.exe` and its SHA256 sidecar as the desktop installer.
 
-Build the full portable zip locally:
+The recommended installer is the complete variant. It embeds the Codex seed and
+the WebView2 offline installer. The `online` and `complete` diagnostic variants
+may be retained as CI artifacts, but must not compete with the single recommended
+release filename.
+
+## Local Candidate Build
+
+Local unsigned builds are suitable for engineering validation only:
 
 ```powershell
 cd D:\Axiangmu\AUSTART
-powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 `
-  -Version 2.0.1 `
-  -PackageName OpenClaw-Portable-v2.0.1-YYYY.MM.DD
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dual-nsis.ps1 `
+  -CodexPackagePath D:\path\to\codex-X.Y.Z-win32-x64.tgz `
+  -OutputRoot D:\Axiangmu\AUSTART\artifacts\nsis-candidate
 ```
 
-Verify the zip:
+For a production build, import the trusted certificate and require validation:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\verify-release.ps1 `
-  -Path release\OpenClaw-Portable-v2.0.1-YYYY.MM.DD.zip
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-dual-nsis.ps1 `
+  -CodexPackagePath D:\path\to\codex-X.Y.Z-win32-x64.tgz `
+  -OutputRoot D:\Axiangmu\AUSTART\artifacts\nsis-signed `
+  -CertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT `
+  -RequireCodeSignature
 ```
 
-Create or update a GitHub Release with local portable assets:
+## Update Resolution
+
+The desktop updater checks the configured Gitee and GitHub stable release APIs,
+rejects drafts and prereleases, and chooses the highest valid semantic version.
+Only an exact `LOOM-X.Y.Z-setup.exe` asset is accepted. The installer must have a
+GitHub asset SHA256 digest or a matching `.sha256.txt` sidecar before it can run.
+
+## Gitee Mirror
+
+Store a Gitee release-write token through the local DPAPI helper:
 
 ```powershell
-gh release create v2.0.1-YYYY.MM.DD `
-  release\OpenClaw-Portable-v2.0.1-YYYY.MM.DD.zip `
-  release\OpenClaw-Portable-v2.0.1-YYYY.MM.DD.zip.sha256.txt `
-  --repo rfdiosuao/lumi `
-  --title "Lumi / OpenClaw v2.0.1 YYYY.MM.DD" `
-  --generate-notes
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\set-gitee-token.ps1
 ```
 
-## Full Gitee Release Upload
-
-To publish the locally built Windows portable zip to Gitee Releases, create a personal access token in Gitee and set it as an environment variable:
-
-```powershell
-$env:GITEE_ACCESS_TOKEN = "your-token"
-```
-
-Then run:
-
-```powershell
-.\scripts\publish-gitee-release.ps1 `
-  -TagName "v2.0.1-storyboard-2026.05.06" `
-  -Name "OpenClaw Portable v2.0.1" `
-  -Assets @(
-    "D:\Axiangmu\AUSTART\release\OpenClaw-Portable-v2.0.1-2026.05.06.zip",
-    "D:\Axiangmu\AUSTART\release\OpenClaw-Portable-v2.0.1-2026.05.06.zip.sha256.txt"
-  )
-```
-
-Do not commit tokens, generated release packages, license databases, private keys, or runtime state files.
+Then use `scripts/publish-gitee-release.ps1` to upload the exact recommended
+installer and SHA256 sidecar. A token that can read the repository but cannot
+create a release is not sufficient.

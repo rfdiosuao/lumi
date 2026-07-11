@@ -56,6 +56,15 @@ class NsisSmokeScriptContractTests(unittest.TestCase):
         self.assertIn('[string]$RawArguments = ""', source)
         self.assertIn('-RawArguments "/S /D=$installPath"', source)
 
+    def test_smoke_script_resolves_default_secret_scan_after_param_binding(self) -> None:
+        with open(SCRIPT_PATH, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn('[string]$SecretScanScript = ""', source)
+        self.assertIn('Join-Path $PSScriptRoot "verify-release-secrets.ps1"', source)
+        param_end = source.index("$ErrorActionPreference")
+        self.assertNotIn("Join-Path $PSScriptRoot", source[:param_end])
+
 
 if __name__ == "__main__":
     unittest.main()

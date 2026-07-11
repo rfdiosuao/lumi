@@ -6,11 +6,15 @@ param(
     [Parameter(Mandatory = $true)]
     [string[]]$InstallPaths,
     [string]$ProductName = "Luming AI Matrix Acquisition Workbench",
-    [string]$SecretScanScript = (Join-Path $PSScriptRoot "verify-release-secrets.ps1"),
+    [string]$SecretScanScript = "",
     [string]$LicenseCodeFile = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($SecretScanScript)) {
+    $SecretScanScript = Join-Path $PSScriptRoot "verify-release-secrets.ps1"
+}
 
 function Resolve-NormalizedPath {
     param([string]$Path)

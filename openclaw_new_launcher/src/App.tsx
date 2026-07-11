@@ -194,7 +194,10 @@ export default function App() {
           if (ok) {
             appendLog('[更新] 开始更新...\n');
             const updateResp = await updateApi.do();
-            showToast(updateResp.success ? `更新成功: ${updateResp.current_version}` : '更新失败', updateResp.success ? 'success' : 'error');
+            showToast(
+              updateResp.success ? `LOOM ${updateResp.current_version} 安装器已启动，请按提示完成覆盖安装` : '更新失败',
+              updateResp.success ? 'success' : 'error',
+            );
           }
         } else {
           showToast(`已是最新版本 ${resp.current}`, 'info');

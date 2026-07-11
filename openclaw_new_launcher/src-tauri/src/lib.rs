@@ -423,6 +423,7 @@ fn spawn_bridge(py_path: &std::path::Path) -> Result<String, String> {
     child_cmd.arg(py_path);
     child_cmd.env("PYTHONUTF8", "1");
     child_cmd.env("PYTHONIOENCODING", "utf-8");
+    child_cmd.env("LOOM_APP_VERSION", env!("CARGO_PKG_VERSION"));
     // Cache compiled bytecode in a writable, stable location to speed up cold
     // starts. Previously bytecode writing was disabled entirely, which forced
     // Python to recompile every module (fastapi/pydantic/uvicorn/...) on every

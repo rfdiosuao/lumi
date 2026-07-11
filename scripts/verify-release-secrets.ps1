@@ -253,6 +253,10 @@ foreach ($inputPath in $Path) {
     }
 }
 
+if ($targets.Count -eq 0 -and @($Path | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -eq 0) {
+    throw "No secret scan targets were selected. Use -Source or provide -Path."
+}
+
 $errors = [System.Collections.Generic.List[string]]::new()
 $allowed = [System.Collections.Generic.List[string]]::new()
 $checked = 0
