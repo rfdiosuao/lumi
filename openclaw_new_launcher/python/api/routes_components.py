@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from fastapi import Request
 
 from core.component_catalog import ComponentCatalog, default_component_state_path, default_manifest_path, load_installable_manifest
@@ -125,6 +127,9 @@ def _truthy(value: object) -> bool:
 
 
 def register_component_routes(app, ctx) -> None:
+    start_jobs_lock = threading.Lock()
+    active_start_jobs: dict[str, str] = {}
+
     @app.api_route("/api/components/status", methods=["GET", "POST"])
     async def components_status(request: Request):
         if error := ctx.auth_error(request):
@@ -162,7 +167,10 @@ def register_component_routes(app, ctx) -> None:
             failed["status"] = "failed"
             failed["message"] = str(exc)
             return ctx.fastapi_json({"error": str(exc), "status": failed}, 400)
-        return ctx.fastapi_json({"status": _with_install_state(ctx, component_id, status)})
+        status = dict(status)
+        status["installed"] = current.get("installed")
+        status["componentStatus"] = current.get("componentStatus")
+        return ctx.fastapi_json({"status": status})
 
     @app.post("/api/components/model-config/rollback")
     async def components_model_config_rollback(request: Request):
@@ -317,35 +325,87 @@ def register_component_routes(app, ctx) -> None:
         if not _truthy(body.get("confirmed")):
             return ctx.fastapi_json({"error": "启动组件需要确认"}, 403)
 
+        job_mgr = ctx.get_job_mgr()
+        state_store = _component_state_store(ctx)
+        with start_jobs_lock:
+            existing_state = state_store.load().get(component_id)
+            existing_job_id = active_start_jobs.get(component_id) or (existing_state.job_id if existing_state else None)
+            if existing_job_id:
+                existing_job = job_mgr.get(existing_job_id)
+                if existing_job and str(existing_job.get("status") or "").lower() in RUNNING_JOB_STATUSES:
+                    return ctx.fastapi_json({
+                        "jobId": existing_job_id,
+                        "job": existing_job,
+                        "state": existing_state.to_json() if existing_state else None,
+                        "catalog": _component_catalog(ctx).status(),
+                    }, 202)
+                active_start_jobs.pop(component_id, None)
+
         manifest_path = default_manifest_path(ctx.paths.base_path)
         component, manifest_error = _resolve_component_for_action(manifest_path, component_id, allow_fallback=False)
         if component is None:
             return ctx.fastapi_json({"error": manifest_error or f"Unknown component: {component_id}"}, _component_error_status(manifest_error))
 
-        job_mgr = ctx.get_job_mgr()
+        registration_ready = threading.Event()
 
         def run(job_id: str) -> dict:
-            job_mgr.progress(job_id, f"启动 {component.name}", "neutral", componentId=component.component_id)
-            ctx.append_log(f"[Components] {component.component_id}: 启动 {component.name}\n")
+            registration_ready.wait(2.0)
             try:
-                launch = _component_installer(ctx).launch(component, job_id=job_id)
-            except ComponentInstallError as exc:
+                job_mgr.progress(job_id, f"启动 {component.name}", "neutral", componentId=component.component_id)
+                ctx.append_log(f"[Components] {component.component_id}: 启动 {component.name}\n")
+                try:
+                    launch = _component_installer(ctx).launch(component, job_id=job_id)
+                except ComponentInstallError as exc:
+                    return {
+                        "success": False,
+                        "error": str(exc),
+                        "catalog": _component_catalog(ctx).status(),
+                    }
                 return {
-                    "success": False,
-                    "error": str(exc),
+                    "success": True,
+                    "launch": launch,
                     "catalog": _component_catalog(ctx).status(),
+                    "manifestWarning": manifest_error,
                 }
-            return {
-                "success": True,
-                "launch": launch,
-                "catalog": _component_catalog(ctx).status(),
-                "manifestWarning": manifest_error,
-            }
+            finally:
+                with start_jobs_lock:
+                    if active_start_jobs.get(component_id) == job_id:
+                        active_start_jobs.pop(component_id, None)
 
-        job = job_mgr.submit_progress("component.start", f"Start {component.name}", run)
-        current_state = ComponentState(component.component_id, "starting", version=component.version, job_id=str(job.get("id") or ""))
+        with start_jobs_lock:
+            existing_job_id = active_start_jobs.get(component_id)
+            existing_state = state_store.load().get(component_id)
+            if not existing_job_id and existing_state and existing_state.job_id:
+                existing_job_id = existing_state.job_id
+            if existing_job_id:
+                existing_job = job_mgr.get(existing_job_id)
+                if existing_job and str(existing_job.get("status") or "").lower() in RUNNING_JOB_STATUSES:
+                    current_state = existing_state or ComponentState(
+                        component.component_id,
+                        "starting",
+                        version=component.version,
+                        job_id=existing_job_id,
+                    )
+                    return ctx.fastapi_json({
+                        "jobId": existing_job_id,
+                        "job": existing_job,
+                        "state": current_state.to_json(),
+                        "catalog": _component_catalog(ctx).status(state_overrides=[current_state]),
+                    }, 202)
+                active_start_jobs.pop(component_id, None)
+
+            job = job_mgr.submit_progress("component.start", f"Start {component.name}", run)
+            job_id = str(job.get("id") or "")
+            active_start_jobs[component_id] = job_id
+            current_state = state_store.mark(
+                component.component_id,
+                "starting",
+                version=component.version,
+                job_id=job_id,
+            )
+            registration_ready.set()
         return ctx.fastapi_json({
-            "jobId": job.get("id"),
+            "jobId": job_id,
             "job": job,
             "state": current_state.to_json(),
             "catalog": _component_catalog(ctx).status(state_overrides=[current_state]),

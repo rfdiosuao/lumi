@@ -29,6 +29,9 @@ def register_wire_routes(app, ctx) -> None:
         if error := ctx.auth_error(request):
             return error
         body = await ctx.body(request)
+        target_args = {}
+        if isinstance(body.get("targets"), list):
+            target_args["targets"] = tuple(str(item or "").strip() for item in body["targets"] if str(item or "").strip())
         try:
             return ctx.fastapi_json(ctx.get_wire_svc().sync_custom_provider(
                 provider=str(body.get("provider") or "").strip(),
@@ -38,6 +41,7 @@ def register_wire_routes(app, ctx) -> None:
                 image_model=str(body.get("imageModel") or "").strip(),
                 phone_model=str(body.get("phoneModel") or "").strip(),
                 video_model=str(body.get("videoModel") or "").strip(),
+                **target_args,
             ))
         except WireConfigError as exc:
             return ctx.fastapi_json({"error": str(exc), "wire": ctx.get_wire_svc().current_public()}, 400)

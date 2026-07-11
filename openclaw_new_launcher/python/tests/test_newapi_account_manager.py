@@ -568,7 +568,8 @@ class NewApiAccountManagerTests(unittest.TestCase):
             self.assertEqual(public_session["account"], "user@example.invalid")
             self.assertNotIn("sk-test-token-not-real", repr(public_session))
             self.assertNotIn("sess-test-launcher-not-real", repr(public_session))
-            self.assertEqual(manager.synced_targets, ("openclaw", "opencode", "codex", "claude", "image", "desktop", "phone"))
+            self.assertEqual(manager.synced_targets, ("openclaw", "opencode", "claude", "image", "desktop", "phone"))
+            self.assertNotIn("codex", manager.synced_targets)
 
             with open(manager.session_path, "r", encoding="utf-8") as file:
                 raw_text = file.read()

@@ -13,7 +13,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
-from typing import Callable, List
+from typing import Callable, Iterator, List
 from urllib.request import Request, urlopen
 
 from core.component_state import ComponentState, ComponentStateStore
@@ -55,6 +55,8 @@ KNOWN_NPM_PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
 RETRY_DELAYS_SECONDS = (0.0, 0.8, 1.6)
 EXTERNAL_ENTRY_CACHE_TTL_SECONDS = 30.0
 VERSION_DETECT_TIMEOUT_MS = 5000
+APPX_PROBE_TIMEOUT_MS = 3000
+NPM_PROBE_TIMEOUT_MS = 3000
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
 DOWNLOAD_PROGRESS_PERCENT_STEP = 5
 DOWNLOAD_PROGRESS_INTERVAL_SECONDS = 2.0
@@ -470,9 +472,13 @@ class ComponentInstaller:
         version = (existing_state.version if existing_state else None) or component.version
         self._mark(component, "uninstalling", job_id=job_id, on_progress=on_progress, message=f"卸载 {component.name}")
         try:
-            self._run_uninstall_command(component)
-            self._invalidate_external_entry_cache(component)
             install_path = self._safe_install_path(component.install_path)
+            managed_codex = component.component_id == "codex-desktop" and os.path.exists(install_path)
+            if component.component_id == "codex-desktop" and not managed_codex:
+                raise ComponentInstallError("检测到的是外部 Codex 安装，请从原安装来源卸载")
+            if not managed_codex:
+                self._run_uninstall_command(component)
+            self._invalidate_external_entry_cache(component)
             self._remove_path(install_path)
             self._remove_path(self._rollback_path(component.component_id))
             self._remove_path(self._component_staging_path(component))
@@ -733,10 +739,15 @@ class ComponentInstaller:
         if cached is None:
             return None
         created_at, entry_path = cached
-        if time.monotonic() - created_at > EXTERNAL_ENTRY_CACHE_TTL_SECONDS or (entry_path and not os.path.isfile(entry_path)):
+        if entry_path:
+            if os.path.isfile(entry_path):
+                return entry_path
             _EXTERNAL_ENTRY_CACHE.pop(cache_key, None)
             return None
-        return entry_path
+        if time.monotonic() - created_at > EXTERNAL_ENTRY_CACHE_TTL_SECONDS:
+            _EXTERNAL_ENTRY_CACHE.pop(cache_key, None)
+            return None
+        return None
 
     def _first_existing_external_entry(self, component: ReleaseComponent, *, refresh: bool = False) -> str | None:
         cache_key = self._external_entry_cache_key(component)
@@ -778,10 +789,23 @@ class ComponentInstaller:
                     f"Hermes 运行时包损坏：{conflict} 含有 Git 冲突标记，请重新安装 Hermes。"
                 )
 
-    def _external_entry_candidates(self, component: ReleaseComponent) -> list[str]:
+    def _external_entry_candidates(self, component: ReleaseComponent) -> Iterator[str]:
+        seen: set[str] = set()
+        for candidate in self._fast_external_entry_candidates(component):
+            key = os.path.normcase(os.path.abspath(candidate))
+            if key not in seen:
+                seen.add(key)
+                yield candidate
+        for candidate in self._expensive_external_entry_candidates(component):
+            key = os.path.normcase(os.path.abspath(candidate))
+            if key not in seen:
+                seen.add(key)
+                yield candidate
+
+    def _fast_external_entry_candidates(self, component: ReleaseComponent) -> list[str]:
         candidates: list[str] = []
         if component.component_id == "codex-desktop":
-            for candidate in self._codex_desktop_entry_candidates():
+            for candidate in self._codex_desktop_local_entry_candidates():
                 _append_unique(candidates, candidate)
 
         for raw_path in getattr(component, "external_paths", ()):
@@ -797,23 +821,35 @@ class ComponentInstaller:
             if found:
                 _append_unique(candidates, found)
 
+        return candidates
+
+    def _expensive_external_entry_candidates(self, component: ReleaseComponent) -> list[str]:
+        candidates: list[str] = []
+        if component.component_id == "codex-desktop":
+            for candidate in self._codex_desktop_appx_entry_candidates():
+                _append_unique(candidates, candidate)
+
         npm_package_names = self._npm_package_names_from_command(component)
         for directory in self._npm_global_bin_dirs() if npm_package_names else ():
+            command_names = self._external_command_names(component)
             for name in command_names:
                 _append_unique(candidates, os.path.join(directory, name))
 
         for package_name in npm_package_names:
+            command_names = self._external_command_names(component)
             package_entry = self._npm_package_bin_entry(package_name, command_names)
             if package_entry:
                 _append_unique(candidates, package_entry)
         return candidates
 
     def _codex_desktop_entry_candidates(self) -> tuple[str, ...]:
-        candidates: list[str] = []
-        for install_location in self._codex_desktop_appx_locations():
-            for relative in ("app/Codex.exe", "Codex.exe"):
-                _append_unique(candidates, os.path.join(install_location, *relative.split("/")))
+        candidates = list(self._codex_desktop_local_entry_candidates())
+        for candidate in self._codex_desktop_appx_entry_candidates():
+            _append_unique(candidates, candidate)
+        return tuple(candidates)
 
+    def _codex_desktop_local_entry_candidates(self) -> tuple[str, ...]:
+        candidates: list[str] = []
         localappdata = os.environ.get("LOCALAPPDATA", "").strip()
         program_files = os.environ.get("ProgramFiles", "").strip()
         program_files_x86 = os.environ.get("ProgramFiles(x86)", "").strip()
@@ -828,6 +864,13 @@ class ComponentInstaller:
                 _append_unique(candidates, os.path.abspath(os.path.join(root, *suffix.split("/"))))
         return tuple(candidates)
 
+    def _codex_desktop_appx_entry_candidates(self) -> tuple[str, ...]:
+        candidates: list[str] = []
+        for install_location in self._codex_desktop_appx_locations():
+            for relative in ("app/Codex.exe", "Codex.exe"):
+                _append_unique(candidates, os.path.join(install_location, *relative.split("/")))
+        return tuple(candidates)
+
     def _codex_desktop_appx_locations(self) -> tuple[str, ...]:
         command = [
             "powershell",
@@ -836,7 +879,7 @@ class ComponentInstaller:
             f"Get-AppxPackage -Name {CODEX_DESKTOP_PACKAGE_NAME} | Select-Object -First 1 -ExpandProperty InstallLocation",
         ]
         try:
-            result = self.installer_runner(command, self.base_path, 15000)
+            result = self.installer_runner(command, self.base_path, APPX_PROBE_TIMEOUT_MS)
         except Exception:
             return ()
         if int(getattr(result, "returncode", 0) or 0) != 0:
@@ -942,9 +985,9 @@ class ComponentInstaller:
         private_prefix = self._npm_private_prefix()
         _append_unique(directories, private_prefix)
         _append_unique(directories, os.path.join(private_prefix, "bin"))
-        for command in (("npm", "prefix", "-g"), ("npm", "bin", "-g")):
+        for command in (("npm", "prefix", "-g"),):
             try:
-                result = self.installer_runner(self._resolve_command(list(command)), self.base_path, 15000)
+                result = self.installer_runner(self._resolve_command(list(command)), self.base_path, NPM_PROBE_TIMEOUT_MS)
             except Exception:
                 continue
             if int(getattr(result, "returncode", 0) or 0) != 0:
@@ -1027,7 +1070,11 @@ class ComponentInstaller:
         if os.path.isdir(private_root):
             return private_root
         try:
-            result = self.installer_runner(self._resolve_command(["npm", "root", "-g"]), self.base_path, 15000)
+            result = self.installer_runner(
+                self._resolve_command(["npm", "root", "-g"]),
+                self.base_path,
+                NPM_PROBE_TIMEOUT_MS,
+            )
         except Exception:
             return ""
         if int(getattr(result, "returncode", 0) or 0) != 0:

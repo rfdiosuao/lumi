@@ -611,9 +611,8 @@ const AgentModelConfigPanel: React.FC<{
   onDraftModelChange: (value: string) => void;
   onApply: () => void;
   onApplyCustom: (draft: AgentCustomProviderDraft) => void;
-  onRollback: () => void;
-}> = ({ component, status, draftModel, busy, locked, onDraftModelChange, onApply, onApplyCustom, onRollback }) => {
-  const [sourceMode, setSourceMode] = React.useState<'off' | 'oneClick' | 'custom'>('custom');
+}> = ({ component, status, draftModel, busy, locked, onDraftModelChange, onApply, onApplyCustom }) => {
+  const [sourceMode, setSourceMode] = React.useState<'off' | 'oneClick' | 'custom'>('oneClick');
   const [customProviderId, setCustomProviderId] = React.useState('custom');
   const [customProvider, setCustomProvider] = React.useState('OpenAI 兼容');
   const [customBaseUrl, setCustomBaseUrl] = React.useState('');
@@ -679,12 +678,9 @@ const AgentModelConfigPanel: React.FC<{
           <button
             data-agent-one-click-config-lock
             type="button"
-            onClick={() => {
-              setSourceMode('oneClick');
-              if (!oneClickLocked) onApply();
-            }}
+            onClick={() => setSourceMode('oneClick')}
             disabled={oneClickLocked || busy}
-            title={oneClickLocked ? '登录后解锁：请先同步中转站模型' : `一键写入 ${APP_DISPLAY_NAME} 托管模型`}
+            title={oneClickLocked ? '登录后解锁：请先同步中转站模型' : `选择 ${APP_DISPLAY_NAME} 托管模型，确认后再写入`}
             className={`h-10 rounded-full text-xs font-black transition ${sourceMode === 'oneClick' ? 'bg-surface text-text shadow-sm' : 'text-text-muted hover:text-text'} disabled:cursor-not-allowed disabled:opacity-65`}
           >
             <span className="inline-flex items-center justify-center gap-2">
@@ -706,7 +702,9 @@ const AgentModelConfigPanel: React.FC<{
         <div className="mt-3 text-xs text-text-muted">
           {sourceMode === 'custom'
             ? '自定义会先保存本机第三方 Provider；已安装智能体会继续写入配置。'
-            : oneClickLocked ? '一键配置需登录后解锁，并同步中转站模型。' : '一键配置会写入当前中转站默认模型。'}
+            : oneClickLocked
+              ? '一键配置需登录后解锁，并同步中转站模型。'
+              : '选择模型不会修改本机；只有点击“写入配置”后才会更新 Codex / Claude Code。'}
         </div>
       </div>
 
@@ -789,14 +787,11 @@ const AgentModelConfigPanel: React.FC<{
             >
               {busy ? '写入中...' : canUseWire ? '保存并写入' : '保存配置'}
             </Button>
-            <Button variant="quiet" onClick={onRollback} disabled={locked || busy || !status?.backupAvailable}>
-              回滚配置
-            </Button>
             <span className="text-xs font-bold text-text-muted">密钥不会回显；换 Key 时重新粘贴即可覆盖。</span>
           </div>
         </div>
       ) : (
-        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
           <Select
             value={draftModel}
             onChange={(event) => onDraftModelChange(event.target.value)}
@@ -807,11 +802,8 @@ const AgentModelConfigPanel: React.FC<{
               <option key={model} value={model}>{model}</option>
             ))}
           </Select>
-          <Button variant="primary" onClick={onApply} disabled={locked || busy || !canApply || sourceMode === 'off'}>
+          <Button data-agent-model-apply variant="primary" onClick={onApply} disabled={locked || busy || !canApply || sourceMode === 'off'}>
             {busy ? '写入中...' : '写入配置'}
-          </Button>
-          <Button variant="quiet" onClick={onRollback} disabled={locked || busy || !status?.backupAvailable}>
-            回滚配置
           </Button>
         </div>
         )}
@@ -1092,23 +1084,10 @@ export const AgentInstallerPage: React.FC = () => {
     return report;
   };
 
-  const ensureAgentModelConfig = async (component: ComponentSummary): Promise<AgentModelConfigStatus | null> => {
+  const readAgentModelConfigStatus = async (component: ComponentSummary): Promise<AgentModelConfigStatus | null> => {
     if (!supportsModelConfig(component)) return null;
-    let status = (await loomClient.components.modelConfigStatus(component.id)).status;
+    const status = (await loomClient.components.modelConfigStatus(component.id)).status;
     setModelConfigs((current) => ({ ...current, [component.id]: status }));
-    if (status.configured || component.id !== 'codex-desktop') return status;
-
-    const candidateModel = status.expectedModel || status.model || status.availableModels?.[0] || '';
-    if (!candidateModel) return status;
-    try {
-      status = (await loomClient.components.applyModelConfig({ componentId: component.id, model: candidateModel })).status;
-      setModelConfigs((current) => ({ ...current, [component.id]: status }));
-      setModelDrafts((current) => ({ ...current, [component.id]: status.model || candidateModel }));
-      pushLog('Codex 模型配置已自动校验并写入', 'ok', component.id);
-    } catch (error: any) {
-      const message = loomErrorText(error, 'Codex 模型配置自动修复失败');
-      pushLog(message, 'warning', component.id);
-    }
     return status;
   };
 
@@ -1167,7 +1146,7 @@ export const AgentInstallerPage: React.FC = () => {
         throw new Error(current?.errorMessage || `${component.name} 安装后仍未就绪，请打开诊断查看原因`);
       }
 
-      const modelStatus = await ensureAgentModelConfig(component);
+      const modelStatus = await readAgentModelConfigStatus(component);
       const codexModelPending = component.id === 'codex-desktop' && !modelStatus?.configured;
 
       if (autoStart) {
@@ -1225,34 +1204,6 @@ export const AgentInstallerPage: React.FC = () => {
 
   const install = async (component: ComponentSummary) => {
     await prepareComponent(component, { autoStart: true });
-  };
-
-  const rollback = async (component: ComponentSummary) => {
-    const ok = await showConfirm({
-      title: `回滚 ${component.name}`,
-      message: '当前版本会被替换为上一版本。确定继续吗？',
-      confirmText: '回滚',
-      tone: 'danger',
-    });
-    if (!ok) return;
-    setBusyId(component.id);
-    setBusyAction('rollback');
-    try {
-      pushLog(`开始回滚 ${component.name}`, 'warning', component.id);
-      const next = await loomClient.components.rollback(component.id);
-      setSnapshot(next);
-      if (supportsModelConfig(component)) void refreshModelConfig(component.id);
-      pushLog(`${component.name} 已回滚`, 'ok', component.id);
-      showToast(`${component.name} 已回滚`, 'info');
-    } catch (err: any) {
-      const message = loomErrorText(err, '回滚失败');
-      pushLog(message, 'danger', component.id);
-      showToast(message, 'error');
-    } finally {
-      void refreshJobs();
-      setBusyId('');
-      setBusyAction('');
-    }
   };
 
   const uninstall = async (component: ComponentSummary) => {
@@ -1323,13 +1274,12 @@ export const AgentInstallerPage: React.FC = () => {
     setBusyAction('start');
     try {
       pushLog(`开始启动 ${component.name}`, 'neutral', component.id);
-      const modelStatus = await ensureAgentModelConfig(component);
+      const modelStatus = await readAgentModelConfigStatus(component);
       if (component.id === 'codex-desktop' && !modelStatus?.configured) {
         throw new Error('Codex 已安装，但模型配置尚未就绪。请先登录模型账号或填写第三方模型。');
       }
       const next = await loomClient.components.start(component.id, { onProgress: (job) => recordJobProgress(job, component.id) });
       setSnapshot(next);
-      if (supportsModelConfig(component)) void refreshModelConfig(component.id);
       pushLog(`${component.name} 已提交启动`, 'ok', component.id);
       showToast(`${component.name} 已提交启动`, 'success');
     } catch (err: any) {
@@ -1387,6 +1337,7 @@ export const AgentInstallerPage: React.FC = () => {
         baseUrl,
         apiKey,
         textModel: model,
+        targets: [],
       });
       let message = '第三方模型配置已保存';
       if (canWriteAgentModelConfig(component, modelConfigs[component.id])) {
@@ -1402,23 +1353,6 @@ export const AgentInstallerPage: React.FC = () => {
       showToast(message, 'success');
     } catch (err: any) {
       const message = loomErrorText(err, '第三方模型配置失败');
-      pushLog(message, 'danger', component.id);
-      showToast(message, 'error');
-      await refreshModelConfig(component.id);
-    } finally {
-      setModelConfigBusy('');
-    }
-  };
-
-  const rollbackModelConfig = async (component: ComponentSummary) => {
-    setModelConfigBusy(component.id);
-    try {
-      const result = await loomClient.components.rollbackModelConfig(component.id);
-      setModelConfigs((current) => ({ ...current, [component.id]: result.status }));
-      pushLog(`${component.name} 模型配置已回滚`, 'ok', component.id);
-      showToast(`${component.name} 模型配置已回滚`, 'info');
-    } catch (err: any) {
-      const message = loomErrorText(err, '模型配置回滚失败');
       pushLog(message, 'danger', component.id);
       showToast(message, 'error');
       await refreshModelConfig(component.id);
@@ -1527,9 +1461,7 @@ export const AgentInstallerPage: React.FC = () => {
               ? '正在启动智能体'
             : busyAction === 'uninstall'
               ? '正在卸载智能体'
-              : busyAction === 'rollback'
-                ? '正在回滚智能体'
-                : '正在安装或升级智能体';
+              : '正在安装或升级智能体';
   const busyOverlayDetail = activeBusyName
     ? `${activeBusyName} 正在处理，请稍候。`
     : `${APP_DISPLAY_NAME} 正在检查本机环境和安装状态。`;
@@ -1759,7 +1691,6 @@ export const AgentInstallerPage: React.FC = () => {
                         onDraftModelChange={(value) => updateModelDraft(selected.id, value)}
                         onApply={() => void applyModelConfig(selected)}
                         onApplyCustom={(draft) => void applyCustomModelConfig(selected, draft)}
-                        onRollback={() => void rollbackModelConfig(selected)}
                       />
                     ) : null}
 
@@ -1767,7 +1698,7 @@ export const AgentInstallerPage: React.FC = () => {
                       <div className="flex flex-wrap items-center justify-between gap-4">
                         <div>
                           <div className="text-sm font-black text-text">更多操作</div>
-                          <div className="mt-1 text-xs text-text-subtle">卸载会移除本机安装文件；回滚只在存在上一版本备份时可用。</div>
+                          <div className="mt-1 text-xs text-text-subtle">卸载只移除由 LOOM 管理的智能体文件。</div>
                         </div>
                         <div className="flex flex-wrap gap-3">
                           <Button
@@ -1776,13 +1707,6 @@ export const AgentInstallerPage: React.FC = () => {
                             disabled={controlsLocked || installActionsLocked || isWorking(selected.status) || selected.status === 'not_installed'}
                           >
                             {busyId === selected.id && busyAction === 'uninstall' ? '卸载中...' : `卸载 ${selected.name}`}
-                          </Button>
-                          <Button
-                            variant="quiet"
-                            onClick={() => rollback(selected)}
-                            disabled={controlsLocked || !selected.previousVersion}
-                          >
-                            {busyId === selected.id && busyAction === 'rollback' ? '回滚中...' : '回滚'}
                           </Button>
                         </div>
                       </div>

@@ -363,7 +363,7 @@ class WireService:
             raise WireConfigError("没有可用文本模型，请同步/购买/换模型")
         if not base_url or not api_key:
             raise WireConfigError("中转站模型配置不完整，请先同步模型")
-        _clear_stale_agent_model_env_keys(self.paths)
+        environment_changed = _clear_stale_agent_model_env_keys(self.paths, broadcast=False)
 
         if component_id == "openclaw-companion":
             return self._sync_openclaw_agent_model_config(component_id, wire, selected_model)
@@ -392,12 +392,24 @@ class WireService:
                 self.append_log(f"[Wire] optional Codex user config sync failed: {user_config_warning}\n")
         if component_id == "codex-desktop":
             try:
-                _persist_agent_env_key(self.paths, "LOOM_CODEX_API_KEY", api_key)
+                environment_changed = _persist_agent_env_key(
+                    self.paths,
+                    "LOOM_CODEX_API_KEY",
+                    api_key,
+                    broadcast=False,
+                ) or environment_changed
             except Exception as exc:
                 environment_warning = _redact_secret_text(str(exc)) or "Codex 用户环境变量写入失败"
                 self.append_log(f"[Wire] optional Codex user environment sync failed: {environment_warning}\n")
         elif component_id == "claude-code":
-            _persist_agent_env_key(self.paths, "LOOM_CLAUDE_API_KEY", api_key)
+            environment_changed = _persist_agent_env_key(
+                self.paths,
+                "LOOM_CLAUDE_API_KEY",
+                api_key,
+                broadcast=False,
+            ) or environment_changed
+        if environment_changed:
+            _broadcast_user_env_change()
 
         metadata = {
             "componentId": component_id,
@@ -990,25 +1002,34 @@ def _user_codex_config_path(paths: AppPaths) -> str:
 
 
 def clear_agent_user_env_keys(paths: AppPaths) -> None:
+    changed = False
     for name in AGENT_ENV_KEYS:
         os.environ.pop(name, None)
         if _should_persist_user_env(paths):
-            _delete_user_env_var(name)
+            changed = _delete_user_env_var(name, broadcast=False) or changed
+    if changed:
+        _broadcast_user_env_change()
 
 
-def _clear_stale_agent_model_env_keys(paths: AppPaths) -> None:
+def _clear_stale_agent_model_env_keys(paths: AppPaths, *, broadcast: bool = True) -> bool:
+    changed = False
+    persist = _should_persist_user_env(paths)
     for name in AGENT_STALE_MODEL_ENV_KEYS:
         os.environ.pop(name, None)
-        if _should_persist_user_env(paths):
-            _delete_user_env_var(name)
+        if persist:
+            changed = _delete_user_env_var(name, broadcast=False) or changed
+    if changed and broadcast:
+        _broadcast_user_env_change()
+    return changed
 
 
-def _persist_agent_env_key(paths: AppPaths, name: str, value: str) -> None:
+def _persist_agent_env_key(paths: AppPaths, name: str, value: str, *, broadcast: bool = True) -> bool:
     if name not in AGENT_ENV_KEYS or not value:
-        return
+        return False
     os.environ[name] = value
     if _should_persist_user_env(paths):
-        _write_user_env_var(name, value)
+        return _write_user_env_var(name, value, broadcast=broadcast)
+    return False
 
 
 def _should_persist_user_env(paths: AppPaths) -> bool:
@@ -1024,27 +1045,38 @@ def _should_persist_user_env(paths: AppPaths) -> bool:
         return False
 
 
-def _write_user_env_var(name: str, value: str) -> None:
+def _write_user_env_var(name: str, value: str, *, broadcast: bool = True) -> bool:
     if os.name != "nt":
-        return
+        return False
     import winreg
 
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+    access = winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, access) as key:
+        try:
+            current, _kind = winreg.QueryValueEx(key, name)
+        except FileNotFoundError:
+            current = None
+        if str(current or "") == value:
+            return False
         winreg.SetValueEx(key, name, 0, winreg.REG_EXPAND_SZ, value)
-    _broadcast_user_env_change()
+    if broadcast:
+        _broadcast_user_env_change()
+    return True
 
 
-def _delete_user_env_var(name: str) -> None:
+def _delete_user_env_var(name: str, *, broadcast: bool = True) -> bool:
     if os.name != "nt":
-        return
+        return False
     import winreg
 
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
             winreg.DeleteValue(key, name)
     except FileNotFoundError:
-        return
-    _broadcast_user_env_change()
+        return False
+    if broadcast:
+        _broadcast_user_env_change()
+    return True
 
 
 def _broadcast_user_env_change() -> None:
@@ -1062,7 +1094,7 @@ def _broadcast_user_env_change() -> None:
             0,
             "Environment",
             SMTO_ABORTIFHUNG,
-            5000,
+            500,
             None,
         )
     except Exception:
@@ -1091,6 +1123,8 @@ def _claude_settings_text(base_url: str, provider: str, model: str) -> str:
 
 def _write_text_with_backup(path: str, text: str) -> str:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if os.path.isfile(path) and _read_text(path) == text:
+        return ""
     backup_path = _backup_text_file(path)
     try:
         _atomic_write_text(path, text)

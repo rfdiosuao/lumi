@@ -833,7 +833,7 @@ export const componentApi = {
     }>('/api/components/start', 'POST', { componentId, confirmed: true });
     const jobId = submitted.jobId || submitted.job?.id;
     if (jobId) {
-      const job = await waitForJob<{ catalog?: ComponentSnapshot }>(jobId, { onProgress: options.onProgress });
+      const job = await waitForJob<{ catalog?: ComponentSnapshot }>(jobId, { intervalMs: 250, onProgress: options.onProgress });
       return job.result?.catalog || submitted.catalog || componentApi.status();
     }
     return submitted.catalog || componentApi.status();
@@ -1297,6 +1297,7 @@ export const wireApi = {
     imageModel?: string;
     phoneModel?: string;
     videoModel?: string;
+    targets?: string[];
   }): Promise<{ wire: WireSnapshot; syncResults?: Array<{ target?: string; ok?: boolean; error?: string }> }> =>
     api('/api/wire/custom', 'POST', params),
   verify: (): Promise<{ ok: boolean; wire?: WireSnapshot; targets?: Record<string, { ok?: boolean; error?: string }> }> =>

@@ -1027,7 +1027,16 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
                 installer_runner=runner,
             )
 
-            state = installer.detect(component, job_id="job_detect_codex_prefix")
+            isolated_env = {
+                "APPDATA": os.path.join(temp_dir, "empty-appdata"),
+                "LOCALAPPDATA": os.path.join(temp_dir, "empty-localappdata"),
+                "USERPROFILE": os.path.join(temp_dir, "empty-profile"),
+            }
+            with (
+                mock.patch.dict(os.environ, isolated_env, clear=False),
+                mock.patch.object(component_installer_module.shutil, "which", return_value=None),
+            ):
+                state = installer.detect(component, job_id="job_detect_codex_prefix")
 
             self.assertEqual(state.status, "ready")
             self.assertEqual(state.version, "0.142.3")
@@ -1220,10 +1229,10 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
             self.assertEqual(state.status, "ready")
             self.assertEqual(state.version, "0.142.3")
-            self.assertEqual(sum(command[:3] == ["powershell", "-NoProfile", "-Command"] for command in calls), 1)
-            self.assertEqual(sum(command[-2:] == ["prefix", "-g"] for command in calls), 1)
-            self.assertEqual(sum(command[-2:] == ["bin", "-g"] for command in calls), 1)
-            self.assertEqual(sum(command[-2:] == ["root", "-g"] for command in calls), 1)
+            self.assertEqual(sum(command[:3] == ["powershell", "-NoProfile", "-Command"] for command in calls), 0)
+            self.assertEqual(sum(command[-2:] == ["prefix", "-g"] for command in calls), 0)
+            self.assertEqual(sum(command[-2:] == ["bin", "-g"] for command in calls), 0)
+            self.assertEqual(sum(command[-2:] == ["root", "-g"] for command in calls), 0)
 
     def test_detect_non_managed_component_still_uses_version_probe(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1518,7 +1527,7 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertIsNone(second._first_existing_external_entry(component))
             self.assertEqual(candidates_called, 1)
 
-    def test_external_discovery_cache_expires_after_thirty_seconds(self) -> None:
+    def test_external_discovery_positive_cache_persists_while_entry_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             entry = os.path.join(temp_dir, "external", "opencode.exe")
             os.makedirs(os.path.dirname(entry), exist_ok=True)
@@ -1539,7 +1548,7 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
                 self.assertEqual(installer._first_existing_external_entry(component), entry)
                 clock[0] = 130.1
                 self.assertEqual(installer._first_existing_external_entry(component), entry)
-            self.assertEqual(candidates_called, 2)
+            self.assertEqual(candidates_called, 1)
 
     def test_external_discovery_cache_discards_vanished_positive_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1649,7 +1658,7 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
 
             self.assertEqual(state.status, "ready")
 
-    def test_detect_prefers_codex_desktop_appx_over_cli_shim(self) -> None:
+    def test_detect_prefers_fast_codex_cli_without_appx_probe(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             appx_root = os.path.join(
                 temp_dir,
@@ -1685,13 +1694,14 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
             old_appdata = os.environ.get("APPDATA")
             os.environ["APPDATA"] = appdata
+            probe_calls: list[list[str]] = []
             try:
                 installer = ComponentInstaller(
                     base_path=temp_dir,
                     state_store=store,
-                    installer_runner=lambda command, _cwd, _timeout_ms: FakeCompletedProcess(
-                        returncode=0,
-                        stdout=f"{appx_root}\n" if command[:3] == ["powershell", "-NoProfile", "-Command"] else "",
+                    installer_runner=lambda command, _cwd, _timeout_ms: (
+                        probe_calls.append(command)
+                        or FakeCompletedProcess(returncode=0, stdout="codex 0.142.3\n" if command[-1:] == ["--version"] else "")
                     ),
                 )
 
@@ -1703,7 +1713,8 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
                     os.environ["APPDATA"] = old_appdata
 
             self.assertEqual(state.status, "ready")
-            self.assertEqual(state.version, "26.623.9142.0")
+            self.assertEqual(state.version, "0.142.3")
+            self.assertFalse(any(command[:3] == ["powershell", "-NoProfile", "-Command"] for command in probe_calls))
 
     def test_detect_finds_codex_from_path_when_fixed_path_misses(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2108,6 +2119,148 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             self.assertFalse(os.path.exists(rollback_dir))
             self.assertEqual(state.status, "not_installed")
             self.assertEqual(state.job_id, "job_uninstall")
+
+    def test_managed_codex_uninstall_skips_inapplicable_npm_command(self) -> None:
+        component = ReleaseComponent(
+            component_id="codex-desktop",
+            name="Codex",
+            version="0.142.3-win32-x64",
+            platform="windows",
+            arch="x64",
+            archive_type="tgz",
+            size=1024,
+            sha256="c" * 64,
+            urls=("https://download.example.invalid/codex.tgz",),
+            install_path="agents/codex-desktop",
+            entry=None,
+            uninstall_command=("npm", "uninstall", "-g", "@openai/codex"),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            managed_entry = os.path.join(
+                temp_dir,
+                "agents",
+                "codex-desktop",
+                "package",
+                "vendor",
+                "x86_64-pc-windows-msvc",
+                "bin",
+                "codex.exe",
+            )
+            os.makedirs(os.path.dirname(managed_entry), exist_ok=True)
+            with open(managed_entry, "wb") as handle:
+                handle.write(b"managed codex")
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            store.mark(component.component_id, "ready", version=component.version)
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                installer_runner=lambda *_args: self.fail("managed Codex uninstall must not invoke npm"),
+            )
+
+            state = installer.uninstall(component, job_id="job_managed_codex_uninstall")
+
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, "agents", "codex-desktop")))
+            self.assertEqual(state.status, "not_installed")
+
+    def test_damaged_managed_codex_can_uninstall_without_entry_or_npm(self) -> None:
+        component = ReleaseComponent(
+            component_id="codex-desktop",
+            name="Codex",
+            version="0.142.3-win32-x64",
+            platform="windows",
+            arch="x64",
+            archive_type="tgz",
+            size=1024,
+            sha256="e" * 64,
+            urls=("https://download.example.invalid/codex.tgz",),
+            install_path="agents/codex-desktop",
+            entry=None,
+            uninstall_command=("npm", "uninstall", "-g", "@openai/codex"),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            damaged_dir = os.path.join(temp_dir, "agents", "codex-desktop")
+            os.makedirs(damaged_dir, exist_ok=True)
+            with open(os.path.join(damaged_dir, "partial-download.tmp"), "wb") as handle:
+                handle.write(b"partial")
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            store.mark(component.component_id, "health_failed", version=component.version)
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                installer_runner=lambda *_args: self.fail("damaged managed Codex uninstall must not invoke npm"),
+            )
+
+            state = installer.uninstall(component, job_id="job_damaged_codex_uninstall")
+
+            self.assertFalse(os.path.exists(damaged_dir))
+            self.assertEqual(state.status, "not_installed")
+
+    def test_external_codex_uninstall_does_not_fake_success(self) -> None:
+        component = ReleaseComponent(
+            component_id="codex-desktop",
+            name="Codex",
+            version="0.142.3-win32-x64",
+            platform="windows",
+            arch="x64",
+            archive_type="tgz",
+            size=1024,
+            sha256="f" * 64,
+            urls=("https://download.example.invalid/codex.tgz",),
+            install_path="agents/codex-desktop",
+            entry=None,
+            uninstall_command=("npm", "uninstall", "-g", "@openai/codex"),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ComponentStateStore(os.path.join(temp_dir, "state.json"))
+            store.mark(component.component_id, "ready", version=component.version)
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=store,
+                installer_runner=lambda *_args: self.fail("external Codex must not be uninstalled through LOOM private npm"),
+            )
+
+            with self.assertRaisesRegex(ComponentInstallError, "外部 Codex"):
+                installer.uninstall(component, job_id="job_external_codex_uninstall")
+
+            self.assertEqual(store.load()[component.component_id].status, "uninstall_failed")
+
+    def test_codex_fast_entry_path_does_not_run_expensive_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            appdata = os.path.join(temp_dir, "AppData", "Roaming")
+            codex_cmd = os.path.join(appdata, "npm", "codex.cmd")
+            os.makedirs(os.path.dirname(codex_cmd), exist_ok=True)
+            with open(codex_cmd, "wb") as handle:
+                handle.write(b"@echo off\r\n")
+            component = ReleaseComponent(
+                component_id="codex-desktop",
+                name="Codex",
+                version="0.142.3-win32-x64",
+                platform="windows",
+                arch="x64",
+                archive_type="tgz",
+                size=1024,
+                sha256="d" * 64,
+                urls=("https://download.example.invalid/codex.tgz",),
+                install_path="agents/codex-desktop",
+                entry=None,
+                install_command=("npm", "install", "-g", "@openai/codex@0.142.3"),
+                external_paths=("%APPDATA%/npm/codex.cmd",),
+            )
+            probe_calls: list[tuple[list[str], str, int]] = []
+            installer = ComponentInstaller(
+                base_path=temp_dir,
+                state_store=ComponentStateStore(os.path.join(temp_dir, "state.json")),
+                installer_runner=lambda command, cwd, timeout_ms: probe_calls.append((command, cwd, timeout_ms)) or FakeCompletedProcess(),
+            )
+
+            with mock.patch.dict(os.environ, {"APPDATA": appdata}, clear=False):
+                entry = installer._resolve_component_entry(component, os.path.join(temp_dir, "agents", "codex-desktop"))
+
+            self.assertEqual(os.path.normcase(entry), os.path.normcase(codex_cmd))
+            self.assertEqual(probe_calls, [])
 
     def test_launcher_command_uses_bundled_node_for_mjs_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

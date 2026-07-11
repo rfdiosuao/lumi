@@ -147,6 +147,16 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("登录后解锁", source)
         self.assertIn("loomClient.components.modelConfigStatus", source)
         self.assertIn("loomClient.components.applyModelConfig", source)
+
+    def test_one_click_model_source_never_writes_until_explicit_apply(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertIn("onClick={() => setSourceMode('oneClick')}", source)
+        self.assertIn("data-agent-model-apply", source)
+        self.assertNotIn("if (!oneClickLocked) onApply();", source)
+        self.assertIn("选择模型不会修改本机", source)
+        self.assertIn("只有点击“写入配置”后才会更新 Codex / Claude Code", source)
         self.assertIn("Codex / Claude Code 模型", source)
 
     def test_openclaw_exposes_one_click_model_config_and_web_entry(self) -> None:
@@ -178,6 +188,15 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("卸载", source)
         self.assertIn("高级详情", source)
         self.assertIn("data-agent-advanced-settings", source)
+
+    def test_agent_page_does_not_expose_nonfunctional_rollback_controls(self) -> None:
+        with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
+            source = handle.read()
+
+        self.assertNotIn("回滚配置", source)
+        self.assertNotIn("onRollback", source)
+        self.assertNotIn("onClick={() => rollback(selected)}", source)
+        self.assertNotIn("const rollback = async", source)
 
     def test_component_warning_is_sanitized_before_ui_display(self) -> None:
         with open(API_FILE, "r", encoding="utf-8") as handle:
@@ -313,13 +332,20 @@ class AgentInstallerPageContractTests(unittest.TestCase):
         self.assertIn("repairMissingPrerequisites(report, componentId)", page_source)
         self.assertIn("blockingPrerequisiteIssues(report, componentId)", page_source)
 
-    def test_codex_install_retries_model_config_without_failing_the_binary_install(self) -> None:
+    def test_codex_install_and_start_only_read_model_status(self) -> None:
         with open(AGENT_PAGE, "r", encoding="utf-8") as handle:
             page_source = handle.read()
 
-        self.assertIn("ensureAgentModelConfig", page_source)
-        self.assertIn("loomClient.components.applyModelConfig", page_source)
+        self.assertIn("readAgentModelConfigStatus", page_source)
+        self.assertNotIn("ensureAgentModelConfig", page_source)
+        self.assertEqual(page_source.count("loomClient.components.applyModelConfig"), 2)
         self.assertIn("Codex 已安装，但模型配置尚未就绪", page_source)
+
+    def test_codex_start_uses_fast_job_polling(self) -> None:
+        with open(API_FILE, "r", encoding="utf-8") as handle:
+            api_source = handle.read()
+
+        self.assertIn("intervalMs: 250", api_source)
 
 
 if __name__ == "__main__":

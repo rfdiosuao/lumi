@@ -102,6 +102,25 @@ class WireRouteTests(unittest.TestCase):
             self.assertNotIn(secret, repr(payload))
             self.assertNotIn("apiKey", repr(payload["wire"]))
 
+    def test_wire_custom_provider_can_save_without_writing_any_runtime_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = TestClient(_app(temp_dir, session=None))
+
+            response = client.post(
+                "/api/wire/custom",
+                json={
+                    "provider": "OpenAI compatible",
+                    "baseUrl": "https://third.example/v1",
+                    "apiKey": "sk-route-save-only-not-real",
+                    "textModel": "gpt-4o",
+                    "targets": [],
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["syncResults"], [])
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, "data", ".codex", "config.toml")))
+
 
 def _app(base_path: str, session: dict | None) -> FastAPI:
     app = FastAPI()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -19,7 +20,10 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from api.routes_components import SIMULATION_COMPONENTS, register_component_routes, _resolve_component_for_action
+from core.component_installer import ComponentInstallError
 from core.component_state import ComponentState
+from core.component_state import ComponentStateStore
+from core.component_catalog import default_component_state_path
 from api.routes_jobs import register_job_routes
 from services.jobs import JobManager
 
@@ -138,6 +142,102 @@ class ComponentRouteResolutionTests(unittest.TestCase):
 
             self.assertEqual(job["status"], "succeeded")
             self.assertEqual(force_values, [True])
+
+    def test_start_route_reuses_active_component_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            release = threading.Event()
+            active_job = job_mgr.submit_progress("component.start", "Start Codex", lambda _job_id: release.wait(1))
+            state_store = ComponentStateStore(default_component_state_path(temp_dir))
+            state_store.mark("codex-desktop", "starting", job_id=active_job["id"])
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_component_routes(app, ctx)
+            client = TestClient(app)
+
+            try:
+                response = client.post(
+                    "/api/components/start",
+                    json={"componentId": "codex-desktop", "confirmed": True},
+                )
+            finally:
+                release.set()
+
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(response.json()["jobId"], active_job["id"])
+
+    def test_start_route_registers_job_before_accepting_second_start(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+            release = threading.Event()
+
+            class FakeInstaller:
+                def launch(self, component, *, job_id=None):
+                    release.wait(1)
+                    return {"success": True, "pid": 42, "componentId": component.component_id}
+
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_component_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            with (
+                patch(
+                    "api.routes_components._resolve_component_for_action",
+                    return_value=(SIMULATION_COMPONENTS["codex-desktop"], None),
+                ),
+                patch("api.routes_components._component_installer", return_value=FakeInstaller()),
+            ):
+                first = client.post(
+                    "/api/components/start",
+                    json={"componentId": "codex-desktop", "confirmed": True},
+                )
+                second = client.post(
+                    "/api/components/start",
+                    json={"componentId": "codex-desktop", "confirmed": True},
+                )
+                release.set()
+
+            self.assertEqual(first.status_code, 202)
+            self.assertEqual(second.status_code, 202)
+            self.assertEqual(second.json()["jobId"], first.json()["jobId"])
+            persisted = ComponentStateStore(default_component_state_path(temp_dir)).load()["codex-desktop"]
+            self.assertEqual(persisted.job_id, first.json()["jobId"])
+
+    def test_start_route_surfaces_launcher_failure_as_failed_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs: list[str] = []
+            job_mgr = JobManager(logs.append)
+
+            class FailingInstaller:
+                def launch(self, _component, *, job_id=None):
+                    raise ComponentInstallError("Codex 启动入口损坏")
+
+            app = FastAPI()
+            ctx = _test_context(temp_dir, job_mgr, logs)
+            register_component_routes(app, ctx)
+            register_job_routes(app, ctx)
+            client = TestClient(app)
+
+            with (
+                patch(
+                    "api.routes_components._resolve_component_for_action",
+                    return_value=(SIMULATION_COMPONENTS["codex-desktop"], None),
+                ),
+                patch("api.routes_components._component_installer", return_value=FailingInstaller()),
+            ):
+                submitted = client.post(
+                    "/api/components/start",
+                    json={"componentId": "codex-desktop", "confirmed": True},
+                )
+                job = _wait_for_job(client, submitted.json()["jobId"])
+
+            self.assertEqual(submitted.status_code, 202)
+            self.assertEqual(job["status"], "failed")
+            self.assertIn("启动入口损坏", job["error"])
 
     def test_rollback_route_runs_through_job_manager(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

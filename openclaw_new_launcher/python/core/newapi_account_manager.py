@@ -81,7 +81,7 @@ SESSION_SECRET_PATHS = (
     ("newApi", "launcherToken"),
     ("phoneAgent", "apiKey"),
 )
-DEFAULT_RUNTIME_SYNC_TARGETS = ("openclaw", "opencode", "codex", "claude", "image", "desktop", "phone")
+DEFAULT_RUNTIME_SYNC_TARGETS = ("openclaw", "opencode", "claude", "image", "desktop", "phone")
 
 
 def _utc_now() -> datetime:

@@ -16,6 +16,7 @@ if PYTHON_DIR not in sys.path:
 from core.paths import AppPaths
 from core.storage import read_json
 from core.wire_config import WireConfigError, WireService, build_wire_from_session
+import core.wire_config as wire_config_module
 from core.openclaw_model_sync import _text_model_ids, sync_openclaw_models_from_gateway_profile
 
 
@@ -318,6 +319,43 @@ class WireServiceTests(unittest.TestCase):
             self.assertIn("OPENAI_MODEL", deleted_names)
             self.assertIn("ANTHROPIC_MODEL", deleted_names)
             self.assertNotIn("OPENAI_API_KEY", deleted_names)
+
+    def test_codex_model_apply_batches_environment_changes_into_one_broadcast(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = AppPaths(temp_dir)
+            service = WireService(paths)
+            service.sync_from_session(session_snapshot(), targets=())
+
+            with (
+                mock.patch("core.wire_config._should_persist_user_env", return_value=True),
+                mock.patch("core.wire_config._delete_user_env_var", return_value=True) as delete_env,
+                mock.patch("core.wire_config._write_user_env_var", return_value=True) as write_env,
+                mock.patch("core.wire_config._broadcast_user_env_change") as broadcast,
+            ):
+                service.sync_agent_model_config("codex-desktop", model="gpt-4o")
+
+            self.assertTrue(delete_env.call_count)
+            self.assertEqual(write_env.call_count, 1)
+            self.assertTrue(all(call.kwargs.get("broadcast") is False for call in delete_env.call_args_list))
+            self.assertIs(write_env.call_args.kwargs.get("broadcast"), False)
+            broadcast.assert_called_once_with()
+
+    def test_identical_model_config_write_skips_backup_and_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "config.toml")
+            text = 'model = "gpt-4o"\n'
+            with open(config_path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+
+            with (
+                mock.patch("core.wire_config._backup_text_file") as backup,
+                mock.patch("core.wire_config._atomic_write_text") as atomic_write,
+            ):
+                result = wire_config_module._write_text_with_backup(config_path, text)
+
+            self.assertEqual(result, "")
+            backup.assert_not_called()
+            atomic_write.assert_not_called()
 
     def test_openclaw_agent_model_config_writes_managed_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
