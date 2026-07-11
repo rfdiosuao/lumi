@@ -36,6 +36,10 @@ class NsisSmokeScriptContractTests(unittest.TestCase):
             'status -ne "authorized"',
             "commercialFeatures",
             "authorizedMatrixEndpoint",
+            "build_agent_launcher_environment",
+            'environment["CODEX_HOME"]',
+            'expected_language = "\\u9ed8\\u8ba4',
+            'codexDefaultLanguage = "zh-CN"',
         ):
             self.assertIn(marker, source)
 

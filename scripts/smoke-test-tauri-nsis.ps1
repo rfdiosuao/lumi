@@ -344,13 +344,40 @@ function Test-InstalledRuntime {
         }
     }
 
+    New-Item -ItemType Directory -Path $CaseDataRoot -Force | Out-Null
+    $codexGuidanceOutput = Join-Path $CaseDataRoot "codex-guidance.stdout.log"
+    $codexGuidanceError = Join-Path $CaseDataRoot "codex-guidance.stderr.log"
+    $codexGuidanceProbe = @'
+import os
+import sys
+
+root = os.path.abspath(sys.argv[1])
+sys.path.insert(0, os.path.join(root, "_up_", "python"))
+from core.component_installer import build_agent_launcher_environment
+
+environment = build_agent_launcher_environment(root, "codex-desktop")
+codex_home = environment["CODEX_HOME"]
+guidance_path = os.path.join(codex_home, "AGENTS.md")
+with open(guidance_path, "r", encoding="utf-8") as handle:
+    guidance = handle.read()
+expected_language = "\u9ed8\u8ba4\u4f7f\u7528\u7b80\u4f53\u4e2d\u6587"
+expected_literals = "\u547d\u4ee4\u3001\u8def\u5f84\u3001\u4ee3\u7801\u548c\u65e5\u5fd7\u4fdd\u6301\u539f\u6587"
+if expected_language not in guidance or expected_literals not in guidance:
+    raise SystemExit("Packaged Codex Chinese guidance is missing")
+print(guidance_path)
+'@
+    Invoke-ProcessAndWait -FilePath $pythonExe -Arguments @(
+        "-c",
+        $codexGuidanceProbe,
+        $InstallPath
+    ) -StandardOutputPath $codexGuidanceOutput -StandardErrorPath $codexGuidanceError
+
     $forbiddenExecutables = Get-ChildItem -LiteralPath $InstallPath -Recurse -File -ErrorAction Stop |
         Where-Object { $_.Name -match '^(codex|claude|opencode|hermes)(\.exe|\.cmd|\.bat)?$' }
     if ($forbiddenExecutables) {
         throw "Installer bundled a third-party Agent executable: $($forbiddenExecutables[0].FullName)"
     }
 
-    New-Item -ItemType Directory -Path $CaseDataRoot -Force | Out-Null
     $secretScanOutput = Join-Path $CaseDataRoot "secret-scan.stdout.log"
     $secretScanError = Join-Path $CaseDataRoot "secret-scan.stderr.log"
     Invoke-ProcessAndWait -FilePath "powershell.exe" -Arguments @(
@@ -412,6 +439,7 @@ function Test-InstalledRuntime {
             installPath = $InstallPath
             bridge = "fastapi"
             pythonRuntime = "packaged"
+            codexDefaultLanguage = "zh-CN"
             licenseEndpoint = $licenseStatus
             matrixEndpoint = $matrixStatus
             acquisitionEndpoint = $acquisitionStatus

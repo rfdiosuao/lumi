@@ -1703,6 +1703,7 @@ def build_agent_launcher_environment(base_path: str | None, component_id: str | 
         wire = _agent_wire_from_root(root)
         codex_home = os.path.join(root, "data", ".codex")
         os.makedirs(codex_home, exist_ok=True)
+        _ensure_managed_codex_global_guidance(codex_home)
         env["CODEX_HOME"] = codex_home
         _inject_openai_compatible_env(env, wire, key_name="LOOM_CODEX_API_KEY")
     elif component_id == "claude-code":
@@ -1719,6 +1720,25 @@ def build_agent_launcher_environment(base_path: str | None, component_id: str | 
         if model:
             env["ANTHROPIC_MODEL"] = model
     return env
+
+
+def _ensure_managed_codex_global_guidance(codex_home: str) -> None:
+    agents_path = os.path.join(codex_home, "AGENTS.md")
+    override_path = os.path.join(codex_home, "AGENTS.override.md")
+    if os.path.isfile(agents_path) or os.path.isfile(override_path):
+        return
+    guidance = """# LOOM Codex 默认交互规则
+
+- 默认使用简体中文回答，包括分析、计划、结果说明和错误解释。
+- 命令、路径、代码和日志保持原文；配置键也不翻译，必要时在后面补充中文说明。
+- 用户明确指定其他语言时，遵循用户当次要求。
+- 执行真实发布、评论、私信、加好友或其他对外动作前，必须遵循人工确认、白名单、频控和日志留痕要求。
+"""
+    try:
+        with open(agents_path, "x", encoding="utf-8", newline="\n") as handle:
+            handle.write(guidance)
+    except FileExistsError:
+        pass
 
 
 def _scrub_agent_model_environment(env: dict[str, str]) -> None:

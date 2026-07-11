@@ -2254,6 +2254,27 @@ class ComponentInstallerSimulationTests(unittest.TestCase):
             expected_home = os.path.join(temp_dir, "data", ".codex")
             self.assertEqual(env["CODEX_HOME"], expected_home)
             self.assertTrue(os.path.isdir(expected_home))
+            agents_path = os.path.join(expected_home, "AGENTS.md")
+            self.assertTrue(os.path.isfile(agents_path))
+            with open(agents_path, "r", encoding="utf-8") as handle:
+                guidance = handle.read()
+            self.assertIn("默认使用简体中文", guidance)
+            self.assertIn("命令、路径、代码和日志保持原文", guidance)
+
+    def test_codex_launcher_preserves_existing_global_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            codex_home = os.path.join(temp_dir, "data", ".codex")
+            os.makedirs(codex_home, exist_ok=True)
+            agents_path = os.path.join(codex_home, "AGENTS.md")
+            custom_guidance = "# My Codex rules\n\nAlways answer briefly.\n"
+            with open(agents_path, "w", encoding="utf-8") as handle:
+                handle.write(custom_guidance)
+
+            build_env = getattr(component_installer_module, "build_agent_launcher_environment", lambda *_args, **_kwargs: {})
+            build_env(temp_dir, "codex-desktop")
+
+            with open(agents_path, "r", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), custom_guidance)
 
     def test_agent_launcher_environment_does_not_inject_phone_model_as_desktop_model(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
